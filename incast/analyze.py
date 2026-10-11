@@ -71,11 +71,15 @@ def thresholds(runs: list[Path], metrics: tuple[str, ...]) -> dict:
                 deviations[metric].extend(max(0.0, v - median) for v in values)
     p99 = {m: percentile(v, 0.99) for m, v in deviations.items()}
     first = max(p99.values())
-    # The simulator wants three increasing fractions in (0, 1].
-    first = min(max(first, 1e-4), 0.24)
+    # The simulator wants three increasing fractions in (0, 1], so the rule's
+    # 4x can reach 1 and no further: a deviation above a quarter caps the
+    # first threshold there, and the result says it was capped.
+    capped = first > 0.25
+    first = min(max(first, 1e-4), 0.25)
     return {
         "reports": count,
         "p99_deviation": p99,
+        "capped": capped,
         "congestion_thresholds": [round(first, 6), round(2 * first, 6), round(4 * first, 6)],
     }
 
