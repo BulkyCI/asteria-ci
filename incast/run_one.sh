@@ -25,15 +25,25 @@ status=0
     --output "$out" --clean --seed "$seed" --skip-analysis "${binary[@]}" \
     --simulation-timeout-seconds "${SIMULATION_TIMEOUT_SECONDS:-21600}") > "$out_root/$key.log" 2>&1 || status=$?
 wall=$(( $(date +%s) - start ))
-if (( status == 0 )); then
+# A run the transport gives up on (a queue pair exhausting its retries) is a
+# result for its arm, not an error of the study: it is summarized like any
+# other, with the simulator's status and its stated reason, and the run
+# fails only when nothing was simulated at all.
+if [[ -f "$out/ns3/fct.txt" ]]; then
     "$python" "$here/summarize.py" "$out" --profile "$profile_dir/$key.json"
-    "$python" - "$out/summary.json" "$wall" <<'PY'
+    "$python" - "$out/summary.json" "$wall" "$status" "$out_root/$key.log" <<'PY'
 import json, sys
-path, wall = sys.argv[1], int(sys.argv[2])
-summary = json.load(open(path)); summary["wall_seconds"] = wall
+path, wall, status, log = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+summary = json.load(open(path))
+summary["wall_seconds"] = wall
+summary["simulator_status"] = status
+reasons = [line.strip() for line in open(log, errors="replace") if "Simulation stopped after" in line]
+summary["simulator_stop"] = reasons[-1] if reasons else None
 json.dump(summary, open(path, "w"), indent=1)
 PY
     rm -rf "$out/workload"
+    echo "$key: simulator status $status, ${wall}s"
+    exit 0
 fi
-echo "$key: status $status, ${wall}s"
+echo "$key: status $status, ${wall}s, nothing simulated"
 exit "$status"

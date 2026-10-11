@@ -247,7 +247,7 @@ jobs:
         done | xargs -P "$PARALLEL" -L 1 sh -c \
           'bash study/incast/run_one.sh "$0" "$1" results' \
           | tee results/shard-${{ matrix.shard.id }}.txt
-        echo "--- $(grep -c 'status 0' results/shard-${{ matrix.shard.id }}.txt) of $(wc -w <<< "$KEYS") runs succeeded"
+        echo "--- $(grep -c 'status 0,' results/shard-${{ matrix.shard.id }}.txt) of $(wc -w <<< "$KEYS") runs completed cleanly"
 
     - name: Upload the shard's results
       if: ${{ always() }}

@@ -162,6 +162,7 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
             {
                 **run,
                 "status": "complete" if summary["complete"] else "incomplete",
+                "simulator_stop": summary.get("simulator_stop"),
                 "completion_ns": summary["collective_completion_ns"],
                 "first_incast_ns": summary["first_incast_completion_ns"],
                 "trims": sum(v["count"] for k, v in transport.items() if k.startswith("trim_")),
