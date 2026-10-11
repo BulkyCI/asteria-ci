@@ -62,6 +62,21 @@ jobs:
         python3 incast/report.py combined/results/table.json > combined/results/report.md
         cat combined/results/report.md >> "$GITHUB_STEP_SUMMARY"
 
+    # The tables and every run's summary and windows, small enough to read
+    # anywhere; the full bundle below also carries the per-report files.
+    - name: Keep the tables and summaries as an artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: incast-tables-${{ github.run_id }}
+        path: |
+          combined/results/table.json
+          combined/results/report.md
+          combined/results/runs.json
+          combined/results/*/summary.json
+          combined/results/*/spine_windows.csv
+          combined/results/*/offered_windows.csv
+        retention-days: 90
+
     - name: Keep the combined table as an artifact
       uses: actions/upload-artifact@v7
       with:
