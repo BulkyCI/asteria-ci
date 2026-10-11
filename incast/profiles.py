@@ -48,6 +48,15 @@ GRADE_SCOPES = {
     "graded_per_receiver": "per_receiver",
     "graded_per_connection": "per_connection",
 }
+# The same arms with the edge bit's window penalty left on: every
+# acknowledgement whose report has the edge bit cuts the NSCC window. The
+# study's graded arms turn it off, so every arm runs the same NSCC and only
+# the spray weights differ; the edge stage measures what it costs.
+EDGE_ARMS = {
+    "graded_per_receiver_edge": "graded_per_receiver",
+    "graded_per_connection_edge": "graded_per_connection",
+}
+SPRAY_POLICY_EDGE_PENALTY = 64
 FIXED_ARMS = (
     "graded_per_receiver",
     "graded_per_connection",
@@ -156,16 +165,27 @@ def balancing(
     calibration: dict[str, Any] | None,
     setting: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if arm in EDGE_ARMS:
+        return {
+            **balancing(EDGE_ARMS[arm], fan_in, calibration, setting),
+            "edge_window_penalty": SPRAY_POLICY_EDGE_PENALTY,
+        }
     if arm in GRADE_SCOPES:
         # A setting here is the gain calibration's candidate gain.
         return {
             "mode": "spray_policy",
             "grade_scope": GRADE_SCOPES[arm],
+            "edge_window_penalty": 0,
             **_graded(calibration, GRADE_SCOPES[arm], fan_in),
             **(setting or {}),
         }
     if arm == "graded_switch_queue":
-        values = {"mode": "spray_policy", "grade_scope": "per_receiver", "grade_cost_source": "switch_queue"}
+        values = {
+            "mode": "spray_policy",
+            "grade_scope": "per_receiver",
+            "grade_cost_source": "switch_queue",
+            "edge_window_penalty": 0,
+        }
         thresholds = _graded(calibration, "switch_queue", fan_in).get("congestion_thresholds")
         if thresholds is not None:
             values["congestion_thresholds"] = thresholds
@@ -236,6 +256,10 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
                     continue
                 chosen = tuning[arm].get(condition, tuning[arm]["half_rate"])
                 add(arm, fan_in, condition, seed, chosen)
+    elif stage == "edge":
+        for condition, seed in itertools.product(CONDITIONS, SEEDS["comparison"]):
+            for arm in EDGE_ARMS:
+                add(arm, 32, condition, seed)
     elif stage == "kill":
         # The decisive subset of the comparison stage, runnable on its own.
         for condition, seed in itertools.product(("half_rate", "gray"), SEEDS["comparison"]):

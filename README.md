@@ -23,6 +23,13 @@ is healthy, at half rate, at 1 percent loss, or silent. Stages:
 | `comparison` | 324 | nine arms, every K and condition, three seeds |
 | `kill` | 18 | the K = 32 half-rate and gray cells of the two graded scopes and uniform |
 
+| `edge` | 24 | the two graded scopes with the edge bit's NSCC window penalty on (64), K = 32, every condition |
+
+The graded arms run with `edge_window_penalty: 0`, so every arm runs the
+same NSCC and only the spray weights differ. Calibration runs of
+workflow run 38112665214 used the default penalty of 64 and are not used
+for calibration.
+
 `incast/calibration.json` and `incast/tuning.json`, once committed, feed the
 later stages. Dispatch `.github/workflows/incast.yml` with a comma-separated
 list of stages.
