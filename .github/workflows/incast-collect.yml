@@ -60,6 +60,9 @@ jobs:
         python3 incast/analyze.py compare --runs combined/results/runs.json \
           --out-root combined/results > combined/results/table.json
         python3 incast/report.py combined/results/table.json > combined/results/report.md
+        # Cost against the paired healthy runs, for the transient stages.
+        python3 incast/analyze.py cost --runs combined/results/runs.json \
+          --out-root combined/results --reference graded_per_connection > combined/results/cost.json
         cat combined/results/report.md >> "$GITHUB_STEP_SUMMARY"
 
     # The tables and every run's summary and windows, small enough to read
@@ -71,8 +74,10 @@ jobs:
         path: |
           combined/results/table.json
           combined/results/report.md
+          combined/results/cost.json
           combined/results/runs.json
           combined/results/*/summary.json
+          combined/results/*/transients.json
           combined/results/*/spine_windows.csv
           combined/results/*/offered_windows.csv
         retention-days: 90

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison)
         required: true
         type: string
       record_filter:
@@ -63,6 +63,8 @@ jobs:
         args=()
         [[ -f incast/calibration.json ]] && args+=(--calibration incast/calibration.json)
         [[ -f incast/tuning.json ]] && args+=(--tuning incast/tuning.json)
+        [[ -f incast/transient_calibration.json ]] && args+=(--transient-calibration incast/transient_calibration.json)
+        [[ -f incast/transient_tuning.json ]] && args+=(--transient-tuning incast/transient_tuning.json)
         IFS=, read -ra stages <<< "$STAGES"
         for stage in "${stages[@]}"; do
           python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" "${args[@]}"
@@ -289,6 +291,9 @@ jobs:
         jq -s 'add' profiles/*/runs.json > results/runs.json
         python3 incast/analyze.py compare --runs results/runs.json --out-root results > results/table.json
         python3 incast/report.py results/table.json > results/report.md
+        # Cost against the paired healthy runs, for the transient stages.
+        python3 incast/analyze.py cost --runs results/runs.json --out-root results \
+          --reference graded_per_connection > results/cost.json
         cat results/report.md >> "$GITHUB_STEP_SUMMARY"
 
     - name: Archive on a release
@@ -302,4 +307,4 @@ jobs:
         gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
           --title "Incast study: ${STAGES} (run ${GITHUB_RUN_ID})" \
           --notes-file results/report.md \
-          "incast-${GITHUB_RUN_ID}.tar.gz" results/table.json results/report.md
+          "incast-${GITHUB_RUN_ID}.tar.gz" results/table.json results/report.md results/cost.json

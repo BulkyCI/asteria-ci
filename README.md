@@ -22,7 +22,6 @@ is healthy, at half rate, at 1 percent loss, or silent. Stages:
 | `tuning` | 126 | every ACK-redirect setting at K = 32 on the half-rate and gray fixtures, one seed |
 | `comparison` | 324 | nine arms, every K and condition, three seeds |
 | `kill` | 18 | the K = 32 half-rate and gray cells of the two graded scopes and uniform |
-
 | `edge` | 24 | the two graded scopes with the edge bit's NSCC window penalty on (64), K = 32, every condition |
 
 The graded arms run with `edge_window_penalty: 0`, so every arm runs the
@@ -31,7 +30,50 @@ workflow run 38112665214 used the default penalty of 64 and are not used
 for calibration.
 
 `incast/calibration.json` and `incast/tuning.json`, once committed, feed the
-later stages. Dispatch `.github/workflows/incast.yml` with a comma-separated
+later stages.
+
+### Transient-fault stages
+
+`incast/transient.py` (called through `profiles.py write --stage t_*`)
+writes the transient-fault stages on the same fabric and arms. Six hosts on
+each of leaves 0 and 1 receive K messages each from the other leaves (75
+percent of each receiving leaf's spine capacity). Spine 3 fails eight
+times, each occurrence lasting T, the first at 100 base RTTs and one every
+T + 1 ms (`duration_ns`, `repeat`, `period_ns`): half rate, silent
+(`blackhole`) or 5 percent loss, on every link of spine 3 (`spinewide`) or
+on its link to leaf 0 (`downlink0`). The message size is
+(1.3 ms + 8T + 8 ms) x 50 GB/s / K, rounded up to a whole MiB. Every graded
+arm runs with `edge_window_penalty: 0` and `edge_freeze: false`; the arms
+are `graded_per_connection`, `graded_per_receiver`,
+`graded_per_receiver_mix` (`sender_pool_weight` tuned),
+`graded_per_receiver_shared` (`sender_pool_weight: 1`),
+`graded_switch_queue`, `uniform`, `reps` and `mrc`.
+
+| Stage | Runs | What it is |
+| --- | --- | --- |
+| `t_calibration` | 27 | healthy runs of the three graded scopes, K in 8, 32, 64, seeds 101 to 103 |
+| `t_tuning` | 36 | gamma in 0.25, 0.5, 1.0 per graded arm, by `sender_pool_weight` in 0.25, 0.5, 0.75 for the mixed arm, K = 32, spine-wide half rate, T = 400 us, seed 201; each with a healthy run of the same setting |
+| `t_comparison` | 600 | 18 faulted cells by 8 arms by seeds 301 to 303 (432), and a healthy run per arm, K, T and seed (168) |
+
+The faulted cells: K in 8, 32, 64 at T = 400 us, spine-wide, half rate and
+blackhole; T in 100, 200, 800, 1600 us at K = 32, spine-wide, half rate and
+blackhole; the single downlink at K = 32, T = 400 us, half rate and
+blackhole; and 5 percent loss at K = 32, T = 400 us on both geometries. A
+run key is `<stage>-k<K>-<kind>-<geometry>-t<T in us>-<arm>[-<setting>]-s<seed>`,
+with kind `healthy` and geometry `none` for a run without fault.
+
+`analyze.py calibrate --stage t_calibration --into incast/transient_calibration.json`
+sets the thresholds (the estimator gains stay those of
+`incast/calibration.json`); `analyze.py select --stage t_tuning` picks, per
+graded arm, the setting with the lowest cost, for
+`incast/transient_tuning.json` (`graded_switch_queue` takes
+`graded_per_receiver`'s gamma). Until that file exists `t_comparison` lists
+only the ungraded arms. `analyze.py cost` tabulates cost (completion minus
+the paired healthy run's), recovered fraction against `uniform`, seed-noise
+verdicts against a reference arm, and the means of the per-transient
+measures `summarize.py` writes to `transients.json`. `t_comparison` needs
+`runs_per_shard` of at least 3 to fit the 256-job matrix. Tests:
+`python3 -m unittest discover incast/tests`. Dispatch `.github/workflows/incast.yml` with a comma-separated
 list of stages.
 
 The asteria commit under test is `incast/asteria.ref`.

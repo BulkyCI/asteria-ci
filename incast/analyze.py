@@ -7,14 +7,28 @@
     analyze.py compare --runs RUNS.json --out-root DIR [--stage S]  per-cell arm table
     analyze.py calibrate --runs RUNS.json --out-root DIR [--into FILE]   thresholds per scope and K
     analyze.py gains --runs RUNS.json --out-root DIR --into FILE        gain per scope and K
-    analyze.py select --runs RUNS.json --out-root DIR                   tuning selection
+    analyze.py select --runs RUNS.json --out-root DIR [--stage t_tuning] tuning selection
+    analyze.py cost --runs RUNS.json --out-root DIR --reference ARM [--stage S]  transient cost table
     analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
 the top grade, pooled over the seeds; if none reaches 99 percent, the gain
 with the largest fraction, flagged. Selection: per redirect arm and tuning
-condition, the setting with the lowest collective completion.
+condition, the setting with the lowest collective completion; for the
+t_tuning stage, per arm, the setting with the lowest cost.
+
+Cost (transient stages): per (stage, K, kind, geometry, T, arm) cell and
+seed, the run's collective completion minus that of the same arm's paired
+healthy run (same setting, K, T and seed, no fault); a run that did not
+complete costs infinity. Recovered fraction: 1 - cost / cost(uniform), with
+uniform on the same cell and seed. Each cell reports the per-seed values,
+their means, the seed-noise verdict of every arm against a reference arm on
+cost (lower is better) and on recovered fraction (higher is better), and
+the means of the per-transient measures of transients.json: detection
+latency and restore latency over the occurrences that have one, the
+fraction of occurrences detected, and the false-hold time over any healthy
+spine.
 
 Thresholds: for every report of a healthy run, each spine's deviation above
 the median spine of that report, for the marked and the trimmed fraction
@@ -163,6 +177,8 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
             continue
         summary = json.loads(summary_path.read_text())
         transport = summary["transport"]
+        transient = "geometry" in run
+        measured = _transients(directory) if transient else None
         rows.append(
             {
                 **run,
@@ -171,11 +187,12 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
                 "completion_ns": summary["collective_completion_ns"],
                 "first_incast_ns": summary["first_incast_completion_ns"],
                 "trims": sum(v["count"] for k, v in transport.items() if k.startswith("trim_")),
-                "shed_ns": shed_time(
+                "shed_ns": None if transient else shed_time(
                     directory,
                     TARGET_SHARE.get(run["condition"]),
                     10 * BASE_RTT_NS if run["stage"] == "short" else DEGRADE_AT_NS,
                 ),
+                **({} if not transient else transient_means([measured] if measured else [])),
                 "wall_seconds": summary.get("wall_seconds"),
             }
         )
@@ -244,9 +261,9 @@ def _listed(runs_file: Path, out_root: Path, stage: str):
             yield run, directory
 
 
-def calibrate(runs_file: Path, out_root: Path, existing: dict) -> dict:
+def calibrate(runs_file: Path, out_root: Path, existing: dict, stage: str = "calibration") -> dict:
     groups: dict[tuple[str, int], list[Path]] = defaultdict(list)
-    for run, directory in _listed(runs_file, out_root, "calibration"):
+    for run, directory in _listed(runs_file, out_root, stage):
         groups[(SCOPE_OF_ARM[run["arm"]], run["k"])].append(directory)
     result = {scope: dict(values) for scope, values in existing.items()}
     for (scope, k), directories in sorted(groups.items()):
@@ -305,6 +322,149 @@ def select(runs_file: Path, out_root: Path) -> dict:
     return {**selection, "table": table}
 
 
+def _transients(directory: Path) -> dict | None:
+    path = directory / "transients.json"
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def _mean(values) -> float | None:
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else None
+
+
+def transient_means(measured: list[dict]) -> dict:
+    """Means over the runs' transients.json: detection and restore latency
+    over every occurrence that has one, the detected fraction and the
+    false-hold time over any healthy spine per run."""
+    occurrences = [o for m in measured for o in m["occurrences"]]
+    return {
+        "detection_ns_mean": _mean(o["detection_ns"] for o in occurrences),
+        "detected_fraction_mean": _mean(m["detected_fraction"] for m in measured),
+        "restore_ns_mean": _mean(o["restore_ns"] for o in occurrences),
+        "false_hold_ns_mean": _mean((m["false_hold"] or {}).get("any_ns") for m in measured),
+    }
+
+
+def _label(run: dict) -> str:
+    setting = run.get("setting")
+    return run["arm"] if not setting else f"{run['arm']} {json.dumps(setting, sort_keys=True)}"
+
+
+def costs(rows: list[dict]) -> list[dict]:
+    """Every faulted row with its cost against the paired healthy row (same
+    stage, arm, setting, K, T and seed). A row holds stage, arm, setting, k,
+    kind, geometry, t_us, seed and completion_ns (None when the run did not
+    complete); cost is None when the healthy run is missing or incomplete,
+    and infinite when the faulted run is incomplete."""
+    def pair(row):
+        return (row["stage"], _label(row), row["k"], row["t_us"], row["seed"])
+
+    healthy = {pair(r): r["completion_ns"] for r in rows if r["kind"] == "healthy"}
+    out = []
+    for row in rows:
+        if row["kind"] == "healthy":
+            continue
+        reference = healthy.get(pair(row))
+        if reference is None:
+            cost = None
+        elif row["completion_ns"] is None:
+            cost = float("inf")
+        else:
+            cost = row["completion_ns"] - reference
+        out.append({**row, "healthy_ns": reference, "cost_ns": cost})
+    return out
+
+
+def recovered_fraction(cost: float | None, uniform_cost: float | None) -> float | None:
+    """1 - cost / cost(uniform); None when either is unknown or uniform has
+    no finite positive cost to recover."""
+    if cost is None or uniform_cost is None or not 0 < uniform_cost < float("inf"):
+        return None
+    return 1 - cost / uniform_cost
+
+
+def verdict(a: list[float], b: list[float], name_a: str, name_b: str, higher_is_better: bool = False) -> str | None:
+    """The seed-noise rule of beats on paired seeds; None without three."""
+    if len(a) != 3 or len(b) != 3 or any(v is None for v in a + b):
+        return None
+    if higher_is_better:
+        a, b = [-v for v in a], [-v for v in b]
+    if beats(a, b):
+        return f"{name_a} beats {name_b}"
+    if beats(b, a):
+        return f"{name_b} beats {name_a}"
+    return "within seed noise"
+
+
+def cost_cells(rows: list[dict], reference: str, uniform: str = "uniform") -> list[dict]:
+    """Per (stage, K, kind, geometry, T) cell, per arm: per-seed cost and
+    recovered fraction, their means, the verdicts against the reference arm
+    and the transient means (rows may carry a transients entry)."""
+    cells: dict[tuple, dict[str, dict[int, dict]]] = defaultdict(lambda: defaultdict(dict))
+    for row in costs(rows):
+        cell = (row["stage"], row["k"], row["kind"], row["geometry"], row["t_us"])
+        cells[cell][_label(row)][row["seed"]] = row
+    out = []
+    for (stage, k, kind, geometry, t_us), arms in sorted(cells.items()):
+        uniform_costs = {seed: r["cost_ns"] for seed, r in arms.get(uniform, {}).items()}
+        table = {}
+        for label, by_seed in sorted(arms.items()):
+            seeds = sorted(by_seed)
+            cost = [by_seed[x]["cost_ns"] for x in seeds]
+            recovered = [recovered_fraction(by_seed[x]["cost_ns"], uniform_costs.get(x)) for x in seeds]
+            table[label] = {
+                "seeds": seeds,
+                "cost_ns": cost,
+                "cost_ns_mean": None if None in cost or not cost else sum(cost) / len(cost),
+                "recovered": recovered,
+                "recovered_mean": None if None in recovered or not recovered else sum(recovered) / len(recovered),
+                **transient_means([by_seed[x]["transients"] for x in seeds if by_seed[x].get("transients")]),
+            }
+        if reference in table:
+            base = table[reference]
+            for label, entry in table.items():
+                if label == reference or entry["seeds"] != base["seeds"]:
+                    continue
+                entry["versus_reference_cost"] = verdict(entry["cost_ns"], base["cost_ns"], label, reference)
+                entry["versus_reference_recovered"] = verdict(
+                    entry["recovered"], base["recovered"], label, reference, higher_is_better=True
+                )
+        out.append({"stage": stage, "k": k, "kind": kind, "geometry": geometry, "t_us": t_us,
+                    "reference": reference, "arms": table})
+    return out
+
+
+def transient_rows(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
+    """The transient stages' runs with their completion and transients.json."""
+    rows = []
+    for run in json.loads(runs_file.read_text()):
+        if "geometry" not in run or (stage and run["stage"] != stage):
+            continue
+        directory = out_root / run["key"]
+        if not (directory / "summary.json").exists():
+            continue
+        summary = json.loads((directory / "summary.json").read_text())
+        rows.append({**run, "completion_ns": summary["collective_completion_ns"],
+                     "transients": _transients(directory)})
+    return rows
+
+
+def select_by_cost(rows: list[dict]) -> dict:
+    """Per arm, the setting with the lowest mean cost over its seeds."""
+    by_setting: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    table: dict[str, list] = defaultdict(list)
+    for row in costs(rows):
+        key = json.dumps(row["setting"], sort_keys=True)
+        by_setting[row["arm"]][key].append(row["cost_ns"])
+        table[row["arm"]].append({k: row[k] for k in ("setting", "seed", "completion_ns", "healthy_ns", "cost_ns")})
+    selection: dict = {}
+    for arm, settings in sorted(by_setting.items()):
+        means = {key: sum(c) / len(c) for key, c in settings.items() if None not in c}
+        if means:
+            selection[arm] = json.loads(min(means, key=lambda key: (means[key], key)))
+    return {**selection, "table": table}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -324,17 +484,27 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
-    for name in ("calibrate", "gains", "select"):
+    for name in ("calibrate", "gains", "select", "cost"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True)
         x.add_argument("--out-root", type=Path, required=True)
-        if name != "select":
+        if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
+        if name in ("calibrate", "select", "cost"):
+            x.add_argument("--stage")
+        if name == "cost":
+            x.add_argument("--reference", required=True)
     arguments = parser.parse_args()
+    if arguments.command == "cost":
+        rows = transient_rows(arguments.runs, arguments.out_root, arguments.stage)
+        print(json.dumps(cost_cells(rows, arguments.reference), indent=1))
+        return 0
     if arguments.command in ("calibrate", "gains"):
         existing = json.loads(arguments.into.read_text()) if arguments.into and arguments.into.exists() else {}
-        compute = calibrate if arguments.command == "calibrate" else gains
-        result = compute(arguments.runs, arguments.out_root, existing)
+        if arguments.command == "calibrate":
+            result = calibrate(arguments.runs, arguments.out_root, existing, arguments.stage or "calibration")
+        else:
+            result = gains(arguments.runs, arguments.out_root, existing)
         if arguments.into:
             arguments.into.write_text(json.dumps(result, indent=1) + "\n")
         print(json.dumps(result, indent=1))
@@ -343,7 +513,11 @@ def main() -> int:
         print(json.dumps(versus(arguments.runs, arguments.out_root, arguments.arm_a, arguments.arm_b), indent=1))
         return 0
     if arguments.command == "select":
-        print(json.dumps(select(arguments.runs, arguments.out_root), indent=1))
+        if arguments.stage and arguments.stage.startswith("t_"):
+            result = select_by_cost(transient_rows(arguments.runs, arguments.out_root, arguments.stage))
+        else:
+            result = select(arguments.runs, arguments.out_root)
+        print(json.dumps(result, indent=1))
         return 0
     if arguments.command == "thresholds":
         metrics = ("mark_fraction", "loss_fraction") if arguments.switch_queue else ("mark_fraction", "trim_fraction")

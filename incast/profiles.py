@@ -15,7 +15,10 @@ simulator defaults, which is what the calibration runs themselves use.
     profiles.py write --out DIR [--calibration FILE] [--tuning FILE] --stage S
 
 writes DIR/<run key>.json for every run of the stage and DIR/runs.json, the
-list of {key, profile, seed, stage, k, condition, arm}. Standard library only.
+list of {key, profile, seed, stage, k, condition, arm}. Stages named t_*
+are the transient-fault stages of transient.py, which read their own
+calibration and tuning files (--transient-calibration, --transient-tuning)
+and the estimator gains of --calibration. Standard library only.
 """
 
 from __future__ import annotations
@@ -152,6 +155,12 @@ def _graded(calibration: dict[str, Any] | None, scope_key: str, fan_in: int) -> 
 def setting_name(setting: dict[str, Any]) -> str:
     if set(setting) == {"estimator_gain"}:
         return f"g{round(1 / setting['estimator_gain'])}"
+    if "gamma" in setting and set(setting) <= {"gamma", "sender_pool_weight"}:
+        # gm025 for gamma 0.25, sw050 for a sender pool weight of 0.5.
+        parts = [f"gm{round(setting['gamma'] * 100):03d}"]
+        if "sender_pool_weight" in setting:
+            parts.append(f"sw{round(setting['sender_pool_weight'] * 100):03d}")
+        return "-".join(parts)
     parts = [f"f{round(setting['flag'] * 100):02d}", f"w{round(setting['omega'] * 10)}"]
     if "validity_base_rtts" in setting:
         parts.append(f"v{round(setting['validity_base_rtts'])}")
@@ -286,6 +295,27 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
     return out
 
 
+def write_listing(out: Path, documents: list[tuple[dict[str, Any], dict[str, Any]]]) -> int:
+    """Write every (run, profile) pair and runs.json; return the count."""
+    listed = []
+    for run, document in documents:
+        path = out / f"{run['key']}.json"
+        path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+        listed.append({**run, "profile": path.name})
+    (out / "runs.json").write_text(json.dumps(listed, indent=1) + "\n", encoding="utf-8")
+    print(len(listed))
+    return 0
+
+
+def write_transient(out: Path, stage: str, phase_calibration, calibration, tuning) -> int:
+    import transient
+
+    return write_listing(
+        out,
+        [(run, transient.profile(run, phase_calibration, calibration)) for run in transient.runs(stage, tuning)],
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=("write",))
@@ -293,13 +323,21 @@ def main() -> int:
     parser.add_argument("--stage", required=True)
     parser.add_argument("--calibration", type=Path)
     parser.add_argument("--tuning", type=Path)
+    parser.add_argument("--transient-calibration", type=Path)
+    parser.add_argument("--transient-tuning", type=Path)
     arguments = parser.parse_args()
-    calibration = json.loads(arguments.calibration.read_text()) if arguments.calibration else None
-    tuning = json.loads(arguments.tuning.read_text()) if arguments.tuning else None
+
+    def read(path: Path | None) -> dict[str, Any] | None:
+        return json.loads(path.read_text()) if path else None
+
+    calibration = read(arguments.calibration)
+    tuning = read(arguments.tuning)
     arguments.out.mkdir(parents=True, exist_ok=True)
-    listed = []
+    if arguments.stage.startswith("t_"):
+        return write_transient(arguments.out, arguments.stage, calibration,
+                               read(arguments.transient_calibration), read(arguments.transient_tuning))
+    documents = []
     for run in runs(arguments.stage, calibration, tuning):
-        path = arguments.out / f"{run['key']}.json"
         shape = (
             {"message_bytes": SHORT_MESSAGE_BYTES, "degrade_at_ns": SHORT_DEGRADE_AT_NS}
             if run["stage"] == "short"
@@ -309,12 +347,8 @@ def main() -> int:
             run["key"], run["k"], run["condition"],
             balancing(run["arm"], run["k"], calibration, run["setting"]), **shape,
         )
-        path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
-        listed.append({**run, "profile": path.name})
-    (arguments.out / "runs.json").write_text(json.dumps(listed, indent=1) + "\n", encoding="utf-8")
-    print(len(listed))
-    return 0
-
+        documents.append((run, document))
+    return write_listing(arguments.out, documents)
 
 if __name__ == "__main__":
     raise SystemExit(main())
