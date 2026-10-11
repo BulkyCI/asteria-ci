@@ -1,0 +1,196 @@
+{
+ "graded_per_connection": {
+  "gamma": 1.0
+ },
+ "graded_per_receiver": {
+  "gamma": 0.5
+ },
+ "graded_per_receiver_mix": {
+  "gamma": 0.25,
+  "sender_pool_weight": 0.75
+ },
+ "graded_per_receiver_shared": {
+  "gamma": 0.25
+ },
+ "table": {
+  "graded_per_connection": [
+   {
+    "setting": {
+     "gamma": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13823699,
+    "healthy_ns": 13543698,
+    "cost_ns": 280001
+   },
+   {
+    "setting": {
+     "gamma": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13818665,
+    "healthy_ns": 13541891,
+    "cost_ns": 276774
+   },
+   {
+    "setting": {
+     "gamma": 1.0
+    },
+    "seed": 201,
+    "completion_ns": 13789729,
+    "healthy_ns": 13544115,
+    "cost_ns": 245614
+   }
+  ],
+  "graded_per_receiver": [
+   {
+    "setting": {
+     "gamma": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13865639,
+    "healthy_ns": 13541646,
+    "cost_ns": 323993
+   },
+   {
+    "setting": {
+     "gamma": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13860445,
+    "healthy_ns": 13570364,
+    "cost_ns": 290081
+   },
+   {
+    "setting": {
+     "gamma": 1.0
+    },
+    "seed": 201,
+    "completion_ns": 13849222,
+    "healthy_ns": 13553381,
+    "cost_ns": 295841
+   }
+  ],
+  "graded_per_receiver_mix": [
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13833300,
+    "healthy_ns": 13538969,
+    "cost_ns": 294331
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13797205,
+    "healthy_ns": 13548175,
+    "cost_ns": 249030
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75
+    },
+    "seed": 201,
+    "completion_ns": 13765733,
+    "healthy_ns": 13550811,
+    "cost_ns": 214922
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13795143,
+    "healthy_ns": 13547549,
+    "cost_ns": 247594
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13777302,
+    "healthy_ns": 13550714,
+    "cost_ns": 226588
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75
+    },
+    "seed": 201,
+    "completion_ns": 13791855,
+    "healthy_ns": 13553511,
+    "cost_ns": 238344
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13802620,
+    "healthy_ns": 13545886,
+    "cost_ns": 256734
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13820526,
+    "healthy_ns": 13549532,
+    "cost_ns": 270994
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75
+    },
+    "seed": 201,
+    "completion_ns": 13813651,
+    "healthy_ns": 13541321,
+    "cost_ns": 272330
+   }
+  ],
+  "graded_per_receiver_shared": [
+   {
+    "setting": {
+     "gamma": 0.25
+    },
+    "seed": 201,
+    "completion_ns": 13791142,
+    "healthy_ns": 13554255,
+    "cost_ns": 236887
+   },
+   {
+    "setting": {
+     "gamma": 0.5
+    },
+    "seed": 201,
+    "completion_ns": 13819929,
+    "healthy_ns": 13553389,
+    "cost_ns": 266540
+   },
+   {
+    "setting": {
+     "gamma": 1.0
+    },
+    "seed": 201,
+    "completion_ns": 13797906,
+    "healthy_ns": 13535052,
+    "cost_ns": 262854
+   }
+  ]
+ }
+}
