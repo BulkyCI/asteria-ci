@@ -220,7 +220,12 @@ def gains(runs_file: Path, out_root: Path, existing: dict) -> dict:
     for scope, k in sorted({(s, k) for s, k, _ in tops}):
         fractions = {g: t / n for (s, kk, g), (t, n) in tops.items() if s == scope and kk == k and n}
         passing = [g for g, f in fractions.items() if f >= 0.99]
-        chosen = max(passing) if passing else max(fractions, key=fractions.get)
+        # The largest passing gain; if none passes, the largest of those with
+        # the best fraction, so a scope the gain does not move (a pooled
+        # interval always fills its sample count, which then sets the
+        # weight) gets the largest candidate rather than an arbitrary one.
+        best = max(fractions.values())
+        chosen = max(passing) if passing else max(g for g, f in fractions.items() if f == best)
         entry = result.setdefault(scope, {}).setdefault(str(k), {})
         entry["estimator_gain"] = chosen
         entry["gain_fraction"] = fractions[chosen]

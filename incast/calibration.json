@@ -16,7 +16,17 @@
     "calibration-k8-healthy-graded_per_connection-s101",
     "calibration-k8-healthy-graded_per_connection-s102",
     "calibration-k8-healthy-graded_per_connection-s103"
-   ]
+   ],
+   "estimator_gain": 0.125,
+   "gain_fraction": 0.7391576313594662,
+   "gain_fractions": {
+    "0.015625": 0.6283074631728375,
+    "0.03125": 0.6991894465475997,
+    "0.0625": 0.7161469804103396,
+    "0.125": 0.7391576313594662,
+    "0.25": 0.738715962332421
+   },
+   "gain_meets_rule": false
   },
   "32": {
    "reports": 709094,
@@ -34,7 +44,17 @@
     "calibration-k32-healthy-graded_per_connection-s101",
     "calibration-k32-healthy-graded_per_connection-s102",
     "calibration-k32-healthy-graded_per_connection-s103"
-   ]
+   ],
+   "estimator_gain": 0.25,
+   "gain_fraction": 0.7278778773135489,
+   "gain_fractions": {
+    "0.015625": 0.6015767790632194,
+    "0.03125": 0.5789051828270171,
+    "0.0625": 0.6027628978261085,
+    "0.125": 0.6690990536384318,
+    "0.25": 0.7278778773135489
+   },
+   "gain_meets_rule": false
   },
   "64": {
    "reports": 2838595,
@@ -72,7 +92,17 @@
     "calibration-k8-healthy-graded_per_receiver-s101",
     "calibration-k8-healthy-graded_per_receiver-s102",
     "calibration-k8-healthy-graded_per_receiver-s103"
-   ]
+   ],
+   "estimator_gain": 0.25,
+   "gain_fraction": 0.762624466571835,
+   "gain_fractions": {
+    "0.015625": 0.762624466571835,
+    "0.03125": 0.762624466571835,
+    "0.0625": 0.762624466571835,
+    "0.125": 0.762624466571835,
+    "0.25": 0.762624466571835
+   },
+   "gain_meets_rule": false
   },
   "32": {
    "reports": 22459,
@@ -90,7 +120,17 @@
     "calibration-k32-healthy-graded_per_receiver-s101",
     "calibration-k32-healthy-graded_per_receiver-s102",
     "calibration-k32-healthy-graded_per_receiver-s103"
-   ]
+   ],
+   "estimator_gain": 0.25,
+   "gain_fraction": 0.6881595938905464,
+   "gain_fractions": {
+    "0.015625": 0.6881595938905464,
+    "0.03125": 0.6881595938905464,
+    "0.0625": 0.6881595938905464,
+    "0.125": 0.6881595938905464,
+    "0.25": 0.6881595938905464
+   },
+   "gain_meets_rule": false
   },
   "64": {
    "reports": 44853,
