@@ -18,7 +18,7 @@ writes DIR/<run key>.json for every run of the stage and DIR/runs.json, the
 list of {key, profile, seed, stage, k, condition, arm}. Stages named t_*
 are the transient-fault stages of transient.py, which read their own
 calibration and tuning files (--transient-calibration, --transient-tuning)
-and the estimator gains of --calibration. Standard library only.
+and the redirect_per_connection setting of --tuning. Standard library only.
 """
 
 from __future__ import annotations
@@ -307,12 +307,15 @@ def write_listing(out: Path, documents: list[tuple[dict[str, Any], dict[str, Any
     return 0
 
 
-def write_transient(out: Path, stage: str, phase_calibration, calibration, tuning) -> int:
+def write_transient(out: Path, stage: str, phase_tuning, calibration, tuning) -> int:
+    """The t_* stages; phase_tuning (--tuning) gives redirect_per_connection
+    its setting in t_comparison."""
     import transient
 
+    redirect = (phase_tuning or {}).get(transient.REDIRECT_ARM)
     return write_listing(
         out,
-        [(run, transient.profile(run, phase_calibration, calibration)) for run in transient.runs(stage, tuning)],
+        [(run, transient.profile(run, calibration)) for run in transient.runs(stage, tuning, redirect)],
     )
 
 
@@ -334,7 +337,7 @@ def main() -> int:
     tuning = read(arguments.tuning)
     arguments.out.mkdir(parents=True, exist_ok=True)
     if arguments.stage.startswith("t_"):
-        return write_transient(arguments.out, arguments.stage, calibration,
+        return write_transient(arguments.out, arguments.stage, tuning,
                                read(arguments.transient_calibration), read(arguments.transient_tuning))
     documents = []
     for run in runs(arguments.stage, calibration, tuning):

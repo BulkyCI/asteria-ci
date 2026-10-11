@@ -18,6 +18,11 @@ TUNING = {
     "graded_per_receiver_shared": {"gamma": 0.5},
 }
 
+REDIRECT = {
+    "half_rate": {"flag": 0.15, "omega": 0.7, "validity_base_rtts": 3.0, "trim_scoring": "mark"},
+    "gray": {"flag": 0.15, "omega": 0.3, "validity_base_rtts": 1.0, "trim_scoring": "ignore"},
+}
+
 # T (us): last occurrence's end and required run (ms), then per K the
 # message size (MiB) and the line-rate run (ms).
 TABLE = {
@@ -53,21 +58,21 @@ class Schedule(unittest.TestCase):
         for kind, geometry in (("half_rate", "spinewide"), ("blackhole", "downlink0"), ("loss", "spinewide")):
             run = {"key": "x", "arm": "uniform", "setting": None, "k": 32, "kind": kind,
                    "geometry": geometry, "t_us": 200, "seed": 301}
-            document = transient.profile(run, None, None)
+            document = transient.profile(run, None)
             (failure,) = document["network"]["link_failures"]
             self.assertEqual(summarize.occurrences(failure), transient.occurrence_windows(200))
             self.assertEqual(failure["spine"], 3)
             self.assertEqual(failure.get("leaf"), 0 if geometry == "downlink0" else None)
             self.assertEqual(document["workload"]["message_bytes"], 17 * transient.MIB)
             self.assertEqual(document["workload"]["receiver_leaves"], [0, 1])
-            self.assertEqual(document["workload"]["receiver_count"], 6)
+            self.assertEqual(document["workload"]["receiver_count"], 8)
 
 
 class Runs(unittest.TestCase):
     def test_counts_and_keys(self):
-        expected = {"t_calibration": 27, "t_tuning": 36, "t_comparison": 600}
+        expected = {"t_calibration": 27, "t_tuning": 36, "t_comparison": 663}
         for stage, count in expected.items():
-            listed = transient.runs(stage, TUNING)
+            listed = transient.runs(stage, TUNING, REDIRECT)
             keys = [r["key"] for r in listed]
             self.assertEqual(len(keys), count, stage)
             self.assertEqual(len(set(keys)), count, stage)
@@ -91,11 +96,39 @@ class Runs(unittest.TestCase):
     def test_graded_balancing(self):
         for arm, weight in (("graded_per_receiver", None), ("graded_per_receiver_shared", 1.0),
                             ("graded_per_receiver_mix", 0.75)):
-            values = transient.balancing(arm, 32, None, None, transient.tuned_setting(arm, TUNING))
+            values = transient.balancing(arm, 32, None, transient.tuned_setting(arm, TUNING))
             self.assertEqual(values["edge_window_penalty"], 0)
             self.assertIs(values["edge_freeze"], False)
             self.assertEqual(values.get("sender_pool_weight"), weight)
-        self.assertNotIn("edge_freeze", transient.balancing("reps", 32, None, None, None))
+        self.assertNotIn("edge_freeze", transient.balancing("reps", 32, None, None))
+
+    def test_every_graded_profile_smooths_the_estimator(self):
+        for stage in ("t_calibration", "t_tuning", "t_comparison"):
+            for run in transient.runs(stage, TUNING, REDIRECT):
+                values = transient.profile(run, None)["network"]["load_balancing"]
+                if values["mode"] != "spray_policy":
+                    self.assertNotIn("estimator_interval_samples", values)
+                    continue
+                with self.subTest(key=run["key"]):
+                    self.assertEqual(values["estimator_interval_samples"], 0)
+                    self.assertEqual(values["estimator_gain"], 0.25)
+
+    def test_redirect_arm(self):
+        listed = [r for r in transient.runs("t_comparison", TUNING, REDIRECT) if r["arm"] == "redirect_per_connection"]
+        faulted = {(r["k"], r["kind"], r["geometry"], r["t_us"]) for r in listed if r["kind"] != "healthy"}
+        self.assertEqual(faulted, {
+            (k, kind, "spinewide", t)
+            for kind in ("half_rate", "blackhole")
+            for k, t in ((8, 400), (32, 400), (64, 400), (32, 100), (32, 200), (32, 800), (32, 1600))
+        })
+        self.assertEqual(len(listed), 42 + 21)
+        for run in listed:
+            self.assertEqual(run["setting"], REDIRECT["half_rate"])
+            values = transient.profile(run, None)["network"]["load_balancing"]
+            self.assertEqual(values, {"mode": "spray_uniform", "selector": "ack_redirect",
+                                      "scope": "per_connection", **REDIRECT["half_rate"]})
+        self.assertFalse(any(r["arm"] == "redirect_per_connection" for r in transient.runs("t_tuning", None, REDIRECT)))
+        self.assertFalse(any(r["arm"] == "redirect_per_connection" for r in transient.runs("t_comparison", TUNING)))
 
     def test_tuning_labels(self):
         keys = [r["key"] for r in transient.runs("t_tuning", None)]

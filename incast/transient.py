@@ -2,9 +2,9 @@
 """Profiles and run lists of the transient-fault stages of the incast study.
 
 The fabric, transport and balancing arms are those of profiles.py. The
-workload differs: six hosts on each of leaves 0 and 1 receive K messages
-each from hosts on the other leaves, so the offered load into each
-receiving leaf is 6 x 400 Gbps, 75 percent of its spine capacity. Spine 3
+workload differs: every host on each of leaves 0 and 1 receives K messages
+from hosts on the other leaves, so the offered load into each receiving
+leaf is 8 x 400 Gbps, its full spine capacity. Spine 3
 fails in eight time-bounded occurrences of T each, the first 100 base RTTs
 in, one every T + 1 ms. A fault is half rate (200 Gbps), a blackhole
 (silent) or 5 percent loss, on all of spine 3's links (geometry
@@ -15,6 +15,10 @@ up to 1.3 ms, the eight occurrences and their gaps (8T + 7 ms) and 1 ms
 after the last, (1.3 ms + 8T + 8 ms) x 50 GB/s, split over K messages and
 rounded up to a whole MiB.
 
+Every graded arm, the calibration runs included, sets
+estimator_interval_samples 0 (the estimator never replaces its average
+with an interval's) and estimator_gain 0.25.
+
 Stages:
 
     t_calibration  healthy runs of the three graded scopes, seeds 101-103,
@@ -23,7 +27,10 @@ Stages:
                    mixed arm) at K = 32, spine-wide half rate, T = 400 us,
                    seed 201, each setting with its paired healthy run
     t_comparison   the 18 faulted cells x 8 arms x seeds 301-303, and a
-                   paired healthy run per arm, K, T and seed
+                   paired healthy run per arm, K, T and seed; with
+                   profiles.py's tuning file, redirect_per_connection on
+                   the spine-wide half-rate and blackhole cells at T = 400 us
+                   and at K = 32, and its healthy pairs
 
 A run key is <stage>-k<K>-<kind>-<geometry>-t<T in us>-<arm>[-<setting>]-s<seed>,
 with kind "healthy" and geometry "none" for a run with no fault. Called
@@ -46,7 +53,7 @@ GAP_NS = 1_000_000  # from an occurrence's end to the next onset
 TAIL_NS = 1_000_000  # after the last occurrence
 OCCURRENCES = 8
 RECEIVER_LEAVES = (0, 1)
-RECEIVERS_PER_LEAF = 6
+RECEIVERS_PER_LEAF = 8
 DURATIONS_US = (100, 200, 400, 800, 1600)
 KINDS = ("half_rate", "blackhole", "loss")
 GEOMETRIES = ("spinewide", "downlink0")
@@ -55,6 +62,7 @@ GAMMAS = (0.25, 0.5, 1.0)
 POOL_WEIGHTS = (0.25, 0.5, 0.75)
 TUNING_FAN_IN = 32
 TUNING_DURATION_US = 400
+ESTIMATOR = {"estimator_interval_samples": 0, "estimator_gain": 0.25}
 SEEDS = {"t_calibration": (101, 102, 103), "t_tuning": (201,), "t_comparison": (301, 302, 303)}
 
 # Graded arms: (profiles.py arm, sender pool weight). None marks the tuned
@@ -81,6 +89,12 @@ SCOPE_OF = {
     "graded_per_receiver": "per_receiver",
     "graded_switch_queue": "switch_queue",
 }
+
+# ACK redirection at its tuned setting from profiles.py's tuning file, on
+# the spine-wide half-rate and blackhole cells; the setting of the fault
+# kind its tuning ran under.
+REDIRECT_ARM = "redirect_per_connection"
+REDIRECT_TUNED_UNDER = {"half_rate": "half_rate", "blackhole": "half_rate", "loss": "gray", "healthy": "half_rate"}
 
 # The faulted cells as (K, kind, geometry, T in us).
 CELLS: tuple[tuple[int, str, str, int], ...] = (
@@ -141,14 +155,10 @@ def failures(kind: str, geometry: str, duration_us: int) -> list[dict[str, Any]]
     return [entry]
 
 
-def _calibrated(arm: str, fan_in: int, phase_calibration: dict | None, calibration: dict | None) -> dict[str, Any]:
-    """Thresholds from this study's calibration, once it exists, and the
-    estimator gain profiles.py's calibration file holds for the scope."""
+def _calibrated(arm: str, fan_in: int, calibration: dict | None) -> dict[str, Any]:
+    """Thresholds from this study's calibration, once it exists."""
     scope = SCOPE_OF[GRADED_ARMS[arm][0]]
     values: dict[str, Any] = {}
-    gain = (phase_calibration or {}).get(scope, {}).get(str(fan_in), {}).get("estimator_gain")
-    if gain is not None and scope != "switch_queue":
-        values["estimator_gain"] = gain
     thresholds = (calibration or {}).get(scope, {}).get(str(fan_in), {}).get("congestion_thresholds")
     if thresholds is not None:
         values["congestion_thresholds"] = thresholds
@@ -158,15 +168,17 @@ def _calibrated(arm: str, fan_in: int, phase_calibration: dict | None, calibrati
 def balancing(
     arm: str,
     fan_in: int,
-    phase_calibration: dict | None,
     calibration: dict | None,
     setting: dict[str, Any] | None,
 ) -> dict[str, Any]:
     if arm in FIXED_ARMS:
         return profiles.balancing(arm, fan_in, None)
+    if arm == REDIRECT_ARM:
+        return profiles.balancing(arm, fan_in, None, setting)
     base_arm, weight = GRADED_ARMS[arm]
     values = profiles.balancing(base_arm, fan_in, None)
-    values.update(_calibrated(arm, fan_in, phase_calibration, calibration))
+    values.update(_calibrated(arm, fan_in, calibration))
+    values.update(ESTIMATOR)
     values["edge_window_penalty"] = 0
     values["edge_freeze"] = False
     if weight:
@@ -177,12 +189,12 @@ def balancing(
     return values
 
 
-def profile(run: dict[str, Any], phase_calibration: dict | None, calibration: dict | None) -> dict[str, Any]:
+def profile(run: dict[str, Any], calibration: dict | None) -> dict[str, Any]:
     document = profiles.profile(
         run["key"],
         run["k"],
         "healthy",
-        balancing(run["arm"], run["k"], phase_calibration, calibration, run["setting"]),
+        balancing(run["arm"], run["k"], calibration, run["setting"]),
         message_bytes=message_bytes(run["t_us"], run["k"]),
     )
     document["workload"] = {
@@ -215,7 +227,9 @@ def tuned_setting(arm: str, tuning: dict[str, Any] | None) -> dict[str, Any] | N
     return dict(tuning[source])
 
 
-def runs(stage: str, tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
+def runs(stage: str, tuning: dict[str, Any] | None, redirect: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Every run of a stage; tuning is this study's selection, redirect
+    profiles.py's tuning entry for redirect_per_connection."""
     out: list[dict[str, Any]] = []
 
     def add(arm, fan_in, kind, geometry, t_us, seed, setting=None, label_setting=False):
@@ -253,6 +267,16 @@ def runs(stage: str, tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
                 add(arm, fan_in, kind, geometry, t_us, seed, setting)
             for fan_in, t_us in healthy:
                 add(arm, fan_in, "healthy", "none", t_us, seed, setting)
+        if redirect is not None:
+            # The spine-wide half-rate and blackhole cells: those at T = 400 us
+            # and the K = 32 T sweep.
+            cells = [c for c in CELLS if c[1] in ("half_rate", "blackhole") and c[2] == "spinewide"]
+            pairs = sorted({(k, t) for k, _, _, t in cells})
+            for seed in SEEDS[stage]:
+                for fan_in, kind, geometry, t_us in cells:
+                    add(REDIRECT_ARM, fan_in, kind, geometry, t_us, seed, redirect[REDIRECT_TUNED_UNDER[kind]])
+                for fan_in, t_us in pairs:
+                    add(REDIRECT_ARM, fan_in, "healthy", "none", t_us, seed, redirect[REDIRECT_TUNED_UNDER["healthy"]])
     else:
         raise ValueError(f"unknown stage {stage}")
     return out
