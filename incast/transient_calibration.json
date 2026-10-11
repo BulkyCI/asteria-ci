@@ -1,0 +1,170 @@
+{
+ "per_connection": {
+  "8": {
+   "reports": 207140,
+   "p99_deviation": {
+    "mark_fraction": 0.454087,
+    "trim_fraction": 0.040814
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k8-healthy-none-t400-graded_per_connection-s101",
+    "t_calibration-k8-healthy-none-t400-graded_per_connection-s102",
+    "t_calibration-k8-healthy-none-t400-graded_per_connection-s103"
+   ]
+  },
+  "32": {
+   "reports": 845458,
+   "p99_deviation": {
+    "mark_fraction": 0.5851489999999999,
+    "trim_fraction": 0.046875
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k32-healthy-none-t400-graded_per_connection-s101",
+    "t_calibration-k32-healthy-none-t400-graded_per_connection-s102",
+    "t_calibration-k32-healthy-none-t400-graded_per_connection-s103"
+   ]
+  },
+  "64": {
+   "reports": 1769973,
+   "p99_deviation": {
+    "mark_fraction": 0.47550600000000004,
+    "trim_fraction": 0.126781
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k64-healthy-none-t400-graded_per_connection-s101",
+    "t_calibration-k64-healthy-none-t400-graded_per_connection-s102",
+    "t_calibration-k64-healthy-none-t400-graded_per_connection-s103"
+   ]
+  }
+ },
+ "per_receiver": {
+  "8": {
+   "reports": 26664,
+   "p99_deviation": {
+    "mark_fraction": 0.501814,
+    "trim_fraction": 0.0333085
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k8-healthy-none-t400-graded_per_receiver-s101",
+    "t_calibration-k8-healthy-none-t400-graded_per_receiver-s102",
+    "t_calibration-k8-healthy-none-t400-graded_per_receiver-s103"
+   ]
+  },
+  "32": {
+   "reports": 26852,
+   "p99_deviation": {
+    "mark_fraction": 0.38232199999999994,
+    "trim_fraction": 0.028228999999999997
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k32-healthy-none-t400-graded_per_receiver-s101",
+    "t_calibration-k32-healthy-none-t400-graded_per_receiver-s102",
+    "t_calibration-k32-healthy-none-t400-graded_per_receiver-s103"
+   ]
+  },
+  "64": {
+   "reports": 28245,
+   "p99_deviation": {
+    "mark_fraction": 0.09858899999999993,
+    "trim_fraction": 0.028661000000000002
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.098589,
+    0.197178,
+    0.394356
+   ],
+   "runs": [
+    "t_calibration-k64-healthy-none-t400-graded_per_receiver-s101",
+    "t_calibration-k64-healthy-none-t400-graded_per_receiver-s102",
+    "t_calibration-k64-healthy-none-t400-graded_per_receiver-s103"
+   ]
+  }
+ },
+ "switch_queue": {
+  "8": {
+   "reports": 186123,
+   "p99_deviation": {
+    "mark_fraction": 0.45994999999999997,
+    "loss_fraction": 0.0
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k8-healthy-none-t400-graded_switch_queue-s101",
+    "t_calibration-k8-healthy-none-t400-graded_switch_queue-s102",
+    "t_calibration-k8-healthy-none-t400-graded_switch_queue-s103"
+   ]
+  },
+  "32": {
+   "reports": 187761,
+   "p99_deviation": {
+    "mark_fraction": 0.42498899999999995,
+    "loss_fraction": 0.0
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "t_calibration-k32-healthy-none-t400-graded_switch_queue-s101",
+    "t_calibration-k32-healthy-none-t400-graded_switch_queue-s102",
+    "t_calibration-k32-healthy-none-t400-graded_switch_queue-s103"
+   ]
+  },
+  "64": {
+   "reports": 197757,
+   "p99_deviation": {
+    "mark_fraction": 0.24182900000000007,
+    "loss_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.241829,
+    0.483658,
+    0.967316
+   ],
+   "runs": [
+    "t_calibration-k64-healthy-none-t400-graded_switch_queue-s101",
+    "t_calibration-k64-healthy-none-t400-graded_switch_queue-s102",
+    "t_calibration-k64-healthy-none-t400-graded_switch_queue-s103"
+   ]
+  }
+ }
+}
