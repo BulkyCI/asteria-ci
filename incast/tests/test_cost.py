@@ -1,6 +1,8 @@
 """Cost, recovered fraction, verdicts and the tuning selection."""
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -67,6 +69,25 @@ class Cost(unittest.TestCase):
         self.assertIsNone(analyze.recovered_fraction(100, float("inf")))
         self.assertIsNone(analyze.recovered_fraction(100, 0))
 
+    def test_arms_with_one_setting_pair_by_name(self):
+        setting = {"gamma": 0.5}
+        rows = [dict(r, setting=setting) if r["arm"] != "uniform" else r for r in self.rows()]
+        (cell,) = analyze.cost_cells(rows, reference="graded_per_connection")
+        receiver = cell["arms"]["graded_per_receiver"]
+        self.assertEqual(receiver["setting"], setting)
+        self.assertEqual(receiver["versus_reference_cost"], "within seed noise")
+        for got, want in zip(receiver["recovered"], [0.75, 0.7, 0.65]):
+            self.assertAlmostEqual(got, want)
+
+    def test_arms_with_several_settings_stay_apart(self):
+        rows = []
+        for gamma, faulted in ((0.25, 1500), (1.0, 1300)):
+            setting = {"gamma": gamma}
+            rows.append(row("graded_per_receiver", 201, faulted, setting=setting, stage="t_tuning"))
+            rows.append(row("graded_per_receiver", 201, 1000, kind="healthy", setting=setting, stage="t_tuning"))
+        (cell,) = analyze.cost_cells(rows, reference="graded_per_connection")
+        self.assertEqual(sorted(e["cost_ns"] for e in cell["arms"].values()), [[300], [500]])
+
     def test_select_by_cost_not_completion(self):
         rows = []
         # Setting A: completion 1500, healthy 1400, cost 100. Setting B:
@@ -75,6 +96,29 @@ class Cost(unittest.TestCase):
             rows.append(row("graded_per_receiver", 201, faulted, setting=setting, stage="t_tuning"))
             rows.append(row("graded_per_receiver", 201, healthy, kind="healthy", setting=setting, stage="t_tuning"))
         self.assertEqual(analyze.select_by_cost(rows)["graded_per_receiver"], {"gamma": 0.25})
+
+
+class Versus(unittest.TestCase):
+    def test_cells_split_by_geometry_and_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for geometry, t_us, base in (("spinewide", 400, 1000), ("downlink0", 400, 2000), ("spinewide", 100, 3000)):
+                for arm, extra in (("uniform", 100), ("graded_per_receiver", 0)):
+                    for seed in (301, 302, 303):
+                        key = f"t_comparison-k32-half_rate-{geometry}-t{t_us}-{arm}-s{seed}"
+                        runs.append({"key": key, "stage": "t_comparison", "arm": arm, "k": 32,
+                                     "condition": "half_rate", "geometry": geometry, "t_us": t_us, "seed": seed})
+                        (root / key).mkdir()
+                        (root / key / "summary.json").write_text(
+                            json.dumps({"collective_completion_ns": base + extra + seed - 301}))
+            (root / "runs.json").write_text(json.dumps(runs))
+            rows = analyze.versus(root / "runs.json", root, "graded_per_receiver", "uniform")
+        self.assertEqual(len(rows), 3)
+        by_cell = {(r["geometry"], r["t_us"]): r for r in rows}
+        self.assertEqual(by_cell[("downlink0", 400)]["uniform"], [2100, 2101, 2102])
+        self.assertEqual(by_cell[("spinewide", 100)]["graded_per_receiver"], [3000, 3001, 3002])
+        self.assertTrue(all(r["verdict"] == "graded_per_receiver beats uniform" for r in rows))
 
 
 if __name__ == "__main__":

@@ -223,9 +223,10 @@ def beats(a: list[int], b: list[int]) -> bool:
 
 
 def versus(runs_file: Path, out_root: Path, arm_a: str, arm_b: str) -> list[dict]:
-    """Per (stage, K, condition) cell, the two arms' completions by seed and
-    the verdict. A run that did not complete counts as slower than any that
-    did, and a cell with a missing run has no verdict."""
+    """Per cell, the two arms' completions by seed and the verdict. A cell is
+    (stage, K, condition), and for the transient stages also (geometry, T),
+    so each holds one fault. A run that did not complete counts as slower
+    than any that did, and a cell with a missing run has no verdict."""
     cells: dict[tuple, dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
     for run in json.loads(runs_file.read_text()):
         if run["arm"] not in (arm_a, arm_b):
@@ -234,18 +235,21 @@ def versus(runs_file: Path, out_root: Path, arm_a: str, arm_b: str) -> list[dict
         if not path.exists():
             continue
         completion = json.loads(path.read_text())["collective_completion_ns"]
-        cells[(run["stage"], run["k"], run["condition"])][run["arm"]][run["seed"]] = (
+        cell = (run["stage"], run["k"], run["condition"], run.get("geometry"), run.get("t_us"))
+        cells[cell][run["arm"]][run["seed"]] = (
             float("inf") if completion is None else completion
         )
     rows = []
-    for (stage, k, condition), arms in sorted(cells.items()):
+    for (stage, k, condition, geometry, t_us), arms in sorted(cells.items()):
         seeds = sorted(set(arms[arm_a]) & set(arms[arm_b]))
         a = [arms[arm_a][x] for x in seeds]
         b = [arms[arm_b][x] for x in seeds]
         complete = len(seeds) == 3
         rows.append(
             {
-                "stage": stage, "k": k, "condition": condition, "seeds": seeds,
+                "stage": stage, "k": k, "condition": condition,
+                **({} if geometry is None else {"geometry": geometry, "t_us": t_us}),
+                "seeds": seeds,
                 arm_a: a, arm_b: b,
                 "mean_gap_ns": (sum(b) - sum(a)) / len(seeds) if seeds else None,
                 "verdict": (
@@ -411,11 +415,20 @@ def verdict(a: list[float], b: list[float], name_a: str, name_b: str, higher_is_
 def cost_cells(rows: list[dict], reference: str, uniform: str = "uniform") -> list[dict]:
     """Per (stage, K, kind, geometry, T) cell, per arm: per-seed cost and
     recovered fraction, their means, the verdicts against the reference arm
-    and the transient means (rows may carry a transients entry)."""
+    and the transient means (rows may carry a transients entry). An arm is
+    named bare, with its setting as a field, when it runs one setting in the
+    cell, so the reference and uniform match by arm name; an arm with
+    several settings (the tuning stage) is named with each setting."""
     cells: dict[tuple, dict[str, dict[int, dict]]] = defaultdict(lambda: defaultdict(dict))
-    for row in costs(rows):
+    faulted = costs(rows)
+    settings: dict[tuple, set[str]] = defaultdict(set)
+    for row in faulted:
         cell = (row["stage"], row["k"], row["kind"], row["geometry"], row["t_us"])
-        cells[cell][_label(row)][row["seed"]] = row
+        settings[(cell, row["arm"])].add(json.dumps(row["setting"], sort_keys=True))
+    for row in faulted:
+        cell = (row["stage"], row["k"], row["kind"], row["geometry"], row["t_us"])
+        label = row["arm"] if len(settings[(cell, row["arm"])]) == 1 else _label(row)
+        cells[cell][label][row["seed"]] = row
     out = []
     for (stage, k, kind, geometry, t_us), arms in sorted(cells.items()):
         uniform_costs = {seed: r["cost_ns"] for seed, r in arms.get(uniform, {}).items()}
@@ -425,6 +438,7 @@ def cost_cells(rows: list[dict], reference: str, uniform: str = "uniform") -> li
             cost = [by_seed[x]["cost_ns"] for x in seeds]
             recovered = [recovered_fraction(by_seed[x]["cost_ns"], uniform_costs.get(x)) for x in seeds]
             table[label] = {
+                "setting": by_seed[seeds[0]]["setting"],
                 "seeds": seeds,
                 "cost_ns": cost,
                 "cost_ns_mean": None if None in cost or not cost else sum(cost) / len(cost),
