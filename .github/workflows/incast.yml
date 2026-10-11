@@ -296,7 +296,10 @@ jobs:
           --reference graded_per_connection > results/cost.json
         cat results/report.md >> "$GITHUB_STEP_SUMMARY"
 
+    # Best-effort: the artifacts above are the copy that always exists, and
+    # a results tarball can exceed GitHub's 2 GiB asset limit.
     - name: Archive on a release
+      continue-on-error: true
       env:
         GH_TOKEN: ${{ github.token }}
         STAGES: ${{ inputs.stages }}
