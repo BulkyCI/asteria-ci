@@ -1,0 +1,124 @@
+{
+ "switch_queue": {
+  "ep16-256k": {
+   "reports": 83244,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "loss_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_oracle_calibration-ep16-256k-healthy-graded_switch_queue-s101",
+    "a2a_oracle_calibration-ep16-256k-healthy-graded_switch_queue-s102",
+    "a2a_oracle_calibration-ep16-256k-healthy-graded_switch_queue-s103"
+   ],
+   "loss_thresholds": [
+    0.012195,
+    0.02439,
+    0.04878
+   ],
+   "loss_calibration": {
+    "p99": 0.0,
+    "median_sent": 82.0,
+    "one_loss_fraction": 0.012195121951219513,
+    "floored": true,
+    "capped": false
+   }
+  },
+  "ep16-2m": {
+   "reports": 420210,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "loss_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_oracle_calibration-ep16-2m-healthy-graded_switch_queue-s101",
+    "a2a_oracle_calibration-ep16-2m-healthy-graded_switch_queue-s102",
+    "a2a_oracle_calibration-ep16-2m-healthy-graded_switch_queue-s103"
+   ],
+   "loss_thresholds": [
+    0.007463,
+    0.014925,
+    0.029851
+   ],
+   "loss_calibration": {
+    "p99": 0.0,
+    "median_sent": 134,
+    "one_loss_fraction": 0.007462686567164179,
+    "floored": true,
+    "capped": false
+   }
+  },
+  "ep64-256k": {
+   "reports": 948829,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "loss_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_oracle_calibration-ep64-256k-healthy-graded_switch_queue-s101",
+    "a2a_oracle_calibration-ep64-256k-healthy-graded_switch_queue-s102",
+    "a2a_oracle_calibration-ep64-256k-healthy-graded_switch_queue-s103"
+   ],
+   "loss_thresholds": [
+    0.007692,
+    0.015385,
+    0.030769
+   ],
+   "loss_calibration": {
+    "p99": 0.0,
+    "median_sent": 130,
+    "one_loss_fraction": 0.007692307692307693,
+    "floored": true,
+    "capped": false
+   }
+  },
+  "ep64-2m": {
+   "reports": 1980930,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "loss_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_oracle_calibration-ep64-2m-healthy-graded_switch_queue-s101",
+    "a2a_oracle_calibration-ep64-2m-healthy-graded_switch_queue-s102",
+    "a2a_oracle_calibration-ep64-2m-healthy-graded_switch_queue-s103"
+   ],
+   "loss_thresholds": [
+    0.007353,
+    0.014706,
+    0.029412
+   ],
+   "loss_calibration": {
+    "p99": 0.0,
+    "median_sent": 136,
+    "one_loss_fraction": 0.007352941176470588,
+    "floored": true,
+    "capped": false
+   }
+  }
+ }
+}
