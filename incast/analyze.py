@@ -8,6 +8,7 @@
     analyze.py calibrate --runs RUNS.json --out-root DIR [--into FILE]   thresholds per scope and K
     analyze.py gains --runs RUNS.json --out-root DIR --into FILE        gain per scope and K
     analyze.py select --runs RUNS.json --out-root DIR                   tuning selection
+    analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -177,6 +178,54 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
     return rows
 
 
+def beats(a: list[int], b: list[int]) -> bool:
+    """Paired seeds: a beats b by more than seed noise when a is faster on
+    every seed and the mean gap exceeds the larger of the two seed ranges."""
+    if len(a) != len(b) or not a:
+        return False
+    if not all(x < y for x, y in zip(a, b)):
+        return False
+    gap = sum(b) / len(b) - sum(a) / len(a)
+    return gap > max(max(a) - min(a), max(b) - min(b))
+
+
+def versus(runs_file: Path, out_root: Path, arm_a: str, arm_b: str) -> list[dict]:
+    """Per (stage, K, condition) cell, the two arms' completions by seed and
+    the verdict. A run that did not complete counts as slower than any that
+    did, and a cell with a missing run has no verdict."""
+    cells: dict[tuple, dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+    for run in json.loads(runs_file.read_text()):
+        if run["arm"] not in (arm_a, arm_b):
+            continue
+        path = out_root / run["key"] / "summary.json"
+        if not path.exists():
+            continue
+        completion = json.loads(path.read_text())["collective_completion_ns"]
+        cells[(run["stage"], run["k"], run["condition"])][run["arm"]][run["seed"]] = (
+            float("inf") if completion is None else completion
+        )
+    rows = []
+    for (stage, k, condition), arms in sorted(cells.items()):
+        seeds = sorted(set(arms[arm_a]) & set(arms[arm_b]))
+        a = [arms[arm_a][x] for x in seeds]
+        b = [arms[arm_b][x] for x in seeds]
+        complete = len(seeds) == 3
+        rows.append(
+            {
+                "stage": stage, "k": k, "condition": condition, "seeds": seeds,
+                arm_a: a, arm_b: b,
+                "mean_gap_ns": (sum(b) - sum(a)) / len(seeds) if seeds else None,
+                "verdict": (
+                    None if not complete
+                    else f"{arm_a} beats {arm_b}" if beats(a, b)
+                    else f"{arm_b} beats {arm_a}" if beats(b, a)
+                    else "within seed noise"
+                ),
+            }
+        )
+    return rows
+
+
 SCOPE_OF_ARM = {
     "graded_per_receiver": "per_receiver",
     "graded_per_connection": "per_connection",
@@ -266,6 +315,11 @@ def main() -> int:
     c.add_argument("--runs", type=Path, required=True)
     c.add_argument("--out-root", type=Path, required=True)
     c.add_argument("--stage")
+    v = sub.add_parser("versus")
+    v.add_argument("arm_a")
+    v.add_argument("arm_b")
+    v.add_argument("--runs", type=Path, required=True)
+    v.add_argument("--out-root", type=Path, required=True)
     for name in ("calibrate", "gains", "select"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True)
@@ -280,6 +334,9 @@ def main() -> int:
         if arguments.into:
             arguments.into.write_text(json.dumps(result, indent=1) + "\n")
         print(json.dumps(result, indent=1))
+        return 0
+    if arguments.command == "versus":
+        print(json.dumps(versus(arguments.runs, arguments.out_root, arguments.arm_a, arguments.arm_b), indent=1))
         return 0
     if arguments.command == "select":
         print(json.dumps(select(arguments.runs, arguments.out_root), indent=1))
