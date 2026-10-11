@@ -72,7 +72,17 @@
     "calibration-k64-healthy-graded_per_connection-s101",
     "calibration-k64-healthy-graded_per_connection-s102",
     "calibration-k64-healthy-graded_per_connection-s103"
-   ]
+   ],
+   "estimator_gain": 0.25,
+   "gain_fraction": 0.8738066592379112,
+   "gain_fractions": {
+    "0.015625": 0.8537007243239473,
+    "0.03125": 0.8423437616749634,
+    "0.0625": 0.8530396018775717,
+    "0.125": 0.8626338449352537,
+    "0.25": 0.8738066592379112
+   },
+   "gain_meets_rule": false
   }
  },
  "per_receiver": {
@@ -148,7 +158,17 @@
     "calibration-k64-healthy-graded_per_receiver-s101",
     "calibration-k64-healthy-graded_per_receiver-s102",
     "calibration-k64-healthy-graded_per_receiver-s103"
-   ]
+   ],
+   "estimator_gain": 0.25,
+   "gain_fraction": 0.9230049041462327,
+   "gain_fractions": {
+    "0.015625": 0.9230049041462327,
+    "0.03125": 0.9230049041462327,
+    "0.0625": 0.9230049041462327,
+    "0.125": 0.9230049041462327,
+    "0.25": 0.9230049041462327
+   },
+   "gain_meets_rule": false
   }
  },
  "switch_queue": {
