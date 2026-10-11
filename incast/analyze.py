@@ -12,6 +12,9 @@
     analyze.py cost --runs RUNS.json --out-root DIR --reference ARM [--stage S]  transient cost table
     analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
     analyze.py a2a_gate --runs RUNS.json... --out-root DIR [--json]     Phase 9 oracle-headroom gate, a row per cell
+    analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
+                                                     Phase 9 thresholds per scope and (group, size);
+                                                     FILE defaults to incast/a2a_calibration.json
 
 Phase 9 (all-to-all runs, those with a group): cost pairs each faulted run
 with the healthy run of the same arm and setting, group, size and seed, from
@@ -678,6 +681,132 @@ def a2a_gate(cells: list[dict], oracle: str = A2A_ORACLE, uniform: str = "unifor
     return rows
 
 
+# Phase 9 calibration: thresholds per scope and (group, size) from the
+# healthy runs of a2a_oracle_calibration and a2a_calibration.
+
+A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration")
+A2A_SCOPE_OF_ARM = {
+    "graded_switch_queue": "switch_queue",
+    "graded_per_connection": "per_connection",
+    "graded_per_receiver_mix": "per_receiver",
+}
+A2A_LOSS_INTERVALS_NS = tuple(n * BASE_RTT_NS for n in (2, 10, 40))
+A2A_HEADLINE_CELL = "ep64-2m"
+A2A_HEADLINE_RATE = 1e-3
+A2A_HOSTS_PER_LEAF = 8
+
+
+def loss_thresholds(first_p99: float, sent_counts: list[int]) -> dict:
+    """The lost fraction's (t, 2t, 4t): t is the healthy 99th percentile,
+    floored at the fraction one loss reads at the median per-spine send
+    count, so a single loss reaches the first threshold; the floor is
+    flagged, as is the cap of scaled_thresholds."""
+    median_sent = statistics.median(sent_counts) if sent_counts else None
+    floor = 1 / median_sent if median_sent else 0.0
+    capped, values = scaled_thresholds(max(first_p99, floor))
+    return {"p99": first_p99, "median_sent": median_sent, "one_loss_fraction": floor,
+            "floored": floor > first_p99, "capped": capped, "loss_thresholds": values}
+
+
+def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], list[int]]:
+    """The sender loss trace (two-base-RTT rows of time_ns, rank, spine, sent,
+    lost) summed into intervals of interval_ns, aligned at 0 as the pool's
+    are: {(rank, interval index, spine): [sent, lost]}, where a row ending
+    at time t belongs to the interval ending at or after it."""
+    sums: dict[tuple[int, int, int], list[int]] = defaultdict(lambda: [0, 0])
+    with (run / "ns3" / "spine_losses.csv").open() as handle:
+        for row in csv.DictReader(handle):
+            cell = sums[(int(row["rank"]), (int(row["time_ns"]) - 1) // interval_ns, int(row["spine"]))]
+            cell[0] += int(row["sent"])
+            cell[1] += int(row["lost"])
+    return sums
+
+
+def trace_loss_thresholds(runs: list[Path]) -> dict[str, dict]:
+    """Per candidate interval, loss_thresholds from the healthy lost fraction
+    of every (host, interval, spine) with a send."""
+    out = {}
+    for interval in A2A_LOSS_INTERVALS_NS:
+        fractions, sent = [], []
+        for run in runs:
+            for n, lost in interval_losses(run, interval).values():
+                if n:
+                    fractions.append(lost / n)
+                    sent.append(n)
+        out[str(interval)] = loss_thresholds(percentile(fractions, 0.99), sent)
+    return out
+
+
+def report_loss_thresholds(runs: list[Path]) -> dict:
+    """The oracle's loss_thresholds, from its ground-truth loss fraction per
+    report and spine with arrivals, by the same rule and floor, the floor at
+    the median per-spine arrival count."""
+    fractions, arrivals = [], []
+    for run in runs:
+        for rows in reports(run).values():
+            for r in rows:
+                if int(r["arrivals"]):
+                    fractions.append(float(r["loss_fraction"]))
+                    arrivals.append(int(r["arrivals"]))
+    return loss_thresholds(percentile(fractions, 0.99), arrivals)
+
+
+def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:
+    """P17: the expected losses at 1e-3 per pool interval of the longest
+    candidate on the given spine for a leaf 0 sender, the mean send count
+    over the (host, interval) pairs with a send there, times 1e-3. At least
+    1 keeps the 1e-3 uplink cell as the headline; otherwise the 1e-2 one."""
+    interval = max(A2A_LOSS_INTERVALS_NS)
+    sends = [
+        n for run in runs for (rank, _, s), (n, _) in interval_losses(run, interval).items()
+        if s == spine and rank // A2A_HOSTS_PER_LEAF == 0 and n
+    ]
+    mean = statistics.fmean(sends) if sends else None
+    expected = None if mean is None else mean * A2A_HEADLINE_RATE
+    return {"interval_ns": interval, "intervals": len(sends), "mean_sent": mean,
+            "expected_losses_at_1e3": expected,
+            "condition": "loss1e3_up" if expected is not None and expected >= 1 else "loss1e2_up"}
+
+
+def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
+    """a2a_calibration.json from the healthy calibration runs that have a
+    summary, merged into existing: per scope and (group, size), the Phase 8
+    congestion (and, but for switch_queue, trim) thresholds of thresholds(),
+    and loss_thresholds. The pooled pass's are a map from each candidate
+    interval to its list, from its sender loss trace; per_connection takes
+    the same map from the pooled pass of its cell (its own runs write no
+    trace); switch_queue's are one list from its ground-truth loss fraction.
+    "headline" is set by the P17 rule from the pooled EP64 2 MiB trace."""
+    groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
+    for run in _listed_runs(runs_files):
+        directory = out_root / run["key"]
+        if (run["stage"] in A2A_CALIBRATION_STAGES and run["condition"] == "healthy"
+                and run["arm"] in A2A_SCOPE_OF_ARM and (directory / "summary.json").exists()):
+            groups[(A2A_SCOPE_OF_ARM[run["arm"]], f"{run['group']}-{run['size']}")].append(directory)
+    result = {key: (dict(value) if isinstance(value, dict) else value) for key, value in existing.items()}
+    traced = {cell: [d for d in dirs if (d / "ns3" / "spine_losses.csv").exists()]
+              for (scope, cell), dirs in groups.items() if scope == "per_receiver"}
+    for (scope, cell), directories in sorted(groups.items()):
+        switch = scope == "switch_queue"
+        entry = thresholds(directories, ("mark_fraction", "loss_fraction") if switch else ("mark_fraction", "trim_fraction"))
+        entry["runs"] = sorted(d.name for d in directories)
+        if switch:
+            loss = report_loss_thresholds(directories)
+            entry["loss_thresholds"] = loss.pop("loss_thresholds")
+            entry["loss_calibration"] = loss
+        elif traced.get(cell):
+            losses = trace_loss_thresholds(traced[cell])
+            entry["loss_thresholds"] = {k: v.pop("loss_thresholds") for k, v in losses.items()}
+            entry["loss_calibration"] = losses
+            entry["loss_runs"] = sorted(d.name for d in traced[cell])
+        result.setdefault(scope, {})[cell] = entry
+    if traced.get(A2A_HEADLINE_CELL):
+        decision = headline(traced[A2A_HEADLINE_CELL])
+        result["headline"] = decision["condition"]
+        result["headline_rule"] = decision
+    return result
+
+
 def gate_line(row: dict) -> str:
     def us(values):
         if values is None:
@@ -710,9 +839,10 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
-    for name in ("calibrate", "gains", "select", "cost", "a2a_gate"):
+    for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate"):
         x = sub.add_parser(name)
-        x.add_argument("--runs", type=Path, required=True, nargs="+" if name in ("cost", "a2a_gate") else None)
+        x.add_argument("--runs", type=Path, required=True,
+                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -722,7 +852,15 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
+        if name == "a2a_calibrate":
+            x.add_argument("--into", type=Path, default=Path(__file__).resolve().parent / "a2a_calibration.json")
     arguments = parser.parse_args()
+    if arguments.command == "a2a_calibrate":
+        existing = json.loads(arguments.into.read_text()) if arguments.into.exists() else {}
+        result = a2a_calibrate(arguments.runs, arguments.out_root, existing)
+        arguments.into.write_text(json.dumps(result, indent=1) + "\n")
+        print(json.dumps(result, indent=1))
+        return 0
     if arguments.command == "cost":
         rows = [r for path in arguments.runs for r in transient_rows(path, arguments.out_root, arguments.stage)]
         a2a = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)

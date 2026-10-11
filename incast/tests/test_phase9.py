@@ -211,5 +211,122 @@ class Gate(unittest.TestCase):
         self.assertIn("unreadable", analyze.gate_line(row))
 
 
+class Iterations(unittest.TestCase):
+    def test_per_group_and_size(self):
+        runs = profiles.a2a_stage_runs("a2a_gate", None, None)
+        by_cell = {(r["group"], r["size"]): (r["iterations"], r["compute_ns"]) for r in runs}
+        self.assertEqual(by_cell[("ep64", "2m")], (12, 2_070_000))
+        self.assertEqual(by_cell[("ep16", "256k")], (40, 62_000))
+        run_ = next(r for r in runs if (r["group"], r["size"]) == ("ep64", "2m"))
+        document = profiles.a2a_stage_profile(run_, None)
+        self.assertEqual((document["steps"], document["workload"]["iterations"]), (12, 12))
+
+
+def write_calibration_run(root, key, reports, losses=None):
+    """A run directory with a summary, spine_reports.csv rows of (time,
+    rank, sequence, spine, arrivals, mark, trim, loss) and, when given,
+    spine_losses.csv rows of (time, rank, spine, sent, lost)."""
+    ns3 = root / key / "ns3"
+    ns3.mkdir(parents=True)
+    (root / key / "summary.json").write_text("{}")
+    (ns3 / "spine_reports.csv").write_text(
+        "time_ns,rank,sequence,spine,arrivals,mark_fraction,trim_fraction,grade,loss_fraction\n"
+        + "".join(f"{t},{r},{q},{s},{a},{m},{tr},3,{lo}\n" for t, r, q, s, a, m, tr, lo in reports))
+    if losses is not None:
+        (ns3 / "spine_losses.csv").write_text(
+            "time_ns,rank,spine,sent,lost,grade\n" + "".join(f"{t},{r},{s},{n},{lo},3\n" for t, r, s, n, lo in losses))
+
+
+class A2aCalibrate(unittest.TestCase):
+    INTERVAL = 2 * profiles.BASE_RTT_NS
+
+    def reports(self, hot_mark, hot_trim=0.0, hot_loss=0.0):
+        # 100 reports of eight spines; spine 3 marks, trims and loses above
+        # the others, who sit at the median.
+        return [(i * 1000, 0, i, s, 100, 0.1 + (hot_mark if s == 3 else 0), 0.01 + (hot_trim if s == 3 else 0),
+                 hot_loss if s == 3 else 0.0) for i in range(100) for s in range(8)]
+
+    def losses(self, sent, lost_at=(), spines=8, hosts=(0, 8), intervals=40):
+        """Every host of hosts sends `sent` per spine per two-base-RTT
+        interval; lost_at lists the (host, interval, spine) that lose one."""
+        return [((i + 1) * self.INTERVAL, h, s, sent, 1 if (h, i, s) in lost_at else 0)
+                for h in hosts for i in range(intervals) for s in range(spines)]
+
+    def calibrate(self, runs, existing=None):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            listed = []
+            for r, reports, losses in runs:
+                write_calibration_run(root, r["key"], reports, losses)
+                listed.append(r)
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(listed + [run("graded_switch_queue", "ep64", "2m", "healthy", 999,
+                                                         "a2a_oracle_calibration")]))  # no summary: skipped
+            return analyze.a2a_calibrate([listing], root, existing or {})
+
+    def test_scopes_cells_and_rules(self):
+        intervals = [str(i) for i in profiles.A2A_LOSS_INTERVALS_NS]
+        self.assertEqual(intervals, ["24648", "123240", "492960"])
+        oracle = run("graded_switch_queue", "ep16", "256k", "healthy", 101, "a2a_oracle_calibration")
+        connection = run("graded_per_connection", "ep64", "2m", "healthy", 101, "a2a_calibration")
+        mix = run("graded_per_receiver_mix", "ep64", "2m", "healthy", 101, "a2a_calibration")
+        result = self.calibrate([
+            (oracle, self.reports(0.02, hot_loss=0.0), None),
+            (connection, self.reports(0.5, 0.05), None),
+            # 50 sends per spine per interval, none lost: the floor, 1/50,
+            # 1/250 and 1/1000 at the three intervals.
+            (mix, self.reports(0.03, 0.02), self.losses(50)),
+        ], existing={"switch_queue": {"ep64-2m": {"kept": True}}})
+        sq = result["switch_queue"]
+        self.assertEqual(sq["ep64-2m"], {"kept": True})
+        self.assertEqual(sq["ep16-256k"]["congestion_thresholds"], [0.02, 0.04, 0.08])
+        self.assertNotIn("trim_thresholds", sq["ep16-256k"])
+        # Ground-truth loss: none, so the floor at one loss in 100 arrivals.
+        self.assertEqual(sq["ep16-256k"]["loss_thresholds"], [0.01, 0.02, 0.04])
+        self.assertTrue(sq["ep16-256k"]["loss_calibration"]["floored"])
+        pooled = result["per_receiver"]["ep64-2m"]
+        self.assertEqual(pooled["congestion_thresholds"], [0.03, 0.06, 0.12])
+        self.assertEqual(pooled["trim_thresholds"], [0.02, 0.04, 0.08])
+        self.assertEqual(pooled["loss_thresholds"], {"24648": [0.02, 0.04, 0.08], "123240": [0.004, 0.008, 0.016],
+                                                     "492960": [0.001, 0.002, 0.004]})
+        per_connection = result["per_connection"]["ep64-2m"]
+        self.assertTrue(per_connection["capped"])
+        self.assertEqual(per_connection["congestion_thresholds"], [0.25, 0.5, 1.0])
+        self.assertEqual(per_connection["trim_thresholds"], [0.05, 0.1, 0.2])
+        self.assertEqual(per_connection["loss_thresholds"], pooled["loss_thresholds"])
+        # Leaf 0's host sends 50 x 20 = 1000 per 40-base-RTT interval on
+        # spine 3: one expected loss at 1e-3 keeps the 1e-3 headline.
+        self.assertEqual(result["headline_rule"]["expected_losses_at_1e3"], 1.0)
+        self.assertEqual(result["headline"], "loss1e3_up")
+        # The listing round-trips through the stages.
+        balancing = profiles.a2a_balancing("graded_per_receiver_mix", "ep64", "2m", result,
+                                           {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
+        self.assertEqual(balancing["loss_thresholds"], [0.004, 0.008, 0.016])
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 84)
+
+    def test_p99_above_the_floor_and_the_fallback_headline(self):
+        mix = run("graded_per_receiver_mix", "ep64", "2m", "healthy", 101, "a2a_calibration")
+        # 40 sends per spine per interval; host 0 loses one on spine 0 in
+        # every interval: 1/40 in 64 of 640 two-base-RTT samples, above the
+        # p99 and the floor; at 40 base RTTs host 0's spine 0 reads 20/800.
+        lost = {(0, i, 0) for i in range(40)}
+        result = self.calibrate([(mix, self.reports(0.03), self.losses(40, lost, hosts=(0, 8)))])
+        calibration = result["per_receiver"]["ep64-2m"]["loss_calibration"]
+        self.assertAlmostEqual(calibration["24648"]["p99"], 1 / 40)
+        self.assertFalse(calibration["24648"]["floored"])
+        self.assertEqual(result["per_receiver"]["ep64-2m"]["loss_thresholds"]["24648"], [0.025, 0.05, 0.1])
+        self.assertAlmostEqual(calibration["492960"]["p99"], 1 / 40)
+        # 800 sends per 40-base-RTT interval on spine 3: 0.8 expected losses.
+        self.assertAlmostEqual(result["headline_rule"]["expected_losses_at_1e3"], 0.8)
+        self.assertEqual(result["headline"], "loss1e2_up")
+
+    def test_interval_sums(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_calibration_run(root, "r", [], [(self.INTERVAL * k, 3, 3, 10, k % 2) for k in range(1, 11)])
+            sums = analyze.interval_losses(root / "r", 5 * self.INTERVAL)
+        self.assertEqual(dict(sums), {(3, 0, 3): [50, 3], (3, 1, 3): [50, 2]})
+
+
 if __name__ == "__main__":
     unittest.main()

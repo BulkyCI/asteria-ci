@@ -426,18 +426,30 @@ A2A_GROUPS: dict[str, Any] = {"ep64": "all", "ep16": {"leaves": [0, 1]}}
 A2A_GROUP_SIZES = {"ep64": 64, "ep16": 16}
 A2A_SIZES = {"2m": 2 * MIB, "256k": 256 * 1024}
 A2A_CELLS = tuple(itertools.product(A2A_GROUPS, A2A_SIZES))
-# The probe (a2a_probe) sets A2A_COMPUTE_NS and A2A_ITERATIONS. Until then:
-# compute_ns = ceil_us(V / (0.6 * 50 GB/s) - t_h) per group and size, V the
-# bytes a host sends per iteration (message_bytes times the peers), with t_h
-# taken as the line-rate burst V / 50 GB/s in place of the measured healthy
-# iteration time, so a period of V / 30 GB/s (the spec's fluid table).
+# Set from the probe (a2a_probe, run 38170259475 shard s006, healthy, EP64 at
+# 512 KiB, 200 us of compute): uniform and the oracle alike took 775.8 us per
+# iteration at the median, 40 of 40 iterations, against a 660 us line-rate
+# burst (63 x 512 KiB at 50 GB/s), so the measured burst is 1.176 times the
+# line-rate one. Each cell's burst t_h is taken as 1.176 times its line-rate
+# burst V / 50 GB/s (V the bytes a host sends per iteration), and the compute
+# gap is two thirds of it, so the hosts are busy 60 percent of the period
+# (t_h / (t_h + compute) = 0.6), rounded to a whole microsecond.
 A2A_COMPUTE_NS = {
-    ("ep64", "2m"): 1_762_000,  # placeholder: 4.404 ms period - 2.642 ms burst
-    ("ep64", "256k"): 221_000,  # placeholder: 550.5 us - 330.3 us
-    ("ep16", "2m"): 420_000,  # placeholder: 1048.6 us - 629.1 us
-    ("ep16", "256k"): 53_000,  # placeholder: 131.1 us - 78.6 us
+    ("ep64", "2m"): 2_070_000,  # burst 1.176 x 2.642 ms = 3.107 ms
+    ("ep64", "256k"): 259_000,  # 1.176 x 330.3 us = 388.4 us
+    ("ep16", "2m"): 493_000,  # 1.176 x 629.1 us = 739.9 us
+    ("ep16", "256k"): 62_000,  # 1.176 x 78.6 us = 92.5 us
 }
-A2A_ITERATIONS = 40  # placeholder: the probe sets it
+# Iterations per group and size. The probe ran two runs per hosted runner at
+# 51 min each for EP64 at 512 KiB over 40 iterations (about 85 GB of data);
+# EP64 at 2 MiB keeps to about 100 GB of data per run (64 hosts x 126 MiB x
+# 12), the others run the specification's 40.
+A2A_ITERATIONS = {
+    ("ep64", "2m"): 12,
+    ("ep64", "256k"): 40,
+    ("ep16", "2m"): 40,
+    ("ep16", "256k"): 40,
+}
 A2A_SPINE = DEGRADED_SPINE
 A2A_REPORT_INTERVAL_NS = 2 * BASE_RTT_NS
 # Loss-interval candidates: 2, 10 and 40 base RTTs.
@@ -559,7 +571,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "message_bytes": A2A_SIZES[size],
                 "condition": condition,
                 "compute_ns": A2A_COMPUTE_NS[(group, size)],
-                "iterations": A2A_ITERATIONS,
+                "iterations": A2A_ITERATIONS[(group, size)],
                 "seed": seed,
             }
         )
