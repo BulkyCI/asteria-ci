@@ -276,6 +276,7 @@ jobs:
     - name: Tabulate
       run: |
         set -euo pipefail
+        mkdir -p results
         jq -s 'add' profiles/*/runs.json > results/runs.json
         python3 incast/analyze.py compare --runs results/runs.json --out-root results > results/table.json
         python3 incast/report.py results/table.json > results/report.md

@@ -5,6 +5,15 @@
     analyze.py gain RUN_DIR...                       fraction of all-top reports per run
     analyze.py binding RUN_DIR...                    degraded spine's rate toward leaf 0
     analyze.py compare --runs RUNS.json --out-root DIR [--stage S]  per-cell arm table
+    analyze.py calibrate --runs RUNS.json --out-root DIR [--into FILE]   thresholds per scope and K
+    analyze.py gains --runs RUNS.json --out-root DIR --into FILE        gain per scope and K
+    analyze.py select --runs RUNS.json --out-root DIR                   tuning selection
+
+Gain: per scope and K, the largest candidate gain at which at least 99
+percent of the healthy reports of every calibration seed give every spine
+the top grade, pooled over the seeds; if none reaches 99 percent, the gain
+with the largest fraction, flagged. Selection: per redirect arm and tuning
+condition, the setting with the lowest collective completion.
 
 Thresholds: for every report of a healthy run, each spine's deviation above
 the median spine of that report, for the marked and the trimmed fraction
@@ -163,6 +172,76 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
     return rows
 
 
+SCOPE_OF_ARM = {
+    "graded_per_receiver": "per_receiver",
+    "graded_per_connection": "per_connection",
+    "graded_switch_queue": "switch_queue",
+}
+
+
+def _listed(runs_file: Path, out_root: Path, stage: str):
+    for run in json.loads(runs_file.read_text()):
+        directory = out_root / run["key"]
+        if run["stage"] == stage and (directory / "summary.json").exists():
+            yield run, directory
+
+
+def calibrate(runs_file: Path, out_root: Path, existing: dict) -> dict:
+    groups: dict[tuple[str, int], list[Path]] = defaultdict(list)
+    for run, directory in _listed(runs_file, out_root, "calibration"):
+        groups[(SCOPE_OF_ARM[run["arm"]], run["k"])].append(directory)
+    result = {scope: dict(values) for scope, values in existing.items()}
+    for (scope, k), directories in sorted(groups.items()):
+        metrics = ("mark_fraction", "loss_fraction") if scope == "switch_queue" else ("mark_fraction", "trim_fraction")
+        entry = thresholds(directories, metrics)
+        entry["runs"] = [d.name for d in directories]
+        previous = result.setdefault(scope, {}).get(str(k), {})
+        if "estimator_gain" in previous:
+            entry["estimator_gain"] = previous["estimator_gain"]
+            entry["gain_fraction"] = previous.get("gain_fraction")
+        result[scope][str(k)] = entry
+    return result
+
+
+def gains(runs_file: Path, out_root: Path, existing: dict) -> dict:
+    tops: dict[tuple[str, int, float], list[int]] = defaultdict(lambda: [0, 0])
+    for run, directory in _listed(runs_file, out_root, "gain"):
+        gain = run["setting"]["estimator_gain"]
+        counted = all_top_fraction(directory)
+        cell = tops[(SCOPE_OF_ARM[run["arm"]], run["k"], gain)]
+        cell[0] += counted["all_top"]
+        cell[1] += counted["reports"]
+    result = {scope: dict(values) for scope, values in existing.items()}
+    for scope, k in sorted({(s, k) for s, k, _ in tops}):
+        fractions = {g: t / n for (s, kk, g), (t, n) in tops.items() if s == scope and kk == k and n}
+        passing = [g for g, f in fractions.items() if f >= 0.99]
+        chosen = max(passing) if passing else max(fractions, key=fractions.get)
+        entry = result.setdefault(scope, {}).setdefault(str(k), {})
+        entry["estimator_gain"] = chosen
+        entry["gain_fraction"] = fractions[chosen]
+        entry["gain_fractions"] = {str(g): f for g, f in sorted(fractions.items())}
+        entry["gain_meets_rule"] = bool(passing)
+    return result
+
+
+def select(runs_file: Path, out_root: Path) -> dict:
+    best: dict[tuple[str, str], tuple[int, dict]] = {}
+    table: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for run, directory in _listed(runs_file, out_root, "tuning"):
+        summary = json.loads((directory / "summary.json").read_text())
+        completion = summary["collective_completion_ns"]
+        table[run["arm"]][run["condition"]].append({"setting": run["setting"], "completion_ns": completion})
+        if completion is None:
+            continue
+        key = (run["arm"], run["condition"])
+        if key not in best or completion < best[key][0]:
+            best[key] = (completion, run["setting"])
+    selection: dict[str, dict] = defaultdict(dict)
+    for (arm, condition), (_, setting) in best.items():
+        selection[arm][condition] = setting
+    return {**selection, "table": table}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -177,7 +256,24 @@ def main() -> int:
     c.add_argument("--runs", type=Path, required=True)
     c.add_argument("--out-root", type=Path, required=True)
     c.add_argument("--stage")
+    for name in ("calibrate", "gains", "select"):
+        x = sub.add_parser(name)
+        x.add_argument("--runs", type=Path, required=True)
+        x.add_argument("--out-root", type=Path, required=True)
+        if name != "select":
+            x.add_argument("--into", type=Path)
     arguments = parser.parse_args()
+    if arguments.command in ("calibrate", "gains"):
+        existing = json.loads(arguments.into.read_text()) if arguments.into and arguments.into.exists() else {}
+        compute = calibrate if arguments.command == "calibrate" else gains
+        result = compute(arguments.runs, arguments.out_root, existing)
+        if arguments.into:
+            arguments.into.write_text(json.dumps(result, indent=1) + "\n")
+        print(json.dumps(result, indent=1))
+        return 0
+    if arguments.command == "select":
+        print(json.dumps(select(arguments.runs, arguments.out_root), indent=1))
+        return 0
     if arguments.command == "thresholds":
         metrics = ("mark_fraction", "loss_fraction") if arguments.switch_queue else ("mark_fraction", "trim_fraction")
         result = thresholds(arguments.runs, metrics)
