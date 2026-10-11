@@ -11,6 +11,17 @@
     analyze.py select --runs RUNS.json --out-root DIR [--stage t_tuning] tuning selection
     analyze.py cost --runs RUNS.json --out-root DIR --reference ARM [--stage S]  transient cost table
     analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
+    analyze.py a2a_gate --runs RUNS.json... --out-root DIR [--json]     Phase 9 oracle-headroom gate, a row per cell
+
+Phase 9 (all-to-all runs, those with a group): cost pairs each faulted run
+with the healthy run of the same arm and setting, group, size and seed, from
+any stage of the runs files given (the comparison reuses the gate's uniform
+and oracle runs). Primary cost is the mean iteration completion minus the
+pair's, tail cost the same on the p99 with linear interpolation; recovered
+fraction is 1 - cost / cost(uniform) per seed on the same (group, size,
+condition) cell. Those cells follow the transient cells in cost's output. The
+gate admits a cell when the oracle's mean primary cost is at most half of
+uniform's and the oracle beats uniform on primary cost by the seed rule.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -505,6 +516,181 @@ def select_by_cost(rows: list[dict]) -> dict:
     return {**selection, "table": table}
 
 
+# Phase 9: all-to-all cost against the paired healthy run, and the
+# oracle-headroom gate.
+
+A2A_ORACLE = "graded_switch_queue"
+
+
+def linear_quantile(values: list[float], q: float) -> float:
+    """The q-th quantile with linear interpolation between order statistics,
+    so the p99 of 40 values lies between the two largest."""
+    ordered = sorted(values)
+    position = q * (len(ordered) - 1)
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def _listed_runs(runs_files) -> list[dict]:
+    """The runs of one or more runs.json files, each key once."""
+    if isinstance(runs_files, Path):
+        runs_files = [runs_files]
+    seen: dict[str, dict] = {}
+    for path in runs_files:
+        for run in json.loads(Path(path).read_text()):
+            seen.setdefault(run["key"], run)
+    return list(seen.values())
+
+
+def a2a_rows(runs_files, out_root: Path, stage: str | None = None) -> list[dict]:
+    """The Phase 9 all-to-all runs (those with a group) that have a summary,
+    with their per-iteration completions; iterations_ns is None when the run
+    did not complete every iteration."""
+    rows = []
+    for run in _listed_runs(runs_files):
+        if "group" not in run or (stage and run["stage"] != stage):
+            continue
+        path = out_root / run["key"] / "summary.json"
+        if not path.exists():
+            continue
+        timing = json.loads(path.read_text()).get("all_to_all") or {}
+        complete = bool(timing.get("complete"))
+        values = timing.get("iteration_completion_ns", {})
+        rows.append({**run, "complete": complete,
+                     "iterations_ns": [values[i] for i in sorted(values, key=int)] if complete else None})
+    return rows
+
+
+def a2a_costs(rows: list[dict]) -> list[dict]:
+    """Every faulted all-to-all row with its primary cost (mean iteration
+    completion minus the paired healthy run's) and tail cost (the same on the
+    linearly interpolated p99), the pair being the healthy run of the same
+    arm and setting, group, size and seed, from any stage. Costs are None
+    when the healthy run is missing or incomplete and infinite when the
+    faulted run is incomplete."""
+    def pair(row):
+        return (_label(row), row["group"], row["size"], row["seed"])
+
+    healthy: dict[tuple, dict] = {}
+    for row in rows:
+        if row["condition"] != "healthy":
+            continue
+        if pair(row) in healthy:
+            raise ValueError(f"{row['key']} and {healthy[pair(row)]['key']} pair the same runs")
+        healthy[pair(row)] = row
+    out = []
+    for row in rows:
+        if row["condition"] == "healthy":
+            continue
+        reference = healthy.get(pair(row))
+        if reference is None or reference["iterations_ns"] is None:
+            cost = tail = None
+        elif row["iterations_ns"] is None:
+            cost = tail = float("inf")
+        else:
+            cost = statistics.fmean(row["iterations_ns"]) - statistics.fmean(reference["iterations_ns"])
+            tail = linear_quantile(row["iterations_ns"], 0.99) - linear_quantile(reference["iterations_ns"], 0.99)
+        out.append({**row, "healthy_key": None if reference is None else reference["key"],
+                    "cost_ns": cost, "tail_cost_ns": tail})
+    return out
+
+
+def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str = "uniform") -> list[dict]:
+    """Per (group, size, condition) cell, per arm: per-seed primary and tail
+    cost and recovered fraction against uniform on the same cell and seed,
+    their means, and the seed-rule verdicts against the reference arm. Arms
+    are named as in cost_cells: bare when the cell runs one setting of it."""
+    faulted = a2a_costs(rows)
+    settings: dict[tuple, set[str]] = defaultdict(set)
+    for row in faulted:
+        settings[(row["group"], row["size"], row["condition"], row["arm"])].add(
+            json.dumps(row["setting"], sort_keys=True))
+    cells: dict[tuple, dict[str, dict[int, dict]]] = defaultdict(lambda: defaultdict(dict))
+    for row in faulted:
+        cell = (row["group"], row["size"], row["condition"])
+        label = row["arm"] if len(settings[cell + (row["arm"],)]) == 1 else _label(row)
+        cells[cell][label][row["seed"]] = row
+
+    def mean(values):
+        return None if not values or None in values else sum(values) / len(values)
+
+    out = []
+    for (group, size, condition), arms in sorted(cells.items()):
+        uniform_costs = {seed: r["cost_ns"] for seed, r in arms.get(uniform, {}).items()}
+        table = {}
+        for label, by_seed in sorted(arms.items()):
+            seeds = sorted(by_seed)
+            cost = [by_seed[x]["cost_ns"] for x in seeds]
+            tail = [by_seed[x]["tail_cost_ns"] for x in seeds]
+            recovered = [recovered_fraction(c, uniform_costs.get(x)) for c, x in zip(cost, seeds)]
+            table[label] = {
+                "setting": by_seed[seeds[0]]["setting"],
+                "stages": sorted({by_seed[x]["stage"] for x in seeds}),
+                "seeds": seeds,
+                "cost_ns": cost,
+                "cost_ns_mean": mean(cost),
+                "tail_cost_ns": tail,
+                "tail_cost_ns_mean": mean(tail),
+                "recovered": recovered,
+                "recovered_mean": mean(recovered),
+            }
+        if reference in table:
+            base = table[reference]
+            for label, entry in table.items():
+                if label == reference or entry["seeds"] != base["seeds"]:
+                    continue
+                entry["versus_reference_cost"] = verdict(entry["cost_ns"], base["cost_ns"], label, reference)
+                entry["versus_reference_recovered"] = verdict(
+                    entry["recovered"], base["recovered"], label, reference, higher_is_better=True
+                )
+        out.append({"group": group, "size": size, "condition": condition,
+                    "reference": reference, "arms": table})
+    return out
+
+
+def a2a_gate(cells: list[dict], oracle: str = A2A_ORACLE, uniform: str = "uniform") -> list[dict]:
+    """The oracle-headroom gate per cell: admitted when the oracle's mean
+    primary cost is at most half of uniform's (uniform's mean positive) and
+    the oracle beats uniform on primary cost by the seed rule, on the same
+    three seeds. admitted is None (unreadable) while either arm lacks three
+    seeds with a known cost."""
+    rows = []
+    for cell in cells:
+        u, o = cell["arms"].get(uniform), cell["arms"].get(oracle)
+        row = {"group": cell["group"], "size": cell["size"], "condition": cell["condition"],
+               "uniform_cost_ns": None if u is None else u["cost_ns"],
+               "oracle_cost_ns": None if o is None else o["cost_ns"],
+               "uniform_mean_ns": None, "oracle_mean_ns": None, "oracle_over_uniform": None,
+               "half_rule": None, "seed_rule": None, "admitted": None}
+        readable = (
+            u is not None and o is not None and u["seeds"] == o["seeds"] and len(u["seeds"]) == 3
+            and None not in u["cost_ns"] and None not in o["cost_ns"]
+        )
+        if readable:
+            u_mean, o_mean = u["cost_ns_mean"], o["cost_ns_mean"]
+            half = 0 < u_mean and o_mean <= u_mean / 2
+            seed = beats(o["cost_ns"], u["cost_ns"])
+            row.update(uniform_mean_ns=u_mean, oracle_mean_ns=o_mean,
+                       oracle_over_uniform=o_mean / u_mean if 0 < u_mean < float("inf") else None,
+                       half_rule=half, seed_rule=seed, admitted=half and seed)
+        rows.append(row)
+    return rows
+
+
+def gate_line(row: dict) -> str:
+    def us(values):
+        if values is None:
+            return "-"
+        return ", ".join("-" if v is None else f"{v / 1000:,.1f}" for v in values)
+
+    verdict_text = {None: "unreadable", True: "admitted", False: "dropped (non-discriminating)"}[row["admitted"]]
+    ratio = "-" if row["oracle_over_uniform"] is None else f"{row['oracle_over_uniform']:.2f}"
+    return (f"{row['group']} {row['size']} {row['condition']}: uniform cost us [{us(row['uniform_cost_ns'])}], "
+            f"oracle [{us(row['oracle_cost_ns'])}], oracle/uniform mean {ratio}, "
+            f"half rule {row['half_rule']}, seed rule {row['seed_rule']}: {verdict_text}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -524,20 +710,33 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
-    for name in ("calibrate", "gains", "select", "cost"):
+    for name in ("calibrate", "gains", "select", "cost", "a2a_gate"):
         x = sub.add_parser(name)
-        x.add_argument("--runs", type=Path, required=True)
+        x.add_argument("--runs", type=Path, required=True, nargs="+" if name in ("cost", "a2a_gate") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
-        if name in ("calibrate", "select", "cost"):
+        if name in ("calibrate", "select", "cost", "a2a_gate"):
             x.add_argument("--stage")
         if name == "cost":
             x.add_argument("--reference", required=True)
+        if name == "a2a_gate":
+            x.add_argument("--json", action="store_true")
     arguments = parser.parse_args()
     if arguments.command == "cost":
-        rows = transient_rows(arguments.runs, arguments.out_root, arguments.stage)
-        print(json.dumps(cost_cells(rows, arguments.reference), indent=1))
+        rows = [r for path in arguments.runs for r in transient_rows(path, arguments.out_root, arguments.stage)]
+        a2a = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+        print(json.dumps(cost_cells(rows, arguments.reference) + a2a_cost_cells(a2a, arguments.reference), indent=1))
+        return 0
+    if arguments.command == "a2a_gate":
+        rows = [r for r in a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+                if r["arm"] in ("uniform", A2A_ORACLE)]
+        verdicts = a2a_gate(a2a_cost_cells(rows))
+        if arguments.json:
+            print(json.dumps(verdicts, indent=1))
+        else:
+            for row in verdicts:
+                print(gate_line(row))
         return 0
     if arguments.command in ("calibrate", "gains"):
         existing = json.loads(arguments.into.read_text()) if arguments.into and arguments.into.exists() else {}

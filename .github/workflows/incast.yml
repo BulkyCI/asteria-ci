@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_comparison)
         required: true
         type: string
       record_filter:
@@ -65,6 +65,8 @@ jobs:
         [[ -f incast/tuning.json ]] && args+=(--tuning incast/tuning.json)
         [[ -f incast/transient_calibration.json ]] && args+=(--transient-calibration incast/transient_calibration.json)
         [[ -f incast/transient_tuning.json ]] && args+=(--transient-tuning incast/transient_tuning.json)
+        [[ -f incast/a2a_calibration.json ]] && args+=(--a2a-calibration incast/a2a_calibration.json)
+        [[ -f incast/a2a_tuning.json ]] && args+=(--a2a-tuning incast/a2a_tuning.json)
         IFS=, read -ra stages <<< "$STAGES"
         for stage in "${stages[@]}"; do
           python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" "${args[@]}"

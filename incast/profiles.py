@@ -19,8 +19,10 @@ list of {key, profile, seed, stage, k, condition, arm}. Stages named t_*
 are the transient-fault stages of transient.py, which read their own
 calibration and tuning files (--transient-calibration, --transient-tuning)
 and the redirect_per_connection setting of --tuning. The a2a_probe stage
-runs the all-to-all workload on the same fabric (see a2a_runs). Standard
-library only.
+runs the all-to-all workload on the same fabric (see a2a_runs). The a2a_*
+stages after it are Phase 9's (see a2a_stage_runs); they read
+--a2a-calibration and --a2a-tuning (incast/a2a_calibration.json and
+incast/a2a_tuning.json) when given. Standard library only.
 """
 
 from __future__ import annotations
@@ -157,11 +159,14 @@ def _graded(calibration: dict[str, Any] | None, scope_key: str, fan_in: int) -> 
 def setting_name(setting: dict[str, Any]) -> str:
     if set(setting) == {"estimator_gain"}:
         return f"g{round(1 / setting['estimator_gain'])}"
-    if "gamma" in setting and set(setting) <= {"gamma", "sender_pool_weight"}:
-        # gm025 for gamma 0.25, sw050 for a sender pool weight of 0.5.
+    if "gamma" in setting and set(setting) <= {"gamma", "sender_pool_weight", "loss_interval_ns"}:
+        # gm025 for gamma 0.25, sw050 for a sender pool weight of 0.5, li10
+        # for a loss interval of ten base RTTs.
         parts = [f"gm{round(setting['gamma'] * 100):03d}"]
         if "sender_pool_weight" in setting:
             parts.append(f"sw{round(setting['sender_pool_weight'] * 100):03d}")
+        if "loss_interval_ns" in setting:
+            parts.append(f"li{round(setting['loss_interval_ns'] / BASE_RTT_NS)}")
         return "-".join(parts)
     parts = [f"f{round(setting['flag'] * 100):02d}", f"w{round(setting['omega'] * 10)}"]
     if "validity_base_rtts" in setting:
@@ -298,14 +303,14 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
 
 
 # The all-to-all probe: every host sends A2A_MESSAGE_BYTES to every other
-# host, A2A_ITERATIONS times in a chain, with A2A_COMPUTES_NS of compute
+# host, A2A_PROBE_ITERATIONS times in a chain, with A2A_COMPUTES_NS of compute
 # between iterations (0, and a first guess at the healthy iteration time so
 # the fabric is not saturated). From 100 base RTTs to the end, the link
 # between leaf 0 and spine 3 is healthy, silent, at half rate or at 1
 # percent loss. K is the fan-in at each receiver, the 63 other hosts.
 A2A_STAGE = "a2a_probe"
 A2A_MESSAGE_BYTES = 512 * 1024
-A2A_ITERATIONS = 40
+A2A_PROBE_ITERATIONS = 40
 A2A_COMPUTES_NS = (0, 200_000)
 A2A_CONDITIONS = ("healthy", "blackhole", "half_rate", "loss")
 A2A_ARMS = ("uniform", "graded_switch_queue")
@@ -360,15 +365,272 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
         run["key"], 64, "healthy",
         transient.balancing(run["arm"], 64, transient_calibration, run["setting"]),
     )
-    document["steps"] = A2A_ITERATIONS
+    document["steps"] = A2A_PROBE_ITERATIONS
     document["workload"] = {
         "kind": "all_to_all",
         "group": "all",
         "message_bytes": A2A_MESSAGE_BYTES,
-        "iterations": A2A_ITERATIONS,
+        "iterations": A2A_PROBE_ITERATIONS,
         "compute_ns": run["compute_ns"],
     }
     document["network"]["link_failures"] = a2a_failures(run["condition"])
+    return document
+
+
+# Phase 9: the expert-parallel all-to-all on asymmetric and degraded
+# fabrics (receiver-driven-spraying docs/astra-sim-engineering-plan.md,
+# "Phase 9 specification (2026-10-11)"). Every rank of a group (EP64, every
+# host; EP16, the 16 hosts of leaves 0 and 1) runs A2A_ITERATIONS all-to-alls
+# of 2 MiB or 256 KiB per pair in a chain, with A2A_COMPUTE_NS of compute
+# between them. Faults sit on spine 3 from 100 base RTTs to the end of the
+# run, each in one direction of one link, except the structural asymmetry:
+# every link of spine 3 at 200 Gbps from t = 0, both directions, never
+# restored. The healthy pair of every cell, (f) included, is the run with no
+# fault.
+#
+# Stages:
+#
+#   a2a_oracle_calibration  the oracle's calibration pass (Gate 2's first
+#                           step): healthy graded_switch_queue runs, seeds
+#                           101-103, per group and size
+#   a2a_gate                the oracle-headroom gate: uniform and the oracle
+#                           on the 28 cells and their healthy pairs, seeds
+#                           301-303; the oracle joins a group and size once
+#                           a2a_calibration.json holds its switch_queue entry
+#   a2a_calibration         healthy runs of graded_per_connection and of
+#                           graded_per_receiver_mix (w 0.75, loss trace on at
+#                           a two-base-RTT interval), seeds 101-103, per
+#                           group and size: spine_reports.csv and
+#                           spine_losses.csv for the graded passes
+#   a2a_tuning              the 42 settings on the headline cell, EP64 at
+#                           2 MiB, seed 201, each with its healthy pair
+#   a2a_comparison          reps and mrc, and every graded arm a2a_tuning.json
+#                           selects, on the admitted cells and their healthy
+#                           pairs, seeds 301-303 (uniform and the oracle are
+#                           the gate's runs)
+#
+# a2a_calibration.json (read when present) maps a scope (switch_queue,
+# per_connection, per_receiver: the pooled pass) and then a group and size
+# ("ep64-2m") to congestion_thresholds, trim_thresholds (not for
+# switch_queue) and loss_thresholds, the last either one list or a map from
+# a loss interval in ns to a list; its "headline" names the tuning cell's
+# condition (P17). a2a_tuning.json (read when present) maps each tuned arm
+# to its setting (gamma, sender_pool_weight, loss_interval_ns) and its
+# "admitted" lists the cells the gate admitted ("ep64-2m-loss1e2_up"). The
+# calibration stages themselves run at the simulator defaults.
+#
+# A run key is <stage>-<group>-<size>-<condition>-<arm>[-<setting>]-s<seed>.
+
+MIB = 1024 * 1024
+A2A_GROUPS: dict[str, Any] = {"ep64": "all", "ep16": {"leaves": [0, 1]}}
+A2A_GROUP_SIZES = {"ep64": 64, "ep16": 16}
+A2A_SIZES = {"2m": 2 * MIB, "256k": 256 * 1024}
+A2A_CELLS = tuple(itertools.product(A2A_GROUPS, A2A_SIZES))
+# The probe (a2a_probe) sets A2A_COMPUTE_NS and A2A_ITERATIONS. Until then:
+# compute_ns = ceil_us(V / (0.6 * 50 GB/s) - t_h) per group and size, V the
+# bytes a host sends per iteration (message_bytes times the peers), with t_h
+# taken as the line-rate burst V / 50 GB/s in place of the measured healthy
+# iteration time, so a period of V / 30 GB/s (the spec's fluid table).
+A2A_COMPUTE_NS = {
+    ("ep64", "2m"): 1_762_000,  # placeholder: 4.404 ms period - 2.642 ms burst
+    ("ep64", "256k"): 221_000,  # placeholder: 550.5 us - 330.3 us
+    ("ep16", "2m"): 420_000,  # placeholder: 1048.6 us - 629.1 us
+    ("ep16", "256k"): 53_000,  # placeholder: 131.1 us - 78.6 us
+}
+A2A_ITERATIONS = 40  # placeholder: the probe sets it
+A2A_SPINE = DEGRADED_SPINE
+A2A_REPORT_INTERVAL_NS = 2 * BASE_RTT_NS
+# Loss-interval candidates: 2, 10 and 40 base RTTs.
+A2A_LOSS_INTERVALS_NS = tuple(n * BASE_RTT_NS for n in (2, 10, 40))
+# Placeholder until calibration: the fraction one loss reads at about 38
+# sends per spine per two-base-RTT interval (the spec's loss-grade
+# arithmetic, 0.026), then two and four times it.
+A2A_LOSS_THRESHOLDS_PLACEHOLDER = [0.026, 0.052, 0.104]
+# Conditions: (a), (b), (c1), (c2), (d), (e), (f).
+A2A_FAULTS = (
+    "loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down",
+    "blackhole_up", "halfrate_up", "structural",
+)
+# P17: (b) unless calibration shows (a) can be graded within a run.
+A2A_HEADLINE = "loss1e2_up"
+A2A_HEADLINE_CELL = ("ep64", "2m")
+A2A_SEEDS = {"calibration": (101, 102, 103), "tuning": (201,), "comparison": (301, 302, 303)}
+A2A_ORACLE = "graded_switch_queue"
+A2A_ORACLE_SETTING = {"gamma": 0.5}  # its Phase 8 setting, not retuned
+A2A_MIX_WEIGHT = 0.75
+A2A_GAMMAS = (0.25, 0.5, 1.0)
+A2A_POOL_WEIGHTS = (0.25, 0.5, 0.75)
+A2A_TUNED_ARMS = (
+    "graded_per_connection", "graded_per_receiver",
+    "graded_per_receiver_mix", "graded_per_receiver_shared",
+)
+A2A_FIXED_ARMS = ("reps", "mrc")
+A2A_SCOPES = {
+    "graded_per_connection": "per_connection",
+    "graded_per_receiver": "per_receiver",
+    "graded_per_receiver_mix": "per_receiver",
+    "graded_per_receiver_shared": "per_receiver",
+    "graded_switch_queue": "switch_queue",
+}
+A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_comparison")
+
+
+def a2a_cell_name(group: str, size: str) -> str:
+    return f"{group}-{size}"
+
+
+def a2a_fault(condition: str) -> list[dict[str, Any]]:
+    """The link_failures of a condition: loss and half rate in one direction
+    of one link (up: leaf 0 to spine 3; down: spine 3 to leaf 1), the
+    blackhole silent on leaf 0's uplink, and the structural asymmetry the
+    spine-wide rate form from t = 0 with no duration."""
+    if condition == "healthy":
+        return []
+    onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
+    if condition == "structural":
+        return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
+    kind, direction = condition.split("_")
+    link = {"leaf": 0 if direction == "up" else 1, "direction": direction}
+    if kind in ("loss1e3", "loss1e2"):
+        model = {"model": "gray", "error_rate": 1e-3 if kind == "loss1e3" else 1e-2}
+    elif kind == "blackhole" and direction == "up":
+        model = {"model": "silent"}
+    elif kind == "halfrate" and direction == "up":
+        model = {"model": "gray", "rate": "200Gbps"}
+    else:
+        raise ValueError(f"unknown condition {condition}")
+    return [{**model, **onset, **link}]
+
+
+def _a2a_loss_thresholds(entry: dict[str, Any], interval_ns: int) -> list[float]:
+    value = entry.get("loss_thresholds")
+    if isinstance(value, dict):
+        value = value.get(str(interval_ns))
+    return list(value) if value else list(A2A_LOSS_THRESHOLDS_PLACEHOLDER)
+
+
+def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] | None,
+                  setting: dict[str, Any] | None) -> dict[str, Any]:
+    """An arm's load balancing: the t_ stages' graded settings (edge window
+    penalty 0, edge_freeze off, estimator_interval_samples 0, gain 0.25)
+    plus this phase's calibrated thresholds and the loss grade."""
+    import transient
+
+    if arm in ("uniform",) + A2A_FIXED_ARMS:
+        return balancing(arm, 0, None)
+    values = transient.balancing(arm, 0, None, setting)
+    entry = (calibration or {}).get(A2A_SCOPES[arm], {}).get(a2a_cell_name(group, size), {})
+    for key in ("congestion_thresholds",) + (() if arm == A2A_ORACLE else ("trim_thresholds",)):
+        if key in entry:
+            values[key] = entry[key]
+    pooled = values.get("sender_pool_weight", 0) > 0
+    interval = values.get("loss_interval_ns", A2A_REPORT_INTERVAL_NS) if pooled else A2A_REPORT_INTERVAL_NS
+    values["loss_thresholds"] = _a2a_loss_thresholds(entry, interval)
+    return values
+
+
+def a2a_tuning_settings(arm: str) -> list[dict[str, Any]]:
+    if arm == "graded_per_receiver_mix":
+        return [
+            {"gamma": g, "sender_pool_weight": w, "loss_interval_ns": i}
+            for g, w, i in itertools.product(A2A_GAMMAS, A2A_POOL_WEIGHTS, A2A_LOSS_INTERVALS_NS)
+        ]
+    if arm == "graded_per_receiver_shared":
+        return [{"gamma": g, "loss_interval_ns": i} for g, i in itertools.product(A2A_GAMMAS, A2A_LOSS_INTERVALS_NS)]
+    return [{"gamma": g} for g in A2A_GAMMAS]
+
+
+def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
+                   tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Every run of a Phase 9 stage."""
+    out: list[dict[str, Any]] = []
+
+    def add(arm, group, size, condition, seed, setting=None, label_setting=False):
+        label = arm if not label_setting else f"{arm}-{setting_name(setting)}"
+        out.append(
+            {
+                "key": f"{stage}-{group}-{size}-{condition}-{label}-s{seed}",
+                "stage": stage,
+                "arm": arm,
+                "setting": setting,
+                "k": A2A_GROUP_SIZES[group] - 1,
+                "group": group,
+                "size": size,
+                "message_bytes": A2A_SIZES[size],
+                "condition": condition,
+                "compute_ns": A2A_COMPUTE_NS[(group, size)],
+                "iterations": A2A_ITERATIONS,
+                "seed": seed,
+            }
+        )
+
+    def calibrated(scope, group, size):
+        return a2a_cell_name(group, size) in (calibration or {}).get(scope, {})
+
+    if stage == "a2a_oracle_calibration":
+        for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["calibration"]):
+            add(A2A_ORACLE, group, size, "healthy", seed)
+    elif stage == "a2a_calibration":
+        pooled = {"sender_pool_weight": A2A_MIX_WEIGHT, "loss_interval_ns": A2A_REPORT_INTERVAL_NS}
+        for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["calibration"]):
+            add("graded_per_connection", group, size, "healthy", seed)
+            add("graded_per_receiver_mix", group, size, "healthy", seed, pooled)
+    elif stage == "a2a_gate":
+        for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["comparison"]):
+            arms = [("uniform", None)]
+            if calibrated("switch_queue", group, size):
+                arms.append((A2A_ORACLE, A2A_ORACLE_SETTING))
+            for arm, setting in arms:
+                for condition in ("healthy",) + A2A_FAULTS:
+                    add(arm, group, size, condition, seed, setting)
+    elif stage == "a2a_tuning":
+        group, size = A2A_HEADLINE_CELL
+        headline = (calibration or {}).get("headline", A2A_HEADLINE)
+        if headline not in A2A_FAULTS:
+            raise ValueError(f"unknown headline condition {headline}")
+        for seed, arm in itertools.product(A2A_SEEDS["tuning"], A2A_TUNED_ARMS):
+            for setting in a2a_tuning_settings(arm):
+                for condition in (headline, "healthy"):
+                    add(arm, group, size, condition, seed, setting, True)
+    elif stage == "a2a_comparison":
+        admitted = (tuning or {}).get("admitted")
+        cells = [
+            (group, size, condition)
+            for (group, size), condition in itertools.product(A2A_CELLS, A2A_FAULTS)
+            if admitted is None or f"{a2a_cell_name(group, size)}-{condition}" in admitted
+        ]
+        pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
+        arms = [(arm, (tuning or {}).get(arm)) for arm in A2A_TUNED_ARMS if (tuning or {}).get(arm)]
+        arms += [(arm, None) for arm in A2A_FIXED_ARMS]
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], arms):
+            for group, size, condition in cells:
+                add(arm, group, size, condition, seed, setting)
+            for group, size in pairs:
+                add(arm, group, size, "healthy", seed, setting)
+    else:
+        raise ValueError(f"unknown stage {stage}")
+    return out
+
+
+def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -> dict[str, Any]:
+    """The t_ stages' fabric and transport under the all-to-all workload;
+    the calibration stages run without this phase's calibration."""
+    if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration"):
+        calibration = None
+    group, size = run["group"], run["size"]
+    document = profile(
+        run["key"], 64, "healthy",
+        a2a_balancing(run["arm"], group, size, calibration, run["setting"]),
+    )
+    document["steps"] = run["iterations"]
+    document["workload"] = {
+        "kind": "all_to_all",
+        "group": A2A_GROUPS[group],
+        "message_bytes": run["message_bytes"],
+        "iterations": run["iterations"],
+        "compute_ns": run["compute_ns"],
+    }
+    document["network"]["link_failures"] = a2a_fault(run["condition"])
     return document
 
 
@@ -405,6 +667,8 @@ def main() -> int:
     parser.add_argument("--tuning", type=Path)
     parser.add_argument("--transient-calibration", type=Path)
     parser.add_argument("--transient-tuning", type=Path)
+    parser.add_argument("--a2a-calibration", type=Path)
+    parser.add_argument("--a2a-tuning", type=Path)
     arguments = parser.parse_args()
 
     def read(path: Path | None) -> dict[str, Any] | None:
@@ -418,6 +682,13 @@ def main() -> int:
         return write_listing(
             arguments.out,
             [(run, a2a_profile(run, transient_calibration)) for run in a2a_runs(read(arguments.transient_tuning))],
+        )
+    if arguments.stage in A2A_STAGES:
+        a2a_calibration = read(arguments.a2a_calibration)
+        return write_listing(
+            arguments.out,
+            [(run, a2a_stage_profile(run, a2a_calibration))
+             for run in a2a_stage_runs(arguments.stage, a2a_calibration, read(arguments.a2a_tuning))],
         )
     if arguments.stage.startswith("t_"):
         return write_transient(arguments.out, arguments.stage, tuning,

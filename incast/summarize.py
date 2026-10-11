@@ -45,6 +45,15 @@ the group's ranks minus the earliest start_time_ns, and summary.json's
 "all_to_all" holds every iteration's value and their mean, p50, p99 and max.
 The run is complete when every iteration has a row from every rank of the
 group. The windows are taken for leaf 0, where the probe's faulted link is.
+
+When RUN_DIR/ns3/spine_losses.csv exists (the sender loss trace, written
+under spray_policy with loss_thresholds and a sender pool weight above 0),
+summary.json's "spine_losses" holds, over every host, each spine's total
+sends and losses, and the detection evidence for the faulted spine (the
+spine of the profile's link failure, spine 3 in a run with none): the end
+of the first loss interval at which that spine's cumulative lost count,
+summed over the hosts, reaches 1, 5 and 20, absolute and after the
+failure's start (None when it never does).
 """
 
 from __future__ import annotations
@@ -226,6 +235,44 @@ def all_to_all_timing(path: Path, iterations: int, group: list[int]) -> dict:
         "p50_ns": nearest_rank(times, 0.50) if times else None,
         "p99_ns": nearest_rank(times, 0.99) if times else None,
         "max_ns": max(times) if times else None,
+    }
+
+
+DETECTION_COUNTS = (1, 5, 20)
+DEFAULT_FAULTED_SPINE = 3
+
+
+def spine_losses(path: Path, spine: int, onset_ns: int | None) -> dict:
+    """Per-spine sent and lost totals of the sender loss trace, and the first
+    interval end at which the spine's cumulative lost count reaches each of
+    DETECTION_COUNTS."""
+    totals: dict[int, list[int]] = {}
+    lost_at: dict[int, int] = {}
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            s = int(row["spine"])
+            lost = int(row["lost"])
+            cell = totals.setdefault(s, [0, 0])
+            cell[0] += int(row["sent"])
+            cell[1] += lost
+            if s == spine and lost:
+                time = int(row["time_ns"])
+                lost_at[time] = lost_at.get(time, 0) + lost
+    reached: dict[str, int | None] = {str(n): None for n in DETECTION_COUNTS}
+    cumulative = 0
+    for time in sorted(lost_at):
+        cumulative += lost_at[time]
+        for n in DETECTION_COUNTS:
+            if reached[str(n)] is None and cumulative >= n:
+                reached[str(n)] = time
+    return {
+        "spines": {str(s): {"sent": c[0], "lost": c[1]} for s, c in sorted(totals.items())},
+        "faulted_spine": spine,
+        "onset_ns": onset_ns,
+        "cumulative_lost_reached_ns": reached,
+        "cumulative_lost_reached_after_onset_ns": {
+            n: None if t is None or onset_ns is None else t - onset_ns for n, t in reached.items()
+        },
     }
 
 
@@ -467,6 +514,15 @@ def main() -> int:
                 "count": int(row["event_count"]),
                 "bytes": int(row["total_bytes"]),
             }
+
+    losses = ns3 / "spine_losses.csv"
+    if losses.is_file():
+        failures = network.get("link_failures", [])
+        summary["spine_losses"] = spine_losses(
+            losses,
+            failures[0]["spine"] if failures else DEFAULT_FAULTED_SPINE,
+            failures[0]["start_ns"] if failures else None,
+        )
 
     leaves = hosts // hosts_per_leaf
     # Node ids follow topology.txt: hosts, then leaves, then spines.
