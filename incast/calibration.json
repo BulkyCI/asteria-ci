@@ -35,6 +35,24 @@
     "calibration-k32-healthy-graded_per_connection-s102",
     "calibration-k32-healthy-graded_per_connection-s103"
    ]
+  },
+  "64": {
+   "reports": 2838595,
+   "p99_deviation": {
+    "mark_fraction": 0.595703,
+    "trim_fraction": 0.0474285
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k64-healthy-graded_per_connection-s101",
+    "calibration-k64-healthy-graded_per_connection-s102",
+    "calibration-k64-healthy-graded_per_connection-s103"
+   ]
   }
  },
  "per_receiver": {
@@ -73,6 +91,24 @@
     "calibration-k32-healthy-graded_per_receiver-s102",
     "calibration-k32-healthy-graded_per_receiver-s103"
    ]
+  },
+  "64": {
+   "reports": 44853,
+   "p99_deviation": {
+    "mark_fraction": 0.20256600000000002,
+    "trim_fraction": 0.09763150000000001
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.202566,
+    0.405132,
+    0.810264
+   ],
+   "runs": [
+    "calibration-k64-healthy-graded_per_receiver-s101",
+    "calibration-k64-healthy-graded_per_receiver-s102",
+    "calibration-k64-healthy-graded_per_receiver-s103"
+   ]
   }
  },
  "switch_queue": {
@@ -110,6 +146,24 @@
     "calibration-k32-healthy-graded_switch_queue-s101",
     "calibration-k32-healthy-graded_switch_queue-s102",
     "calibration-k32-healthy-graded_switch_queue-s103"
+   ]
+  },
+  "64": {
+   "reports": 313985,
+   "p99_deviation": {
+    "mark_fraction": 0.27187800000000006,
+    "loss_fraction": 0.0
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k64-healthy-graded_switch_queue-s101",
+    "calibration-k64-healthy-graded_switch_queue-s102",
+    "calibration-k64-healthy-graded_switch_queue-s103"
    ]
   }
  }
