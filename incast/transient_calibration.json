@@ -12,6 +12,12 @@
     0.5,
     1.0
    ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.040814,
+    0.081628,
+    0.163256
+   ],
    "runs": [
     "t_calibration-k8-healthy-none-t400-graded_per_connection-s101",
     "t_calibration-k8-healthy-none-t400-graded_per_connection-s102",
@@ -30,6 +36,12 @@
     0.5,
     1.0
    ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.046875,
+    0.09375,
+    0.1875
+   ],
    "runs": [
     "t_calibration-k32-healthy-none-t400-graded_per_connection-s101",
     "t_calibration-k32-healthy-none-t400-graded_per_connection-s102",
@@ -47,6 +59,12 @@
     0.25,
     0.5,
     1.0
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.126781,
+    0.253562,
+    0.507124
    ],
    "runs": [
     "t_calibration-k64-healthy-none-t400-graded_per_connection-s101",
@@ -68,6 +86,12 @@
     0.5,
     1.0
    ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.033308,
+    0.066617,
+    0.133234
+   ],
    "runs": [
     "t_calibration-k8-healthy-none-t400-graded_per_receiver-s101",
     "t_calibration-k8-healthy-none-t400-graded_per_receiver-s102",
@@ -86,6 +110,12 @@
     0.5,
     1.0
    ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.028229,
+    0.056458,
+    0.112916
+   ],
    "runs": [
     "t_calibration-k32-healthy-none-t400-graded_per_receiver-s101",
     "t_calibration-k32-healthy-none-t400-graded_per_receiver-s102",
@@ -103,6 +133,12 @@
     0.098589,
     0.197178,
     0.394356
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.028661,
+    0.057322,
+    0.114644
    ],
    "runs": [
     "t_calibration-k64-healthy-none-t400-graded_per_receiver-s101",

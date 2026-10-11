@@ -156,12 +156,15 @@ def failures(kind: str, geometry: str, duration_us: int) -> list[dict[str, Any]]
 
 
 def _calibrated(arm: str, fan_in: int, calibration: dict | None) -> dict[str, Any]:
-    """Thresholds from this study's calibration, once it exists."""
+    """Thresholds from this study's calibration, once it exists: the
+    congestion thresholds, and the trim thresholds for the estimate scopes."""
     scope = SCOPE_OF[GRADED_ARMS[arm][0]]
     values: dict[str, Any] = {}
-    thresholds = (calibration or {}).get(scope, {}).get(str(fan_in), {}).get("congestion_thresholds")
-    if thresholds is not None:
-        values["congestion_thresholds"] = thresholds
+    entry = (calibration or {}).get(scope, {}).get(str(fan_in), {})
+    if "congestion_thresholds" in entry:
+        values["congestion_thresholds"] = entry["congestion_thresholds"]
+    if scope != "switch_queue" and "trim_thresholds" in entry:
+        values["trim_thresholds"] = entry["trim_thresholds"]
     return values
 
 

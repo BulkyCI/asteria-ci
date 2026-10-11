@@ -113,6 +113,24 @@ class Runs(unittest.TestCase):
                     self.assertEqual(values["estimator_interval_samples"], 0)
                     self.assertEqual(values["estimator_gain"], 0.25)
 
+    def test_graded_profiles_carry_the_calibrated_thresholds(self):
+        calibration = {
+            scope: {"32": {"congestion_thresholds": [0.25, 0.5, 1.0], "trim_thresholds": [0.05, 0.1, 0.2]}}
+            for scope in ("per_connection", "per_receiver")
+        }
+        calibration["switch_queue"] = {"32": {"congestion_thresholds": [0.2, 0.4, 0.8]}}
+        for run in transient.runs("t_comparison", TUNING, REDIRECT):
+            if run["k"] != 32 or not run["arm"].startswith("graded"):
+                continue
+            values = transient.profile(run, calibration)["network"]["load_balancing"]
+            with self.subTest(key=run["key"]):
+                if run["arm"] == "graded_switch_queue":
+                    self.assertEqual(values["congestion_thresholds"], [0.2, 0.4, 0.8])
+                    self.assertNotIn("trim_thresholds", values)
+                else:
+                    self.assertEqual(values["congestion_thresholds"], [0.25, 0.5, 1.0])
+                    self.assertEqual(values["trim_thresholds"], [0.05, 0.1, 0.2])
+
     def test_redirect_arm(self):
         listed = [r for r in transient.runs("t_comparison", TUNING, REDIRECT) if r["arm"] == "redirect_per_connection"]
         faulted = {(r["k"], r["kind"], r["geometry"], r["t_us"]) for r in listed if r["kind"] != "healthy"}

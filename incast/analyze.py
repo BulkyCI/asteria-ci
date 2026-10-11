@@ -32,9 +32,13 @@ spine.
 
 Thresholds: for every report of a healthy run, each spine's deviation above
 the median spine of that report, for the marked and the trimmed fraction
-(and, for switch_queue, the loss fraction); the first threshold is the 99th
-percentile of those deviations over all reports and metrics, the second and
-third two and four times it, each capped below one. A report is one
+(and, for switch_queue, the marked and the loss fraction). The first of the
+congestion thresholds is the 99th percentile of those deviations over all
+reports and every metric but the trimmed fraction, the second and third two
+and four times it; the trimmed fraction's own 99th percentile gives the
+trim thresholds by the same rule. Each first threshold is capped at 0.25,
+so the third stays at most one, and the cap is flagged (capped,
+trim_capped). A report is one
 (time, rank, sequence) group, and under per_connection one (time, rank,
 sequence, sender, sender_port) group.
 """
@@ -74,6 +78,15 @@ def percentile(values: list[float], q: float) -> float:
     return ordered[index]
 
 
+def scaled_thresholds(first: float) -> tuple[bool, list[float]]:
+    """The rule's (t, 2t, 4t) from a first threshold t. The simulator wants
+    three increasing fractions in (0, 1], so the 4t can reach 1 and no
+    further: a t above a quarter is capped there, and flagged."""
+    capped = first > 0.25
+    first = min(max(first, 1e-4), 0.25)
+    return capped, [round(first, 6), round(2 * first, 6), round(4 * first, 6)]
+
+
 def thresholds(runs: list[Path], metrics: tuple[str, ...]) -> dict:
     deviations: dict[str, list[float]] = {m: [] for m in metrics}
     count = 0
@@ -85,18 +98,17 @@ def thresholds(runs: list[Path], metrics: tuple[str, ...]) -> dict:
                 median = statistics.median(values)
                 deviations[metric].extend(max(0.0, v - median) for v in values)
     p99 = {m: percentile(v, 0.99) for m, v in deviations.items()}
-    first = max(p99.values())
-    # The simulator wants three increasing fractions in (0, 1], so the rule's
-    # 4x can reach 1 and no further: a deviation above a quarter caps the
-    # first threshold there, and the result says it was capped.
-    capped = first > 0.25
-    first = min(max(first, 1e-4), 0.25)
-    return {
+    # The trimmed fraction has thresholds of its own; the others share one.
+    capped, congestion = scaled_thresholds(max(v for m, v in p99.items() if m != "trim_fraction"))
+    result = {
         "reports": count,
         "p99_deviation": p99,
         "capped": capped,
-        "congestion_thresholds": [round(first, 6), round(2 * first, 6), round(4 * first, 6)],
+        "congestion_thresholds": congestion,
     }
+    if "trim_fraction" in p99:
+        result["trim_capped"], result["trim_thresholds"] = scaled_thresholds(p99["trim_fraction"])
+    return result
 
 
 def all_top_fraction(run: Path) -> dict:
