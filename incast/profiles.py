@@ -18,7 +18,9 @@ writes DIR/<run key>.json for every run of the stage and DIR/runs.json, the
 list of {key, profile, seed, stage, k, condition, arm}. Stages named t_*
 are the transient-fault stages of transient.py, which read their own
 calibration and tuning files (--transient-calibration, --transient-tuning)
-and the redirect_per_connection setting of --tuning. Standard library only.
+and the redirect_per_connection setting of --tuning. The a2a_probe stage
+runs the all-to-all workload on the same fabric (see a2a_runs). Standard
+library only.
 """
 
 from __future__ import annotations
@@ -295,6 +297,81 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
     return out
 
 
+# The all-to-all probe: every host sends A2A_MESSAGE_BYTES to every other
+# host, A2A_ITERATIONS times in a chain, with A2A_COMPUTES_NS of compute
+# between iterations (0, and a first guess at the healthy iteration time so
+# the fabric is not saturated). From 100 base RTTs to the end, the link
+# between leaf 0 and spine 3 is healthy, silent, at half rate or at 1
+# percent loss. K is the fan-in at each receiver, the 63 other hosts.
+A2A_STAGE = "a2a_probe"
+A2A_MESSAGE_BYTES = 512 * 1024
+A2A_ITERATIONS = 40
+A2A_COMPUTES_NS = (0, 200_000)
+A2A_CONDITIONS = ("healthy", "blackhole", "half_rate", "loss")
+A2A_ARMS = ("uniform", "graded_switch_queue")
+A2A_FAN_IN = 63
+A2A_SEED = 301
+A2A_LOSS_RATE = 0.01
+A2A_LEAF = 0
+
+
+def a2a_failures(condition: str) -> list[dict[str, Any]]:
+    """The link from spine 3 to leaf 0 (the t_ stages' downlink0 form),
+    degraded from 100 base RTTs to the end of the run."""
+    if condition == "healthy":
+        return []
+    model = {
+        "blackhole": {"model": "silent"},
+        "half_rate": {"model": "gray", "rate": "200Gbps"},
+        "loss": {"model": "gray", "error_rate": A2A_LOSS_RATE},
+    }[condition]
+    return [{**model, "start_ns": DEGRADE_AT_NS, "spine": DEGRADED_SPINE, "leaf": A2A_LEAF}]
+
+
+def a2a_runs(transient_tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The probe's runs; graded_switch_queue takes the transient study's
+    tuned gamma once that selection exists."""
+    import transient
+
+    out = []
+    for compute_ns, condition, arm in itertools.product(A2A_COMPUTES_NS, A2A_CONDITIONS, A2A_ARMS):
+        setting = None if arm == "uniform" else transient.tuned_setting(arm, transient_tuning)
+        out.append(
+            {
+                "key": f"{A2A_STAGE}-c{compute_ns // 1000}-{condition}-{arm}-s{A2A_SEED}",
+                "stage": A2A_STAGE,
+                "arm": arm,
+                "setting": setting,
+                "k": A2A_FAN_IN,
+                "condition": condition,
+                "compute_ns": compute_ns,
+                "seed": A2A_SEED,
+            }
+        )
+    return out
+
+
+def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | None) -> dict[str, Any]:
+    """The t_ stages' fabric, transport and arm settings (the switch-queue
+    thresholds of their K = 64 calibration) under the all-to-all workload."""
+    import transient
+
+    document = profile(
+        run["key"], 64, "healthy",
+        transient.balancing(run["arm"], 64, transient_calibration, run["setting"]),
+    )
+    document["steps"] = A2A_ITERATIONS
+    document["workload"] = {
+        "kind": "all_to_all",
+        "group": "all",
+        "message_bytes": A2A_MESSAGE_BYTES,
+        "iterations": A2A_ITERATIONS,
+        "compute_ns": run["compute_ns"],
+    }
+    document["network"]["link_failures"] = a2a_failures(run["condition"])
+    return document
+
+
 def write_listing(out: Path, documents: list[tuple[dict[str, Any], dict[str, Any]]]) -> int:
     """Write every (run, profile) pair and runs.json; return the count."""
     listed = []
@@ -336,6 +413,12 @@ def main() -> int:
     calibration = read(arguments.calibration)
     tuning = read(arguments.tuning)
     arguments.out.mkdir(parents=True, exist_ok=True)
+    if arguments.stage == A2A_STAGE:
+        transient_calibration = read(arguments.transient_calibration)
+        return write_listing(
+            arguments.out,
+            [(run, a2a_profile(run, transient_calibration)) for run in a2a_runs(read(arguments.transient_tuning))],
+        )
     if arguments.stage.startswith("t_"):
         return write_transient(arguments.out, arguments.stage, tuning,
                                read(arguments.transient_calibration), read(arguments.transient_tuning))

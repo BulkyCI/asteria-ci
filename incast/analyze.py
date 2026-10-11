@@ -5,6 +5,7 @@
     analyze.py gain RUN_DIR...                       fraction of all-top reports per run
     analyze.py binding RUN_DIR...                    degraded spine's rate toward leaf 0
     analyze.py compare --runs RUNS.json --out-root DIR [--stage S]  per-cell arm table
+                                                     (all-to-all runs add per-iteration statistics)
     analyze.py calibrate --runs RUNS.json --out-root DIR [--into FILE]   thresholds per scope and K
     analyze.py gains --runs RUNS.json --out-root DIR --into FILE        gain per scope and K
     analyze.py select --runs RUNS.json --out-root DIR [--stage t_tuning] tuning selection
@@ -176,6 +177,18 @@ def shed_time(run: Path, target_share: float | None, degrade_at_ns: int = DEGRAD
 TARGET_SHARE = {"half_rate": 200 / 3000, "silent": 0.0}
 
 
+def iteration_stats(summary: dict) -> dict:
+    """An all-to-all run's per-iteration completion statistics; nothing for
+    any other workload."""
+    timing = summary.get("all_to_all")
+    if timing is None:
+        return {}
+    return {
+        "iterations_completed": timing["iterations_completed"],
+        **{f"iteration_{name}_ns": timing[f"{name}_ns"] for name in ("mean", "p50", "p99", "max")},
+    }
+
+
 def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
     listed = json.loads(runs_file.read_text())
     rows = []
@@ -205,6 +218,7 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
                     10 * BASE_RTT_NS if run["stage"] == "short" else DEGRADE_AT_NS,
                 ),
                 **({} if not transient else transient_means([measured] if measured else [])),
+                **iteration_stats(summary),
                 "wall_seconds": summary.get("wall_seconds"),
             }
         )

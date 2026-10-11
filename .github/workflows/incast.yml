@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe)
         required: true
         type: string
       record_filter:

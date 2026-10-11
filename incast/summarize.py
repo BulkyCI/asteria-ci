@@ -37,6 +37,14 @@ The fluid-optimal share of a spine at rate r among spines at the link rate
 R is r / (7R + r): 1/15 at half rate, 0 for a silent spine. Under loss no
 fluid-optimal share exists; only the shares are reported. Windows with no
 offered packet are skipped.
+
+For workload kind all_to_all, completion comes from
+RUN_DIR/telemetry/collective_events.csv instead of fct.txt: per iteration
+(training_step), the collective's completion is the latest end_time_ns over
+the group's ranks minus the earliest start_time_ns, and summary.json's
+"all_to_all" holds every iteration's value and their mean, p50, p99 and max.
+The run is complete when every iteration has a row from every rank of the
+group. The windows are taken for leaf 0, where the probe's faulted link is.
 """
 
 from __future__ import annotations
@@ -45,6 +53,7 @@ import argparse
 import csv
 import io
 import json
+import math
 from pathlib import Path
 
 BASE_RTT_NS = 12_324
@@ -172,6 +181,52 @@ def receiving_hosts(workload: dict, hosts_per_leaf: int) -> tuple[list[int], set
         leaves = [workload["receiver_leaf"]]
         count = hosts_per_leaf
     return leaves, {leaf * hosts_per_leaf + p for p in range(count) for leaf in leaves}
+
+
+def all_to_all_group(workload: dict, hosts: int, hosts_per_leaf: int) -> list[int]:
+    if workload["group"] == "all":
+        return list(range(hosts))
+    return [h for h in range(hosts) if h // hosts_per_leaf in workload["group"]["leaves"]]
+
+
+def nearest_rank(values: list[int], q: float) -> int:
+    """The q-th quantile of values by the nearest rank, ceil(q n)."""
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
+
+
+def all_to_all_timing(path: Path, iterations: int, group: list[int]) -> dict:
+    """Per-iteration completion of the all-to-all from collective_events.csv:
+    max end over the ranks minus min start over the ranks."""
+    spans: dict[int, list[int]] = {}
+    ranks: dict[int, set[int]] = {}
+    if path.is_file():
+        with path.open() as handle:
+            for row in csv.DictReader(handle):
+                if row["collective_type"] != "all_to_all":
+                    continue
+                step = int(row["training_step"])
+                start, end = int(row["start_time_ns"]), int(row["end_time_ns"])
+                span = spans.setdefault(step, [start, end])
+                span[0] = min(span[0], start)
+                span[1] = max(span[1], end)
+                ranks.setdefault(step, set()).add(int(row["rank"]))
+    members = set(group)
+    done = [i for i in range(1, iterations + 1) if ranks.get(i) == members]
+    times = [spans[i][1] - spans[i][0] for i in done]
+    return {
+        "group_size": len(group),
+        "iterations_expected": iterations,
+        "iterations_completed": len(done),
+        "complete": len(done) == iterations,
+        "first_start_ns": min((s[0] for s in spans.values()), default=None),
+        "last_end_ns": max((s[1] for s in spans.values()), default=None),
+        "iteration_completion_ns": {str(i): t for i, t in zip(done, times)},
+        "mean_ns": sum(times) / len(times) if times else None,
+        "p50_ns": nearest_rank(times, 0.50) if times else None,
+        "p99_ns": nearest_rank(times, 0.99) if times else None,
+        "max_ns": max(times) if times else None,
+    }
 
 
 # Per-transient measures, on offered packets per (window start, leaf, spine).
@@ -338,24 +393,10 @@ def transients(profile: dict, offered_counts: dict[tuple[int, int, int], list[in
     return result
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("run_dir", type=Path)
-    parser.add_argument("--profile", type=Path, required=True)
-    parser.add_argument("--keep-events", action="store_true")
-    arguments = parser.parse_args()
-    profile = json.loads(arguments.profile.read_text())
-    network = profile["network"]
-    hosts_per_leaf = network["hosts_per_leaf"]
-    spines = network["spine_count"]
-    hosts = profile["parallelism"]["dp"]
-    fan_in = profile["workload"]["fan_in"]
-    receiving_leaves, receivers = receiving_hosts(profile["workload"], hosts_per_leaf)
-    # A leaf's devices follow topology.txt: its hosts, then its spines.
-    first_spine_port = hosts_per_leaf + 1
-    ns3 = arguments.run_dir / "ns3"
-
-    flows = read_flows(ns3 / "fct.txt")
+def incast_summary(flows: list[dict[str, int]], workload: dict, hosts_per_leaf: int) -> dict:
+    """Completion of an incast run from its flows."""
+    fan_in = workload["fan_in"]
+    _, receivers = receiving_hosts(workload, hosts_per_leaf)
     expected = len(receivers) * fan_in
     first_start = min((f["start_ns"] for f in flows), default=0)
     per_receiver: dict[int, int] = {}
@@ -365,7 +406,7 @@ def main() -> int:
         r for r in per_receiver
         if sum(1 for f in flows if f["destination"] == r) == fan_in
     }
-    summary = {
+    return {
         "flows_expected": expected,
         "flows_completed": len(flows),
         "complete": len(flows) == expected,
@@ -378,6 +419,48 @@ def main() -> int:
         ),
         "transport": {},
     }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--profile", type=Path, required=True)
+    parser.add_argument("--keep-events", action="store_true")
+    arguments = parser.parse_args()
+    profile = json.loads(arguments.profile.read_text())
+    network = profile["network"]
+    hosts_per_leaf = network["hosts_per_leaf"]
+    spines = network["spine_count"]
+    hosts = profile["parallelism"]["dp"]
+    workload = profile["workload"]
+    # A leaf's devices follow topology.txt: its hosts, then its spines.
+    first_spine_port = hosts_per_leaf + 1
+    ns3 = arguments.run_dir / "ns3"
+
+    flows = read_flows(ns3 / "fct.txt")
+    if workload["kind"] == "all_to_all":
+        receiving_leaves = [0]
+        receivers = set(range(hosts_per_leaf))
+        timing = all_to_all_timing(
+            arguments.run_dir / "telemetry" / "collective_events.csv",
+            workload["iterations"],
+            all_to_all_group(workload, hosts, hosts_per_leaf),
+        )
+        summary = {
+            "flows_expected": None,
+            "flows_completed": len(flows),
+            "complete": timing["complete"],
+            "collective_completion_ns": (
+                timing["last_end_ns"] - timing["first_start_ns"] if timing["complete"] else None
+            ),
+            "incast_completion_ns": {},
+            "first_incast_completion_ns": None,
+            "all_to_all": timing,
+            "transport": {},
+        }
+    else:
+        summary = incast_summary(flows, workload, hosts_per_leaf)
+        receiving_leaves, receivers = receiving_hosts(workload, hosts_per_leaf)
     with (ns3 / "transport_summary.csv").open() as handle:
         for row in csv.DictReader(handle):
             summary["transport"][f"{row['event']}:{row['plane']}"] = {

@@ -24,6 +24,9 @@ def main() -> int:
     cells = defaultdict(list)
     for row in rows:
         label = row["arm"] if not row.get("setting") else f"{row['arm']} {json.dumps(row['setting'], sort_keys=True)}"
+        if "compute_ns" in row:
+            # The all-to-all probe's compute between iterations.
+            label = f"{label}, compute {row['compute_ns'] // 1000} us"
         cells[(row["stage"], row["k"], row["condition"], row.get("geometry", ""), row.get("t_us", 0), label)].append(row)
     done = sum(1 for r in rows if r.get("status") == "complete")
     print(f"{done} of {len(rows)} runs complete.\n")
