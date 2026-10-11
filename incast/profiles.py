@@ -226,12 +226,14 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
                 for setting in redirect_settings(scope):
                     add(arm, TUNING_FAN_IN, condition, seed, setting)
     elif stage == "comparison":
-        if tuning is None:
-            raise ValueError("the comparison stage needs the tuning selection")
+        # The redirect arms join once the tuning selection exists; the fixed
+        # arms can run before it.
         for fan_in, condition, seed in itertools.product(FAN_INS, CONDITIONS, SEEDS["comparison"]):
             for arm in FIXED_ARMS:
                 add(arm, fan_in, condition, seed)
             for arm in ("redirect_per_connection", "redirect_per_receiver"):
+                if tuning is None or arm not in tuning:
+                    continue
                 chosen = tuning[arm].get(condition, tuning[arm]["half_rate"])
                 add(arm, fan_in, condition, seed, chosen)
     elif stage == "kill":
