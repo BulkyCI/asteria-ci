@@ -1,0 +1,76 @@
+name: Incast study, combined table
+
+# Gathers the shard results of several runs of incast.yml into one table,
+# so stages that ran in separate dispatches are read together. A run key
+# names one profile and seed, so a key present in two runs is the same
+# experiment; the later run's copy wins.
+on:
+  workflow_dispatch:
+    inputs:
+      run_ids:
+        description: Space-separated run ids of incast.yml, oldest first
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  collect:
+    name: Combine and archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Download every run's profiles and results
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_IDS: ${{ inputs.run_ids }}
+      run: |
+        set -euo pipefail
+        mkdir -p combined/results combined/profiles
+        for run in $RUN_IDS; do
+          mkdir -p "runs/$run"
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --dir "runs/$run" \
+            --pattern "incast-results-$run-*" --pattern "incast-profiles-$run" || true
+          for shard in runs/"$run"/incast-results-*; do
+            [[ -d "$shard" ]] && cp -a "$shard"/. combined/results/
+          done
+          if [[ -d "runs/$run/incast-profiles-$run" ]]; then
+            for listing in runs/"$run"/incast-profiles-"$run"/*/runs.json; do
+              stage="$(basename "$(dirname "$listing")")"
+              mkdir -p "combined/profiles/$stage"
+              cp -a "$(dirname "$listing")"/. "combined/profiles/$stage/"
+              cp "$listing" "combined/profiles/$stage/runs-$run.json"
+            done
+          fi
+        done
+        rm -rf runs
+
+    - name: Tabulate
+      run: |
+        set -euo pipefail
+        # One entry per key: later runs replace earlier ones.
+        jq -s 'add | reduce .[] as $r ({}; .[$r.key] = $r) | [.[]]' \
+          combined/profiles/*/runs-*.json > combined/results/runs.json
+        python3 incast/analyze.py compare --runs combined/results/runs.json \
+          --out-root combined/results > combined/results/table.json
+        python3 incast/report.py combined/results/table.json > combined/results/report.md
+        cat combined/results/report.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Archive on a release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_IDS: ${{ inputs.run_ids }}
+      run: |
+        set -euo pipefail
+        tag="incast-combined-${GITHUB_RUN_ID}"
+        tar -czf "$tag.tar.gz" -C combined results profiles
+        gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          --title "Incast study, combined: runs ${RUN_IDS}" \
+          --notes-file combined/results/report.md \
+          "$tag.tar.gz" combined/results/table.json combined/results/report.md
