@@ -49,6 +49,34 @@ def read_flows(path: Path) -> list[dict[str, int]]:
     return flows
 
 
+class Concatenation(io.RawIOBase):
+    """The files' bytes in order, as one readable stream."""
+
+    def __init__(self, paths):
+        self._paths = list(paths)
+        self._handle = None
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        while True:
+            if self._handle is None:
+                if not self._paths:
+                    return 0
+                self._handle = open(self._paths.pop(0), "rb")
+            count = self._handle.readinto(buffer)
+            if count:
+                return count
+            self._handle.close()
+            self._handle = None
+
+    def close(self):
+        if self._handle is not None:
+            self._handle.close()
+        super().close()
+
+
 def windows(ns3: Path, leaf_node: int, first_spine_port: int, first_spine_node: int,
             spines: int, receivers: range):
     """Packets and bytes per (window, spine): delivered to the leaf from each
@@ -56,12 +84,13 @@ def windows(ns3: Path, leaf_node: int, first_spine_port: int, first_spine_node: 
     delivered: dict[tuple[int, int], list[int]] = {}
     offered: dict[tuple[int, int], list[int]] = {}
     spine_nodes = range(first_spine_node, first_spine_node + spines)
-    for segment in sorted(ns3.glob("transport_events.csv.zst.*")):
-        with segment.open("rb") as raw:
-            reader = io.TextIOWrapper(zstandard.ZstdDecompressor().stream_reader(raw))
-            header = reader.readline().strip().split(",")
-            if not header or header[0] != "time_ns":
-                continue
+    # The segments are one zstd stream cut at byte boundaries, so they are
+    # decompressed as their concatenation, never one by one.
+    segments = sorted(ns3.glob("transport_events.csv.zst.*"))
+    with Concatenation(segments) as raw:
+        reader = io.TextIOWrapper(zstandard.ZstdDecompressor().stream_reader(raw))
+        header = reader.readline().strip().split(",")
+        if header and header[0] == "time_ns":
             for line in reader:
                 if ",data_arrival," not in line:
                     continue
