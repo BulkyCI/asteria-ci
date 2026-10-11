@@ -77,8 +77,8 @@ def all_top_fraction(run: Path) -> dict:
     return {"reports": len(groups), "all_top": top, "fraction": top / len(groups) if groups else None}
 
 
-def window_rows(run: Path):
-    with (run / "spine_windows.csv").open() as handle:
+def window_rows(run: Path, name: str = "spine_windows.csv"):
+    with (run / name).open() as handle:
         return [
             {k: int(v) for k, v in row.items()} for row in csv.DictReader(handle)
         ]
@@ -103,25 +103,31 @@ def binding(run: Path, degraded_bps: float) -> dict:
 
 
 def shed_time(run: Path, target_share: float | None) -> float | None:
-    """From the degradation until the degraded spine's share of leaf-0
-    arrivals falls below the midpoint of 1/8 and the target, and stays below
-    for five consecutive windows."""
+    """From the degradation until the degraded spine's share of the traffic
+    offered to the spines for the receiving leaf falls below the midpoint of
+    1/8 and the target, and stays below it for five consecutive windows.
+    Offered, not delivered: a half-rate spine delivers at most its fluid
+    share whatever the senders do, so its delivered share cannot show them
+    shedding."""
     if target_share is None:
         return None
     midpoint = (1 / SPINES + target_share) / 2
     totals: dict[int, int] = defaultdict(int)
     degraded: dict[int, int] = defaultdict(int)
-    for r in window_rows(run):
+    for r in window_rows(run, "offered_windows.csv"):
         totals[r["start_ns"]] += r["packets"]
         if r["spine"] == DEGRADED_SPINE:
             degraded[r["start_ns"]] += r["packets"]
     starts = sorted(s for s in totals if s >= DEGRADE_AT_NS and totals[s] > 0)
+    run_start = None
     run_length = 0
     for start in starts:
         if degraded[start] / totals[start] < midpoint:
+            if run_length == 0:
+                run_start = start
             run_length += 1
             if run_length == 5:
-                return start - (5 - 1) * (starts[1] - starts[0] if len(starts) > 1 else 0) - DEGRADE_AT_NS
+                return run_start - DEGRADE_AT_NS
         else:
             run_length = 0
     return None

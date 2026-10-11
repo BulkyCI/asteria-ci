@@ -4,10 +4,12 @@
     summarize.py RUN_DIR --profile PROFILE.json [--keep-events]
 
 Reads RUN_DIR/ns3: fct.txt for completion, transport_summary.csv for event
-totals, and the transport event segments for every data packet arriving at
-the receiving leaf, binned per spine in windows of two base RTTs. Writes
-RUN_DIR/summary.json and RUN_DIR/spine_windows.csv, and deletes the segments
-unless --keep-events.
+totals, and the transport event segments, binned per spine in windows of two
+base RTTs: every data packet arriving at the receiving leaf from a spine
+(what the spines delivered), and every data packet for a receiving host
+arriving at a spine (what the senders offered each spine). Writes
+RUN_DIR/summary.json, RUN_DIR/spine_windows.csv and RUN_DIR/offered_windows.csv,
+and deletes the segments unless --keep-events.
 """
 
 from __future__ import annotations
@@ -47,10 +49,13 @@ def read_flows(path: Path) -> list[dict[str, int]]:
     return flows
 
 
-def leaf_arrivals(ns3: Path, leaf_node: int, first_spine_port: int, spines: int):
-    """Packets and bytes per (window, spine) arriving at the leaf from spines."""
-    counts: dict[tuple[int, int], list[int]] = {}
-    prefix_node = f",{leaf_node},"
+def windows(ns3: Path, leaf_node: int, first_spine_port: int, first_spine_node: int,
+            spines: int, receivers: range):
+    """Packets and bytes per (window, spine): delivered to the leaf from each
+    spine, and offered to each spine for the receiving hosts."""
+    delivered: dict[tuple[int, int], list[int]] = {}
+    offered: dict[tuple[int, int], list[int]] = {}
+    spine_nodes = range(first_spine_node, first_spine_node + spines)
     for segment in sorted(ns3.glob("transport_events.csv.zst.*")):
         with segment.open("rb") as raw:
             reader = io.TextIOWrapper(zstandard.ZstdDecompressor().stream_reader(raw))
@@ -58,18 +63,34 @@ def leaf_arrivals(ns3: Path, leaf_node: int, first_spine_port: int, spines: int)
             if not header or header[0] != "time_ns":
                 continue
             for line in reader:
-                if "data_arrival" not in line or prefix_node not in line:
+                if ",data_arrival," not in line:
                     continue
                 f = line.split(",")
-                if f[1] != "data_arrival" or int(f[4]) != leaf_node:
+                node = int(f[4])
+                if node == leaf_node:
+                    spine = int(f[6]) - first_spine_port
+                    if not 0 <= spine < spines:
+                        continue
+                    table = delivered
+                elif node in spine_nodes and int(f[8]) in receivers:
+                    spine = node - first_spine_node
+                    table = offered
+                else:
                     continue
-                spine = int(f[6]) - first_spine_port
-                if not 0 <= spine < spines:
-                    continue
-                cell = counts.setdefault((int(f[0]) // WINDOW_NS, spine), [0, 0])
+                cell = table.setdefault((int(f[0]) // WINDOW_NS, spine), [0, 0])
                 cell[0] += 1
                 cell[1] += int(f[11])
-    return counts
+    return delivered, offered
+
+
+def write_windows(path: Path, counts, spines: int) -> None:
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["window", "start_ns", "spine", "packets", "bytes"])
+        for window in sorted({w for w, _ in counts}):
+            for spine in range(spines):
+                packets, size = counts.get((window, spine), (0, 0))
+                writer.writerow([window, window * WINDOW_NS, spine, packets, size])
 
 
 def main() -> int:
@@ -120,17 +141,15 @@ def main() -> int:
                 "bytes": int(row["total_bytes"]),
             }
 
-    counts = leaf_arrivals(ns3, leaf_node, first_spine_port, spines)
-    windows = sorted({w for w, _ in counts})
-    with (arguments.run_dir / "spine_windows.csv").open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["window", "start_ns", "spine", "packets", "bytes"])
-        for window in windows:
-            for spine in range(spines):
-                packets, size = counts.get((window, spine), (0, 0))
-                writer.writerow([window, window * WINDOW_NS, spine, packets, size])
+    leaves = hosts // hosts_per_leaf
+    receivers = range(receiver_leaf * hosts_per_leaf, (receiver_leaf + 1) * hosts_per_leaf)
+    # Node ids follow topology.txt: hosts, then leaves, then spines.
+    delivered, offered = windows(ns3, leaf_node, first_spine_port, hosts + leaves, spines, receivers)
+    write_windows(arguments.run_dir / "spine_windows.csv", delivered, spines)
+    write_windows(arguments.run_dir / "offered_windows.csv", offered, spines)
     summary["window_ns"] = WINDOW_NS
-    summary["leaf_arrival_packets"] = sum(c[0] for c in counts.values())
+    summary["leaf_arrival_packets"] = sum(c[0] for c in delivered.values())
+    summary["spine_offered_packets"] = sum(c[0] for c in offered.values())
 
     (arguments.run_dir / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     if not arguments.keep_events:
