@@ -116,7 +116,7 @@ def binding(run: Path, degraded_bps: float) -> dict:
     }
 
 
-def shed_time(run: Path, target_share: float | None) -> float | None:
+def shed_time(run: Path, target_share: float | None, degrade_at_ns: int = DEGRADE_AT_NS) -> float | None:
     """From the degradation until the degraded spine's share of the traffic
     offered to the spines for the receiving leaf falls below the midpoint of
     1/8 and the target, and stays below it for five consecutive windows.
@@ -132,7 +132,7 @@ def shed_time(run: Path, target_share: float | None) -> float | None:
         totals[r["start_ns"]] += r["packets"]
         if r["spine"] == DEGRADED_SPINE:
             degraded[r["start_ns"]] += r["packets"]
-    starts = sorted(s for s in totals if s >= DEGRADE_AT_NS and totals[s] > 0)
+    starts = sorted(s for s in totals if s >= degrade_at_ns and totals[s] > 0)
     run_start = None
     run_length = 0
     for start in starts:
@@ -141,7 +141,7 @@ def shed_time(run: Path, target_share: float | None) -> float | None:
                 run_start = start
             run_length += 1
             if run_length == 5:
-                return run_start - DEGRADE_AT_NS
+                return run_start - degrade_at_ns
         else:
             run_length = 0
     return None
@@ -171,7 +171,11 @@ def compare(runs_file: Path, out_root: Path, stage: str | None) -> list[dict]:
                 "completion_ns": summary["collective_completion_ns"],
                 "first_incast_ns": summary["first_incast_completion_ns"],
                 "trims": sum(v["count"] for k, v in transport.items() if k.startswith("trim_")),
-                "shed_ns": shed_time(directory, TARGET_SHARE.get(run["condition"])),
+                "shed_ns": shed_time(
+                    directory,
+                    TARGET_SHARE.get(run["condition"]),
+                    10 * BASE_RTT_NS if run["stage"] == "short" else DEGRADE_AT_NS,
+                ),
                 "wall_seconds": summary.get("wall_seconds"),
             }
         )

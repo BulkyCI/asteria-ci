@@ -36,6 +36,11 @@ SEEDS = {"calibration": (101, 102, 103), "tuning": (201,), "comparison": (301, 3
 # Candidate estimator gains for the gain calibration, DCTCP's 1/16 among them.
 GAINS = (1 / 64, 1 / 32, 1 / 16, 1 / 8, 1 / 4)
 TUNING_FAN_IN = 32
+# The short stage, exploratory and outside the pre-registered comparison:
+# flows a sixteenth as long, degraded ten base RTTs in, so a connection
+# lives about a hundred base RTTs and its own arrivals are few.
+SHORT_MESSAGE_BYTES = 2 * 1024 * 1024
+SHORT_DEGRADE_AT_NS = 10 * BASE_RTT_NS
 TUNING_CONDITIONS = ("half_rate", "gray")
 
 REDIRECT_FLAGS = (0.05, 0.10, 0.15)
@@ -68,8 +73,8 @@ FIXED_ARMS = (
 )
 
 
-def failures(condition: str) -> list[dict[str, Any]]:
-    start = {"start_ns": DEGRADE_AT_NS, "spine": DEGRADED_SPINE}
+def failures(condition: str, degrade_at_ns: int = DEGRADE_AT_NS) -> list[dict[str, Any]]:
+    start = {"start_ns": degrade_at_ns, "spine": DEGRADED_SPINE}
     if condition == "healthy":
         return []
     if condition == "half_rate":
@@ -81,7 +86,14 @@ def failures(condition: str) -> list[dict[str, Any]]:
     raise ValueError(f"unknown condition {condition}")
 
 
-def profile(name: str, fan_in: int, condition: str, balancing: dict[str, Any]) -> dict[str, Any]:
+def profile(
+    name: str,
+    fan_in: int,
+    condition: str,
+    balancing: dict[str, Any],
+    message_bytes: int = MESSAGE_BYTES,
+    degrade_at_ns: int = DEGRADE_AT_NS,
+) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "name": name,
@@ -96,7 +108,7 @@ def profile(name: str, fan_in: int, condition: str, balancing: dict[str, Any]) -
             "kind": "incast",
             "receiver_leaf": 0,
             "fan_in": fan_in,
-            "message_bytes": MESSAGE_BYTES,
+            "message_bytes": message_bytes,
         },
         "network": {
             "topology": "clos",
@@ -115,7 +127,7 @@ def profile(name: str, fan_in: int, condition: str, balancing: dict[str, Any]) -
             },
             "congestion_control": {"mode": "nscc"},
             "load_balancing": balancing,
-            "link_failures": failures(condition),
+            "link_failures": failures(condition, degrade_at_ns),
         },
         "microburst_enabled": False,
         "microburst_bytes": MESSAGE_BYTES,
@@ -260,6 +272,10 @@ def runs(stage: str, calibration: dict[str, Any] | None, tuning: dict[str, Any] 
         for condition, seed in itertools.product(CONDITIONS, SEEDS["comparison"]):
             for arm in EDGE_ARMS:
                 add(arm, 32, condition, seed)
+    elif stage == "short":
+        for fan_in, condition, seed in itertools.product((32, 64), ("healthy", "half_rate", "silent"), SEEDS["comparison"]):
+            for arm in ("graded_per_receiver", "graded_per_connection", "uniform"):
+                add(arm, fan_in, condition, seed)
     elif stage == "kill":
         # The decisive subset of the comparison stage, runnable on its own.
         for condition, seed in itertools.product(("half_rate", "gray"), SEEDS["comparison"]):
@@ -284,7 +300,15 @@ def main() -> int:
     listed = []
     for run in runs(arguments.stage, calibration, tuning):
         path = arguments.out / f"{run['key']}.json"
-        document = profile(run["key"], run["k"], run["condition"], balancing(run["arm"], run["k"], calibration, run["setting"]))
+        shape = (
+            {"message_bytes": SHORT_MESSAGE_BYTES, "degrade_at_ns": SHORT_DEGRADE_AT_NS}
+            if run["stage"] == "short"
+            else {}
+        )
+        document = profile(
+            run["key"], run["k"], run["condition"],
+            balancing(run["arm"], run["k"], calibration, run["setting"]), **shape,
+        )
         path.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
         listed.append({**run, "profile": path.name})
     (arguments.out / "runs.json").write_text(json.dumps(listed, indent=1) + "\n", encoding="utf-8")
