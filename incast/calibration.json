@@ -1,0 +1,116 @@
+{
+ "per_connection": {
+  "8": {
+   "reports": 43004,
+   "p99_deviation": {
+    "mark_fraction": 0.5204705,
+    "trim_fraction": 0.055942
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k8-healthy-graded_per_connection-s101",
+    "calibration-k8-healthy-graded_per_connection-s102",
+    "calibration-k8-healthy-graded_per_connection-s103"
+   ]
+  },
+  "32": {
+   "reports": 709094,
+   "p99_deviation": {
+    "mark_fraction": 0.60083,
+    "trim_fraction": 0.0262835
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k32-healthy-graded_per_connection-s101",
+    "calibration-k32-healthy-graded_per_connection-s102",
+    "calibration-k32-healthy-graded_per_connection-s103"
+   ]
+  }
+ },
+ "per_receiver": {
+  "8": {
+   "reports": 5625,
+   "p99_deviation": {
+    "mark_fraction": 0.58125,
+    "trim_fraction": 0.0592515
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k8-healthy-graded_per_receiver-s101",
+    "calibration-k8-healthy-graded_per_receiver-s102",
+    "calibration-k8-healthy-graded_per_receiver-s103"
+   ]
+  },
+  "32": {
+   "reports": 22459,
+   "p99_deviation": {
+    "mark_fraction": 0.5031915,
+    "trim_fraction": 0.085366
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k32-healthy-graded_per_receiver-s101",
+    "calibration-k32-healthy-graded_per_receiver-s102",
+    "calibration-k32-healthy-graded_per_receiver-s103"
+   ]
+  }
+ },
+ "switch_queue": {
+  "8": {
+   "reports": 39291,
+   "p99_deviation": {
+    "mark_fraction": 0.41211,
+    "loss_fraction": 0.0
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k8-healthy-graded_switch_queue-s101",
+    "calibration-k8-healthy-graded_switch_queue-s102",
+    "calibration-k8-healthy-graded_switch_queue-s103"
+   ]
+  },
+  "32": {
+   "reports": 157087,
+   "p99_deviation": {
+    "mark_fraction": 0.4527955,
+    "loss_fraction": 0.0
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "runs": [
+    "calibration-k32-healthy-graded_switch_queue-s101",
+    "calibration-k32-healthy-graded_switch_queue-s102",
+    "calibration-k32-healthy-graded_switch_queue-s103"
+   ]
+  }
+ }
+}
