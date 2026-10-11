@@ -1,0 +1,1138 @@
+{
+ "redirect_per_connection": {
+  "half_rate": {
+   "flag": 0.15,
+   "omega": 0.7,
+   "validity_base_rtts": 3.0,
+   "trim_scoring": "mark"
+  },
+  "gray": {
+   "flag": 0.15,
+   "omega": 0.3,
+   "validity_base_rtts": 1.0,
+   "trim_scoring": "ignore"
+  }
+ },
+ "redirect_per_receiver": {
+  "half_rate": {
+   "flag": 0.05,
+   "omega": 0.3
+  },
+  "gray": {
+   "flag": 0.05,
+   "omega": 0.3
+  }
+ },
+ "table": {
+  "redirect_per_connection": {
+   "half_rate": [
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38306039
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43906694
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 43876153
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 46726720
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 36875347
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 41103523
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 43915973
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 45296139
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 34078828
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 38280203
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 43879649
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 42494554
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 39695031
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 38284652
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 42484308
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 46744473
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38265262
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 46731074
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 41166365
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 46734180
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 43894169
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 39694666
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 39699849
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43937619
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 43897382
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 52258715
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 41129569
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 39649078
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 36926901
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 41129286
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 41099683
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 39749142
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 35442109
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 41130618
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 35242259
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 41090586
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 45295182
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 42514558
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38239219
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43911804
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 35492567
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 39711949
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 50856062
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43880350
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38256853
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43861122
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 39625007
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 45319649
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38332763
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43818129
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 38299145
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 39708884
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 34049383
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 43907862
+    }
+   ],
+   "gray": [
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 33858581
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 25402285
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 29636107
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 25395211
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 31738800
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26092695
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 29653799
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26083037
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 30333514
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24701985
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27530016
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24694090
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 35939167
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 27520374
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 30321415
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24459013
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28224388
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26096710
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28166561
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24699574
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28216151
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26777540
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27532283
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26109982
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27543384
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 27216476
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 26778654
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 25397928
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 30343274
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26779201
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28931644
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26095912
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 29788087
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 27495622
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 35245308
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24711197
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 26836548
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 23993301
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27494961
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24709471
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28218798
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26075614
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 26832666
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 27474362
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27505789
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 25344717
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 26834393
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 27470277
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 29671221
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 1.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 24023027
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 28219953
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 2.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 26066011
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "mark"
+     },
+     "completion_ns": 27526723
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7,
+      "validity_base_rtts": 3.0,
+      "trim_scoring": "ignore"
+     },
+     "completion_ns": 25420169
+    }
+   ]
+  },
+  "redirect_per_receiver": {
+   "half_rate": [
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3
+     },
+     "completion_ns": 43137142
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5
+     },
+     "completion_ns": 44987127
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7
+     },
+     "completion_ns": 89434179
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3
+     },
+     "completion_ns": 44994013
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5
+     },
+     "completion_ns": 89344503
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7
+     },
+     "completion_ns": 45009672
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3
+     },
+     "completion_ns": 89452199
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5
+     },
+     "completion_ns": 45029452
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7
+     },
+     "completion_ns": 45060840
+    }
+   ],
+   "gray": [
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.3
+     },
+     "completion_ns": 35737089
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.5
+     },
+     "completion_ns": 44978897
+    },
+    {
+     "setting": {
+      "flag": 0.05,
+      "omega": 0.7
+     },
+     "completion_ns": 45889737
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.3
+     },
+     "completion_ns": 44745240
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.5
+     },
+     "completion_ns": 45820535
+    },
+    {
+     "setting": {
+      "flag": 0.1,
+      "omega": 0.7
+     },
+     "completion_ns": 45009672
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.3
+     },
+     "completion_ns": 46013756
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.5
+     },
+     "completion_ns": 45029252
+    },
+    {
+     "setting": {
+      "flag": 0.15,
+      "omega": 0.7
+     },
+     "completion_ns": 45060164
+    }
+   ]
+  }
+ }
+}
