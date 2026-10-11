@@ -5,11 +5,38 @@
 
 Reads RUN_DIR/ns3: fct.txt for completion, transport_summary.csv for event
 totals, and the transport event segments, binned per spine in windows of two
-base RTTs: every data packet arriving at the receiving leaf from a spine
-(what the spines delivered), and every data packet for a receiving host
-arriving at a spine (what the senders offered each spine). Writes
-RUN_DIR/summary.json, RUN_DIR/spine_windows.csv and RUN_DIR/offered_windows.csv,
-and deletes the segments unless --keep-events.
+base RTTs: every data packet arriving at a receiving leaf from a spine
+(what the spines delivered, summed over the receiving leaves), and every
+data packet for a receiving host arriving at a spine (what the senders
+offered each spine, per receiving leaf). The receivers are every host of
+workload.receiver_leaf, or the first workload.receiver_count hosts of each
+of workload.receiver_leaves. Writes RUN_DIR/summary.json,
+RUN_DIR/spine_windows.csv and RUN_DIR/offered_windows.csv, and deletes the
+segments unless --keep-events.
+
+When the profile's link failure is time-bounded (duration_ns), also writes
+RUN_DIR/transients.json: per occurrence, from the offered windows of the
+leaves the failure affects (every receiving leaf under a whole-spine
+failure, the named leaf under a single link's), the degraded spine's share
+of the offered packets, and
+
+* detection: from the onset to the start of the first run of five
+  consecutive windows with the share below the midpoint of 1/8 and the
+  fluid-optimal share, counted when the run starts before the occurrence
+  ends;
+* restore, for a detected occurrence: from its end to the start of the
+  first run of five consecutive windows with the share above the midpoint
+  of 1/8 and the detected level (the mean share from detection to the
+  end), starting before the next onset;
+* false hold: per healthy spine (every other spine, and under a single
+  link's failure the degraded spine's share toward the other receiving
+  leaves), the time in windows outside every occurrence with its share
+  below the midpoint.
+
+The fluid-optimal share of a spine at rate r among spines at the link rate
+R is r / (7R + r): 1/15 at half rate, 0 for a silent spine. Under loss no
+fluid-optimal share exists; only the shares are reported. Windows with no
+offered packet are skipped.
 """
 
 from __future__ import annotations
@@ -20,10 +47,9 @@ import io
 import json
 from pathlib import Path
 
-import zstandard
-
 BASE_RTT_NS = 12_324
 WINDOW_NS = 2 * BASE_RTT_NS
+RUN_LENGTH = 5
 
 
 def node_of(address: str) -> int:
@@ -77,12 +103,16 @@ class Concatenation(io.RawIOBase):
         super().close()
 
 
-def windows(ns3: Path, leaf_node: int, first_spine_port: int, first_spine_node: int,
-            spines: int, receivers: range):
-    """Packets and bytes per (window, spine): delivered to the leaf from each
-    spine, and offered to each spine for the receiving hosts."""
+def windows(ns3: Path, leaf_nodes: dict[int, int], first_spine_port: int, first_spine_node: int,
+            spines: int, receivers: set[int], hosts_per_leaf: int):
+    """Packets and bytes delivered to the receiving leaves from each spine,
+    per (window, spine), and offered to each spine for the receiving hosts,
+    per (window, receiving leaf, spine). leaf_nodes maps a receiving leaf's
+    node id to its leaf index."""
+    import zstandard
+
     delivered: dict[tuple[int, int], list[int]] = {}
-    offered: dict[tuple[int, int], list[int]] = {}
+    offered: dict[tuple[int, int, int], list[int]] = {}
     spine_nodes = range(first_spine_node, first_spine_node + spines)
     # The segments are one zstd stream cut at byte boundaries, so they are
     # decompressed as their concatenation, never one by one.
@@ -96,17 +126,17 @@ def windows(ns3: Path, leaf_node: int, first_spine_port: int, first_spine_node: 
                     continue
                 f = line.split(",")
                 node = int(f[4])
-                if node == leaf_node:
+                window = int(f[0]) // WINDOW_NS
+                if node in leaf_nodes:
                     spine = int(f[6]) - first_spine_port
                     if not 0 <= spine < spines:
                         continue
-                    table = delivered
+                    cell = delivered.setdefault((window, spine), [0, 0])
                 elif node in spine_nodes and int(f[8]) in receivers:
-                    spine = node - first_spine_node
-                    table = offered
+                    leaf = int(f[8]) // hosts_per_leaf
+                    cell = offered.setdefault((window, leaf, node - first_spine_node), [0, 0])
                 else:
                     continue
-                cell = table.setdefault((int(f[0]) // WINDOW_NS, spine), [0, 0])
                 cell[0] += 1
                 cell[1] += int(f[11])
     return delivered, offered
@@ -122,6 +152,192 @@ def write_windows(path: Path, counts, spines: int) -> None:
                 writer.writerow([window, window * WINDOW_NS, spine, packets, size])
 
 
+def write_offered(path: Path, counts, leaves: list[int], spines: int) -> None:
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["window", "start_ns", "leaf", "spine", "packets", "bytes"])
+        for window in sorted({w for w, _, _ in counts}):
+            for leaf in leaves:
+                for spine in range(spines):
+                    packets, size = counts.get((window, leaf, spine), (0, 0))
+                    writer.writerow([window, window * WINDOW_NS, leaf, spine, packets, size])
+
+
+def receiving_hosts(workload: dict, hosts_per_leaf: int) -> tuple[list[int], set[int]]:
+    """The receiving leaves and the receiving hosts' node ids."""
+    if "receiver_leaves" in workload:
+        leaves = list(workload["receiver_leaves"])
+        count = workload.get("receiver_count", hosts_per_leaf)
+    else:
+        leaves = [workload["receiver_leaf"]]
+        count = hosts_per_leaf
+    return leaves, {leaf * hosts_per_leaf + p for p in range(count) for leaf in leaves}
+
+
+# Per-transient measures, on offered packets per (window start, leaf, spine).
+
+
+def occurrences(failure: dict) -> list[tuple[int, int]]:
+    """(onset, end) of every occurrence of a time-bounded failure."""
+    repeat = failure.get("repeat", 1)
+    period = failure.get("period_ns", 0)
+    return [
+        (failure["start_ns"] + i * period, failure["start_ns"] + i * period + failure["duration_ns"])
+        for i in range(repeat)
+    ]
+
+
+def rate_bps(rate: str) -> float:
+    units = {"Gbps": 1e9, "Mbps": 1e6, "Kbps": 1e3, "bps": 1.0}
+    for unit, scale in units.items():
+        if rate.endswith(unit):
+            return float(rate[: -len(unit)]) * scale
+    raise ValueError(f"unknown rate {rate}")
+
+
+def fluid_share(failure: dict, link_rate: str, spines: int) -> float | None:
+    """The degraded spine's share of a leaf's traffic when every spine runs
+    at its capacity; None under loss, which takes no capacity."""
+    if failure["model"] == "silent":
+        return 0.0
+    if failure["model"] == "gray" and "rate" in failure:
+        degraded = rate_bps(failure["rate"])
+        return degraded / ((spines - 1) * rate_bps(link_rate) + degraded)
+    return None
+
+
+def share_series(offered: dict[tuple[int, int, int], int], leaves, spine: int) -> list[tuple[int, float]]:
+    """(window start, the spine's share of the leaves' offered packets) for
+    every window with an offered packet to the leaves."""
+    totals: dict[int, int] = {}
+    own: dict[int, int] = {}
+    for (start, leaf, s), packets in offered.items():
+        if leaf not in leaves:
+            continue
+        totals[start] = totals.get(start, 0) + packets
+        if s == spine:
+            own[start] = own.get(start, 0) + packets
+    return [(start, own.get(start, 0) / totals[start]) for start in sorted(totals) if totals[start] > 0]
+
+
+def first_run(series, holds, start_from: int, start_before: int, length: int = RUN_LENGTH) -> int | None:
+    """Start of the first run of `length` consecutive windows, at or after
+    start_from, whose share satisfies holds; None unless it starts before
+    start_before."""
+    run_start = None
+    run_length = 0
+    for start, share in series:
+        if start < start_from:
+            continue
+        if run_length == 0 and start >= start_before:
+            return None
+        if holds(share):
+            if run_length == 0:
+                run_start = start
+            run_length += 1
+            if run_length == length:
+                return run_start
+        else:
+            run_length = 0
+    return None
+
+
+def transient_measures(series, schedule: list[tuple[int, int]], midpoint: float | None,
+                       uniform: float) -> list[dict]:
+    """Detection, detected level and restore per occurrence."""
+    measures = []
+    for index, (onset, end) in enumerate(schedule):
+        next_onset = schedule[index + 1][0] if index + 1 < len(schedule) else float("inf")
+        inside = [share for start, share in series if onset <= start < end]
+        entry = {
+            "onset_ns": onset,
+            "end_ns": end,
+            "mean_share": sum(inside) / len(inside) if inside else None,
+            "detected": False,
+            "detection_ns": None,
+            "detected_share": None,
+            "restore_ns": None,
+        }
+        if midpoint is not None:
+            detected_at = first_run(series, lambda share: share < midpoint, onset, end)
+            if detected_at is not None:
+                level = [share for start, share in series if detected_at <= start < end]
+                detected_share = sum(level) / len(level)
+                threshold = (detected_share + uniform) / 2
+                restored_at = first_run(series, lambda share: share > threshold, end, next_onset)
+                entry.update(
+                    detected=True,
+                    detection_ns=detected_at - onset,
+                    detected_share=detected_share,
+                    restore_ns=None if restored_at is None else restored_at - end,
+                )
+        measures.append(entry)
+    return measures
+
+
+def outside(start: int, schedule: list[tuple[int, int]], window_ns: int = WINDOW_NS) -> bool:
+    """Whether the window starting at start overlaps no occurrence."""
+    return all(start + window_ns <= onset or start >= end for onset, end in schedule)
+
+
+def false_hold(series_by_name: dict[str, list[tuple[int, float]]], schedule, midpoint: float,
+               window_ns: int = WINDOW_NS) -> dict:
+    """Per series, and for any of them, the time in windows outside every
+    occurrence with the share below the midpoint."""
+    held: dict[str, set[int]] = {
+        name: {start for start, share in series if share < midpoint and outside(start, schedule, window_ns)}
+        for name, series in series_by_name.items()
+    }
+    return {
+        "per_spine_ns": {name: len(starts) * window_ns for name, starts in held.items()},
+        "any_ns": len(set().union(*held.values())) * window_ns if held else 0,
+    }
+
+
+def transients(profile: dict, offered_counts: dict[tuple[int, int, int], list[int]],
+               receiving_leaves: list[int]) -> dict | None:
+    """The per-transient measures of a run whose failure is time-bounded,
+    or None when it has none."""
+    network = profile["network"]
+    bounded = [f for f in network.get("link_failures", []) if "duration_ns" in f]
+    if not bounded:
+        return None
+    if len(bounded) != 1 or len(network["link_failures"]) != 1:
+        raise ValueError("transients.json takes one time-bounded failure")
+    failure = bounded[0]
+    spines = network["spine_count"]
+    spine = failure["spine"]
+    affected = [failure["leaf"]] if "leaf" in failure else list(receiving_leaves)
+    offered = {(w * WINDOW_NS, leaf, s): c[0] for (w, leaf, s), c in offered_counts.items()}
+    schedule = occurrences(failure)
+    uniform = 1 / spines
+    target = fluid_share(failure, network["link_rate"], spines)
+    midpoint = None if target is None else (uniform + target) / 2
+    degraded = share_series(offered, affected, spine)
+    measures = transient_measures(degraded, schedule, midpoint, uniform)
+    result = {
+        "window_ns": WINDOW_NS,
+        "spine": spine,
+        "leaf": failure.get("leaf"),
+        "affected_leaves": affected,
+        "fluid_share": target,
+        "midpoint": midpoint,
+        "occurrences": measures,
+        "detected_fraction": (
+            None if midpoint is None else sum(m["detected"] for m in measures) / len(measures)
+        ),
+        "false_hold": None,
+        "degraded_share": [[start, round(share, 6)] for start, share in degraded],
+    }
+    if midpoint is not None:
+        healthy = {f"spine{s}": share_series(offered, affected, s) for s in range(spines) if s != spine}
+        others = [leaf for leaf in receiving_leaves if leaf not in affected]
+        if others:
+            healthy[f"spine{spine}_leaves{'_'.join(map(str, others))}"] = share_series(offered, others, spine)
+        result["false_hold"] = false_hold(healthy, schedule, midpoint)
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
@@ -133,15 +349,14 @@ def main() -> int:
     hosts_per_leaf = network["hosts_per_leaf"]
     spines = network["spine_count"]
     hosts = profile["parallelism"]["dp"]
-    receiver_leaf = profile["workload"]["receiver_leaf"]
     fan_in = profile["workload"]["fan_in"]
-    leaf_node = hosts + receiver_leaf
+    receiving_leaves, receivers = receiving_hosts(profile["workload"], hosts_per_leaf)
     # A leaf's devices follow topology.txt: its hosts, then its spines.
     first_spine_port = hosts_per_leaf + 1
     ns3 = arguments.run_dir / "ns3"
 
     flows = read_flows(ns3 / "fct.txt")
-    expected = hosts_per_leaf * fan_in
+    expected = len(receivers) * fan_in
     first_start = min((f["start_ns"] for f in flows), default=0)
     per_receiver: dict[int, int] = {}
     for flow in flows:
@@ -171,11 +386,15 @@ def main() -> int:
             }
 
     leaves = hosts // hosts_per_leaf
-    receivers = range(receiver_leaf * hosts_per_leaf, (receiver_leaf + 1) * hosts_per_leaf)
     # Node ids follow topology.txt: hosts, then leaves, then spines.
-    delivered, offered = windows(ns3, leaf_node, first_spine_port, hosts + leaves, spines, receivers)
+    leaf_nodes = {hosts + leaf: leaf for leaf in receiving_leaves}
+    delivered, offered = windows(ns3, leaf_nodes, first_spine_port, hosts + leaves, spines,
+                                 receivers, hosts_per_leaf)
     write_windows(arguments.run_dir / "spine_windows.csv", delivered, spines)
-    write_windows(arguments.run_dir / "offered_windows.csv", offered, spines)
+    write_offered(arguments.run_dir / "offered_windows.csv", offered, receiving_leaves, spines)
+    measured = transients(profile, offered, receiving_leaves)
+    if measured is not None:
+        (arguments.run_dir / "transients.json").write_text(json.dumps(measured, indent=1) + "\n")
     summary["window_ns"] = WINDOW_NS
     summary["leaf_arrival_packets"] = sum(c[0] for c in delivered.values())
     summary["spine_offered_packets"] = sum(c[0] for c in offered.values())
