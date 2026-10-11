@@ -1,0 +1,295 @@
+name: Incast load-balancing study
+
+# One dispatch runs one or more stages of incast/profiles.py: the plan job
+# writes the stage's profiles, a hosted job builds (or restores) the ns-3
+# runtime of the pinned asteria commit, and every shard of runs gets its own
+# just-in-time runner on the DCS cluster (or a hosted runner). The collect
+# job tabulates what the shards return and archives it on a release.
+on:
+  workflow_dispatch:
+    inputs:
+      stages:
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill)
+        required: true
+        type: string
+      record_filter:
+        description: Regular expression on run keys; empty runs every run of the stages
+        required: false
+        default: ""
+        type: string
+      runs_per_shard:
+        description: Runs per runner
+        required: false
+        default: 2
+        type: number
+      runner:
+        description: Where the shards run
+        required: false
+        default: dcs
+        type: choice
+        options: [ dcs, hosted ]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Every dispatch is an independent experiment whose record must survive.
+  group: incast-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the runs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      asteria_ref: ${{ steps.plan.outputs.asteria_ref }}
+      parallel: ${{ steps.plan.outputs.parallel }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Write the profiles and split the runs into shards
+      id: plan
+      env:
+        STAGES: ${{ inputs.stages }}
+        RECORD_FILTER: ${{ inputs.record_filter }}
+        RUNS_PER_SHARD: ${{ inputs.runs_per_shard }}
+        RUNNER_KIND: ${{ inputs.runner }}
+      run: |
+        set -euo pipefail
+        args=()
+        [[ -f incast/calibration.json ]] && args+=(--calibration incast/calibration.json)
+        [[ -f incast/tuning.json ]] && args+=(--tuning incast/tuning.json)
+        IFS=, read -ra stages <<< "$STAGES"
+        for stage in "${stages[@]}"; do
+          python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" "${args[@]}"
+        done
+        python3 incast/shards.py profiles --filter "$RECORD_FILTER" \
+          --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
+        {
+          echo "shards=$(cat profiles/shards.json)"
+          echo "asteria_ref=$(tr -d '[:space:]' < incast/asteria.ref)"
+          # Two cores per DCS allocation, four on a hosted runner; the
+          # simulator is single-threaded.
+          if [[ "$RUNNER_KIND" == dcs ]]; then echo "parallel=2"; else echo "parallel=4"; fi
+        } >> "$GITHUB_OUTPUT"
+        jq -r '"\(length) shards, \([.[].keys | split(" ") | length] | add) runs"' profiles/shards.json
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: incast-profiles-${{ github.run_id }}
+        path: profiles
+        if-no-files-found: error
+
+  build:
+    name: Build the ns-3 runtime
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+    - name: Restore the runtime of this asteria commit
+      id: bundle
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ runner.temp }}/cluster-runtime-x86-64-v3.tar.gz
+        key: incast-runtime-v1-${{ needs.plan.outputs.asteria_ref }}
+
+    - name: Check out asteria and its submodules
+      if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
+      uses: actions/checkout@v7
+      with:
+        repository: caddyreverse/asteria
+        ref: ${{ needs.plan.outputs.asteria_ref }}
+        path: asteria
+        submodules: recursive
+        persist-credentials: false
+
+    - name: Restore the compiler cache
+      if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
+      uses: actions/cache@v6
+      with:
+        path: ${{ runner.temp }}/ccache
+        key: incast-ccache-v1-${{ needs.plan.outputs.asteria_ref }}
+        restore-keys: incast-ccache-v1-
+
+    # x86-64-v3 runs on every node the sbatch constraint admits and on
+    # hosted runners, so one bundle serves both.
+    - name: Build the x86-64-v3 runtime bundle
+      if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
+      working-directory: asteria
+      env:
+        CCACHE_DIR: ${{ runner.temp }}/ccache
+      run: bash ci/dcs/build.sh x86-64-v3
+
+    - name: Save the runtime of this asteria commit
+      if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ runner.temp }}/cluster-runtime-x86-64-v3.tar.gz
+        key: incast-runtime-v1-${{ needs.plan.outputs.asteria_ref }}
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: incast-runtime-${{ github.run_id }}
+        path: ${{ runner.temp }}/cluster-runtime-x86-64-v3.tar.gz
+        compression-level: 0
+        retention-days: 7
+        if-no-files-found: error
+
+  provision:
+    name: Provision a cluster runner
+    needs: [ plan, build ]
+    if: ${{ inputs.runner == 'dcs' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Authenticates with repository secrets, not the workflow token.
+    permissions: {}
+    strategy:
+      fail-fast: false
+      max-parallel: 64
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+        sparse-checkout: .github/actions/dcs-provision
+        sparse-checkout-cone-mode: false
+
+    - uses: ./.github/actions/dcs-provision
+      with:
+        runner-name: dcs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard.id }}
+        run-label: dcs-r${{ github.run_id }}-${{ matrix.shard.id }}
+        app-id: ${{ vars.DCS_APP_ID }}
+        app-private-key: ${{ secrets.DCS_APP_PRIVATE_KEY }}
+        ssh-key: ${{ secrets.DCS_SSH_KEY }}
+        ssh-dest: ${{ vars.DCS_SSH_DEST }}
+        ssh-host-key: ${{ vars.DCS_SSH_HOST_KEY }}
+
+  run:
+    name: Run a shard
+    needs: [ plan, build, provision ]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.provision.result == 'success' || needs.provision.result == 'skipped') }}
+    runs-on: ${{ inputs.runner == 'dcs' && format('dcs-r{0}-{1}', github.run_id, matrix.shard.id) || 'ubuntu-24.04' }}
+    timeout-minutes: 720
+    strategy:
+      fail-fast: false
+      max-parallel: 64
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    env:
+      ASTERIA: ${{ github.workspace }}/asteria
+    steps:
+    - name: Check out the study
+      uses: actions/checkout@v7
+      with:
+        path: study
+        persist-credentials: false
+
+    - name: Check out asteria
+      uses: actions/checkout@v7
+      with:
+        repository: caddyreverse/asteria
+        ref: ${{ needs.plan.outputs.asteria_ref }}
+        path: asteria
+        submodules: false
+        persist-credentials: false
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: incast-runtime-${{ github.run_id }}
+        path: asteria
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: incast-profiles-${{ github.run_id }}
+        path: profiles
+
+    - name: Install and verify the runtime
+      working-directory: asteria
+      run: bash ci/dcs/install-runtime.sh cluster-runtime-x86-64-v3.tar.gz
+
+    - name: Install pinned uv
+      uses: astral-sh/setup-uv@v9.0.0
+      with:
+        version: "0.11.28"
+        enable-cache: false
+
+    - name: Synchronize the locked Python environment
+      working-directory: asteria
+      run: uv sync --locked
+
+    - name: Run the shard
+      env:
+        KEYS: ${{ matrix.shard.keys }}
+        PARALLEL: ${{ needs.plan.outputs.parallel }}
+        # Scoped to this step: the runtime's libraries would shadow the
+        # system's for every later step's tooling.
+        LD_LIBRARY_PATH: ${{ env.ASTRA_SIM_LD_LIBRARY_PATH }}
+      run: |
+        set -uo pipefail
+        mkdir -p results
+        for key in $KEYS; do
+          stage="${key%%-*}"
+          printf '%s %s\n' "profiles/$stage" "$key"
+        done | xargs -P "$PARALLEL" -L 1 sh -c \
+          'bash study/incast/run_one.sh "$0" "$1" results' \
+          | tee results/shard-${{ matrix.shard.id }}.txt
+        echo "--- $(grep -c 'status 0' results/shard-${{ matrix.shard.id }}.txt) of $(wc -w <<< "$KEYS") runs succeeded"
+
+    - name: Upload the shard's results
+      if: ${{ always() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: incast-results-${{ github.run_id }}-${{ matrix.shard.id }}
+        path: results
+        if-no-files-found: ignore
+        retention-days: 30
+
+  collect:
+    name: Tabulate and archive
+    needs: [ plan, run ]
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: incast-results-${{ github.run_id }}-*
+        path: results
+        merge-multiple: true
+
+    - uses: actions/download-artifact@v8
+      with:
+        name: incast-profiles-${{ github.run_id }}
+        path: profiles
+
+    - name: Tabulate
+      run: |
+        set -euo pipefail
+        jq -s 'add' profiles/*/runs.json > results/runs.json
+        python3 incast/analyze.py compare --runs results/runs.json --out-root results > results/table.json
+        python3 incast/report.py results/table.json > results/report.md
+        cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Archive on a release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STAGES: ${{ inputs.stages }}
+      run: |
+        set -euo pipefail
+        tag="incast-${GITHUB_RUN_ID}"
+        tar -czf "incast-${GITHUB_RUN_ID}.tar.gz" results profiles
+        gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+          --title "Incast study: ${STAGES} (run ${GITHUB_RUN_ID})" \
+          --notes-file results/report.md \
+          "incast-${GITHUB_RUN_ID}.tar.gz" results/table.json results/report.md

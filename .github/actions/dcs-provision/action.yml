@@ -1,0 +1,81 @@
+name: Provision a DCS just-in-time runner
+description: >
+  Mint a single-job JIT runner with a one-hour app installation token and
+  hand its config to SLURM over the forced-command SSH channel. The named
+  combinator behind every cluster runner: the per-arm `provision` job and
+  the run's store-seed provision both call it, so the minting protocol has
+  one definition site.
+
+inputs:
+  runner-name:
+    description: >
+      Display name for the runner and (sanitized by the forced command) the
+      SLURM job name, so squeue identifies what the runner serves.
+    required: true
+  run-label:
+    description: >
+      The one label the companion job requires with `runs-on`. Pinning each
+      runner to its own label keeps the assignment 1:1 by construction - a
+      runner can never pick up a concurrent job.
+    required: true
+  app-id:
+    description: Client ID (or numeric App ID) of the org-owned GitHub App.
+    required: true
+  app-private-key:
+    description: The app's private key, file contents verbatim.
+    required: true
+  ssh-key:
+    description: Private half of the dedicated deploy key pair.
+    required: true
+  ssh-dest:
+    description: SSH destination, e.g. user@host.
+    required: true
+  ssh-host-key:
+    description: One pinned ssh-keyscan line for the destination host.
+    required: true
+
+runs:
+  using: composite
+  steps:
+  # An app installation token instead of a PAT: owned by the org rather
+  # than a person, scoped to this one repository's Administration
+  # permission, and valid for one hour - no standing credential exists.
+  - name: Mint an installation token
+    id: app
+    uses: actions/create-github-app-token@v2
+    with:
+      app-id: ${{ inputs.app-id }}
+      private-key: ${{ inputs.app-private-key }}
+
+  - name: Mint a just-in-time runner and hand it to SLURM
+    shell: bash
+    env:
+      GH_TOKEN: ${{ steps.app.outputs.token }}
+      SSH_KEY: ${{ inputs.ssh-key }}
+      SSH_DEST: ${{ inputs.ssh-dest }}
+      SSH_HOST_KEY: ${{ inputs.ssh-host-key }}
+      RUNNER_NAME: ${{ inputs.runner-name }}
+      RUN_LABEL: ${{ inputs.run-label }}
+    run: |
+      set -euo pipefail
+      # A JIT config registers a runner that executes exactly one job and
+      # then deregisters itself: runner lifetime equals job lifetime.
+      jit="$(gh api -X POST \
+        "repos/${GITHUB_REPOSITORY}/actions/runners/generate-jitconfig" \
+        -f name="$RUNNER_NAME" -F runner_group_id=1 -f work_folder=_work \
+        -f 'labels[]=dcs' -f "labels[]=${RUN_LABEL}" \
+        --jq .encoded_jit_config)"
+      install -d -m 700 ~/.ssh
+      printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ci
+      chmod 600 ~/.ssh/id_ci
+      # Pinned host key: a man in the middle could otherwise capture the
+      # JIT config and impersonate the runner for this one job.
+      printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
+      # The key is bound to a forced command on the cluster that reads a
+      # jitconfig from stdin and submits one SLURM runner job. The command
+      # word is never executed; the forced command sanitizes it and uses
+      # it as the SLURM job name so squeue identifies the experiment. The
+      # asteria/ prefix routes the job to this repository's own control
+      # root, checkout and scratch on the cluster account.
+      printf '%s' "$jit" | ssh -i ~/.ssh/id_ci -o BatchMode=yes \
+        "$SSH_DEST" "asteria/$RUNNER_NAME"
