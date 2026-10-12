@@ -34,15 +34,17 @@ class Stages(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(
             self.counts(None, None),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 192},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 207},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 576},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 591},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
-        # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3 seeds.
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_comparison", None, admitted)), 72)
+        # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
+        # seeds; plus the soft oracle reading, 4 loss cells and a healthy
+        # pair by 3 seeds.
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_comparison", None, admitted)), 87)
 
     def test_keys_unique_and_prefixed(self):
         for stage in profiles.A2A_STAGES:
@@ -104,6 +106,43 @@ class Stages(unittest.TestCase):
         self.assertEqual(sentinels, {24648, 123240, 1_000_000})
         decays = {r["setting"].get("pool_decay_interval_ns") for r in runs if r["arm"] == "graded_per_receiver_mix"}
         self.assertEqual(decays, {24648, 123240})
+
+    def test_tuning_cell_is_the_headline(self):
+        runs = profiles.a2a_stage_runs("a2a_tuning", None, None)
+        self.assertEqual({(r["group"], r["size"]) for r in runs}, {("ep64", "256k")})
+        self.assertEqual({r["condition"] for r in runs}, {"loss1e2_up", "healthy"})
+        runs = profiles.a2a_stage_runs("a2a_tuning", {"headline": "ep16-2m-loss1e3_down"}, None)
+        self.assertEqual(len(runs), 168)
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
+                         {("ep16", "2m", "loss1e3_down"), ("ep16", "2m", "healthy")})
+        for bad in ("loss1e2_up", "ep64-1m-loss1e2_up", "ep64-256k-healthy", "ep32-2m-loss1e2_up"):
+            with self.assertRaises(ValueError):
+                profiles.a2a_stage_runs("a2a_tuning", {"headline": bad}, None)
+
+    def test_committed_calibration_headline(self):
+        path = Path(profiles.__file__).resolve().parent / "a2a_calibration.json"
+        calibration = json.loads(path.read_text())
+        self.assertEqual(profiles.a2a_headline(calibration), ("ep64", "256k", "loss1e2_up"))
+        self.assertIn("headline_reason", calibration)
+        runs = profiles.a2a_stage_runs("a2a_tuning", calibration, None)
+        self.assertEqual(len(runs), 168)
+        self.assertEqual({(r["group"], r["size"]) for r in runs}, {("ep64", "256k")})
+
+    def test_soft_oracle_reading(self):
+        runs = [r for r in profiles.a2a_stage_runs("a2a_comparison", CALIBRATION, {"admitted": []})
+                if r["arm"] == profiles.A2A_SOFT_ORACLE]
+        self.assertEqual(len(runs), 15)
+        self.assertEqual({(r["group"], r["size"]) for r in runs}, {("ep64", "2m")})
+        self.assertEqual({r["condition"] for r in runs},
+                         {"loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "healthy"})
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertIn("a2a_comparison-ep64-2m-loss1e2_up-graded_switch_queue_soft-s301", {r["key"] for r in runs})
+        soft = profiles.a2a_stage_profile(runs[0], CALIBRATION)["network"]["load_balancing"]
+        oracle = profiles.a2a_balancing(profiles.A2A_ORACLE, "ep64", "2m", CALIBRATION, profiles.A2A_ORACLE_SETTING)
+        self.assertEqual(soft["loss_thresholds"], [0.0005, 0.002, 0.008])
+        self.assertEqual(soft["held_exploration"], "none")
+        self.assertEqual({k: v for k, v in soft.items() if k != "loss_thresholds"},
+                         {k: v for k, v in oracle.items() if k != "loss_thresholds"})
 
     def test_calibration_runs_use_defaults_and_trace(self):
         runs = profiles.a2a_stage_runs("a2a_calibration", CALIBRATION, None)
@@ -326,7 +365,7 @@ class A2aCalibrate(unittest.TestCase):
         # Leaf 0's host sends 50 x 20 = 1000 per 40-base-RTT interval on
         # spine 3: one expected loss at 1e-3 keeps the 1e-3 headline.
         self.assertEqual(result["headline_rule"]["expected_losses_at_1e3"], 1.0)
-        self.assertEqual(result["headline"], "loss1e3_up")
+        self.assertEqual(result["headline"], "ep64-2m-loss1e3_up")
         # The listing round-trips through the stages.
         balancing = profiles.a2a_balancing("graded_per_receiver_mix", "ep64", "2m", result,
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
@@ -357,7 +396,12 @@ class A2aCalibrate(unittest.TestCase):
         self.assertAlmostEqual(calibration["492960"]["p99"], 1 / 40)
         # 800 sends per 40-base-RTT interval on spine 3: 0.8 expected losses.
         self.assertAlmostEqual(result["headline_rule"]["expected_losses_at_1e3"], 0.8)
-        self.assertEqual(result["headline"], "loss1e2_up")
+        self.assertEqual(result["headline"], "ep64-2m-loss1e2_up")
+        # A headline set by hand, with its reason, survives recalibration.
+        kept = {"headline": "ep64-256k-loss1e2_up", "headline_reason": "gate"}
+        result = self.calibrate([(mix, self.reports(0.03), self.losses(40, lost, hosts=(0, 8)))], existing=kept)
+        self.assertEqual(result["headline"], "ep64-256k-loss1e2_up")
+        self.assertAlmostEqual(result["headline_rule"]["expected_losses_at_1e3"], 0.8)
 
     def test_interval_sums(self):
         with tempfile.TemporaryDirectory() as directory:

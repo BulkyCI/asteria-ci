@@ -409,19 +409,26 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           a two-base-RTT interval), seeds 101-103, per
 #                           group and size: spine_reports.csv and
 #                           spine_losses.csv for the graded passes
-#   a2a_tuning              the 84 settings on the headline cell, EP64 at
-#                           2 MiB, seed 201, each with its healthy pair
+#   a2a_tuning              the 84 settings on the headline cell (group,
+#                           size and condition, EP64 at 256 KiB loss1e2_up
+#                           by default), seed 201, each with its healthy
+#                           pair
 #   a2a_comparison          reps and mrc, and every graded arm a2a_tuning.json
 #                           selects, on the admitted cells and their healthy
 #                           pairs, seeds 301-303 (uniform and the oracle are
-#                           the gate's runs)
+#                           the gate's runs); plus a reading, not a compared
+#                           arm: graded_switch_queue_soft (the oracle with
+#                           softer loss thresholds, see A2A_SOFT_ORACLE) on
+#                           the four EP64 2 MiB loss cells and their healthy
+#                           pair, seeds 301-303, whatever the gate admitted
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
 # ("ep64-2m") to congestion_thresholds, trim_thresholds (not for
 # switch_queue) and loss_thresholds, the last either one list or a map from
-# a loss interval in ns to a list; its "headline" names the tuning cell's
-# condition (P17). a2a_tuning.json (read when present) maps each tuned arm
+# a loss interval in ns to a list; its "headline" names the tuning cell as
+# <group>-<size>-<condition> ("ep64-256k-loss1e2_up"), and
+# "headline_reason" says why when it departs from the P17 rule. a2a_tuning.json (read when present) maps each tuned arm
 # to its setting (gamma, sender_pool_weight, loss_interval_ns,
 # held_sentinel_interval_ns, pool_decay_interval_ns) and its
 # "admitted" lists the cells the gate admitted ("ep64-2m-loss1e2_up"). The
@@ -473,12 +480,24 @@ A2A_FAULTS = (
     "loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down",
     "blackhole_up", "halfrate_up", "structural",
 )
-# P17: (b) unless calibration shows (a) can be graded within a run.
-A2A_HEADLINE = "loss1e2_up"
-A2A_HEADLINE_CELL = ("ep64", "2m")
+# The tuning cell, <group>-<size>-<condition>. P17 picked (b) or (a) on
+# EP64 at 2 MiB, but the oracle-headroom gate dropped every EP64 2 MiB loss
+# cell (the oracle, holding a spine without exploration for a 3 ms
+# line-rate burst, gives up an eighth of the leaf's uplinks, which costs
+# more than the loss), so the headline is (b) on EP64 at 256 KiB (P14
+# precedes P17).
+A2A_HEADLINE = "ep64-256k-loss1e2_up"
 A2A_SEEDS = {"calibration": (101, 102, 103), "tuning": (201,), "comparison": (301, 302, 303)}
 A2A_ORACLE = "graded_switch_queue"
 A2A_ORACLE_SETTING = {"gamma": 0.5}  # its Phase 8 setting, not retuned
+# A reading in a2a_comparison, not a compared arm: the oracle with softer
+# loss thresholds, so 1e-3 grades 2 and 1e-2 grades 0, and no exploration
+# (as the oracle), on the EP64 2 MiB loss cells the gate dropped, to see
+# whether a softer loss hold recovers the headroom there.
+A2A_SOFT_ORACLE = "graded_switch_queue_soft"
+A2A_SOFT_LOSS_THRESHOLDS = [0.0005, 0.002, 0.008]
+A2A_SOFT_CELL = ("ep64", "2m")
+A2A_SOFT_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down")
 A2A_MIX_WEIGHT = 0.75
 A2A_GAMMAS = (0.25, 0.5, 1.0)
 A2A_POOL_WEIGHTS = (0.25, 0.5, 0.75)
@@ -507,12 +526,24 @@ A2A_SCOPES = {
     "graded_per_receiver_mix": "per_receiver",
     "graded_per_receiver_shared": "per_receiver",
     "graded_switch_queue": "switch_queue",
+    "graded_switch_queue_soft": "switch_queue",
 }
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_comparison")
 
 
 def a2a_cell_name(group: str, size: str) -> str:
     return f"{group}-{size}"
+
+
+def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
+    """The tuning cell (group, size, condition) from the calibration's
+    "headline", <group>-<size>-<condition>, or A2A_HEADLINE."""
+    headline = (calibration or {}).get("headline", A2A_HEADLINE)
+    parts = headline.split("-", 2) if isinstance(headline, str) else []
+    if (len(parts) != 3 or parts[0] not in A2A_GROUPS or parts[1] not in A2A_SIZES
+            or parts[2] not in A2A_FAULTS):
+        raise ValueError(f"headline {headline!r} is not <group>-<size>-<condition>")
+    return parts[0], parts[1], parts[2]
 
 
 def a2a_fault(condition: str) -> list[dict[str, Any]]:
@@ -554,6 +585,10 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
 
     if arm in ("uniform",) + A2A_FIXED_ARMS:
         return balancing(arm, 0, None)
+    if arm == A2A_SOFT_ORACLE:
+        values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting)
+        values["loss_thresholds"] = list(A2A_SOFT_LOSS_THRESHOLDS)
+        return values
     values = transient.balancing(arm, 0, None, setting)
     entry = (calibration or {}).get(A2A_SCOPES[arm], {}).get(a2a_cell_name(group, size), {})
     for key in ("congestion_thresholds",) + (() if arm == A2A_ORACLE else ("trim_thresholds",)):
@@ -650,10 +685,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 for condition in ("healthy",) + A2A_FAULTS:
                     add(arm, group, size, condition, seed, setting)
     elif stage == "a2a_tuning":
-        group, size = A2A_HEADLINE_CELL
-        headline = (calibration or {}).get("headline", A2A_HEADLINE)
-        if headline not in A2A_FAULTS:
-            raise ValueError(f"unknown headline condition {headline}")
+        group, size, headline = a2a_headline(calibration)
         for seed, arm in itertools.product(A2A_SEEDS["tuning"], A2A_TUNED_ARMS):
             for setting in a2a_tuning_settings(arm):
                 for condition in (headline, "healthy"):
@@ -673,6 +705,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in pairs:
                 add(arm, group, size, "healthy", seed, setting)
+        # The soft oracle reading (A2A_SOFT_ORACLE), not a compared arm.
+        group, size = A2A_SOFT_CELL
+        for seed in A2A_SEEDS["comparison"]:
+            for condition in A2A_SOFT_CONDITIONS + ("healthy",):
+                add(A2A_SOFT_ORACLE, group, size, condition, seed, A2A_ORACLE_SETTING)
     else:
         raise ValueError(f"unknown stage {stage}")
     return out

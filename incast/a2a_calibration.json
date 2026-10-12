@@ -705,7 +705,8 @@
    ]
   }
  },
- "headline": "loss1e3_up",
+ "headline": "ep64-256k-loss1e2_up",
+ "headline_reason": "oracle gate dropped every ep64-2m loss cell; P14 precedes P17",
  "headline_rule": {
   "interval_ns": 492960,
   "intervals": 1992,

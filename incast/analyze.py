@@ -781,7 +781,9 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     interval to its list, from its sender loss trace; per_connection takes
     the same map from the pooled pass of its cell (its own runs write no
     trace); switch_queue's are one list from its ground-truth loss fraction.
-    "headline" is set by the P17 rule from the pooled EP64 2 MiB trace."""
+    "headline" (<group>-<size>-<condition>) is set by the P17 rule from the
+    pooled EP64 2 MiB trace, unless existing holds a "headline_reason" for a
+    headline set by hand; "headline_rule" is recorded either way."""
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
     for run in _listed_runs(runs_files):
         directory = out_root / run["key"]
@@ -807,7 +809,8 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
         result.setdefault(scope, {})[cell] = entry
     if traced.get(A2A_HEADLINE_CELL):
         decision = headline(traced[A2A_HEADLINE_CELL])
-        result["headline"] = decision["condition"]
+        if "headline_reason" not in result:
+            result["headline"] = f"{A2A_HEADLINE_CELL}-{decision['condition']}"
         result["headline_rule"] = decision
     return result
 
