@@ -417,6 +417,11 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           size and condition, EP64 at 256 KiB loss1e2_up
 #                           by default), seed 201, each with its healthy
 #                           pair
+#   a2a_tuning_mix          a2a_tuning's graded_per_receiver_mix settings
+#                           alone, each with its healthy pair, on the same
+#                           cell and seed (its keys are a2a_tuning's with
+#                           the stage renamed): the mix arm re-tuned once it
+#                           propagates the pool hold (A2A_POOL_HOLD_ARMS)
 #   a2a_comparison          reps and mrc, and every graded arm a2a_tuning.json
 #                           selects, on the admitted cells and their healthy
 #                           pairs, seeds 301-303 (uniform and the oracle are
@@ -543,7 +548,17 @@ A2A_SCOPES = {
     "graded_switch_queue": "switch_queue",
     "graded_switch_queue_soft": "switch_queue",
 }
-A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_comparison")
+# Arms whose pool hold propagates (pool_hold_propagates), in every stage. A
+# spine the host-wide pool holds gets no share in any of the host's draws:
+# otherwise the mix arm's local part (1 - w of each draw) cannot see the
+# pool's hold, so it keeps re-admitting the spine to every destination that
+# has not yet seen its own loss there. graded_per_receiver_shared (w = 1)
+# draws from the pool alone and does not need it.
+A2A_POOL_HOLD_ARMS = ("graded_per_receiver_mix",)
+# Stages that run a2a_tuning's settings, and the arms each tunes.
+A2A_TUNING_STAGES = {"a2a_tuning": A2A_TUNED_ARMS, "a2a_tuning_mix": ("graded_per_receiver_mix",)}
+A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
+              "a2a_comparison")
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -620,6 +635,8 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         values.setdefault("loss_hold_clean_sentinels", A2A_LOSS_HOLD_CLEAN_SENTINELS)
     if pooled:
         values.setdefault("pool_decay_interval_ns", A2A_POOL_DECAY_INTERVAL_NS)
+    if arm in A2A_POOL_HOLD_ARMS:
+        values["pool_hold_propagates"] = True
     return values
 
 
@@ -706,9 +723,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             for arm, setting in arms:
                 for condition in ("healthy",) + A2A_FAULTS:
                     add(arm, group, size, condition, seed, setting)
-    elif stage == "a2a_tuning":
+    elif stage in A2A_TUNING_STAGES:
         group, size, headline = a2a_headline(calibration)
-        for seed, arm in itertools.product(A2A_SEEDS["tuning"], A2A_TUNED_ARMS):
+        for seed, arm in itertools.product(A2A_SEEDS["tuning"], A2A_TUNING_STAGES[stage]):
             for setting in a2a_tuning_settings(arm):
                 for condition in (headline, "healthy"):
                     add(arm, group, size, condition, seed, setting, True)

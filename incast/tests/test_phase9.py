@@ -34,11 +34,11 @@ class Stages(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(
             self.counts(None, None),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_comparison": 207},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_comparison": 591},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -122,6 +122,29 @@ class Stages(unittest.TestCase):
         for run_ in runs:
             balancing = profiles.a2a_stage_profile(run_, None)["network"]["load_balancing"]
             self.assertEqual(balancing["loss_hold_clean_sentinels"], run_["setting"]["loss_hold_clean_sentinels"])
+
+    def test_tuning_mix_is_the_mix_arm_alone(self):
+        full = profiles.a2a_stage_runs("a2a_tuning", CALIBRATION, None)
+        runs = profiles.a2a_stage_runs("a2a_tuning_mix", CALIBRATION, None)
+        # The mix arm's 45 settings, each with its healthy pair.
+        self.assertEqual(len(runs), 90)
+        self.assertEqual({r["arm"] for r in runs}, {"graded_per_receiver_mix"})
+        self.assertEqual({(r["group"], r["size"], r["condition"], r["seed"]) for r in runs},
+                         {("ep64", "256k", c, 201) for c in ("loss1e2_up", "healthy")})
+        mix = [r for r in full if r["arm"] == "graded_per_receiver_mix"]
+        self.assertEqual([r["key"].replace("a2a_tuning-", "a2a_tuning_mix-", 1) for r in mix],
+                         [r["key"] for r in runs])
+        self.assertEqual([r["setting"] for r in mix], [r["setting"] for r in runs])
+
+    def test_pool_hold_propagates_in_the_mix_arm_only(self):
+        for stage in profiles.A2A_STAGES:
+            for run_ in profiles.a2a_stage_runs(stage, CALIBRATION, TUNING):
+                balancing = profiles.a2a_stage_profile(run_, CALIBRATION)["network"]["load_balancing"]
+                if run_["arm"] == "graded_per_receiver_mix":
+                    self.assertIs(balancing["pool_hold_propagates"], True)
+                    self.assertGreater(balancing["sender_pool_weight"], 0)
+                else:
+                    self.assertNotIn("pool_hold_propagates", balancing)
 
     def test_tuning_cell_is_the_headline(self):
         runs = profiles.a2a_stage_runs("a2a_tuning", None, None)
