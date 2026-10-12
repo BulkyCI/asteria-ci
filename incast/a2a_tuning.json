@@ -1,0 +1,1156 @@
+{
+ "graded_per_connection": {
+  "gamma": 1.0,
+  "held_sentinel_interval_ns": 1000000
+ },
+ "graded_per_receiver": {
+  "gamma": 0.25,
+  "held_sentinel_interval_ns": 24648
+ },
+ "graded_per_receiver_mix": {
+  "gamma": 0.5,
+  "sender_pool_weight": 0.75,
+  "loss_interval_ns": 24648,
+  "held_sentinel_interval_ns": 24648,
+  "pool_decay_interval_ns": 24648
+ },
+ "graded_per_receiver_shared": {
+  "gamma": 0.25,
+  "loss_interval_ns": 24648,
+  "held_sentinel_interval_ns": 24648,
+  "pool_decay_interval_ns": 24648
+ },
+ "admitted": [
+  "ep64-2m-blackhole_up",
+  "ep64-2m-halfrate_up",
+  "ep64-2m-structural",
+  "ep64-256k-loss1e3_up",
+  "ep64-256k-loss1e2_up",
+  "ep64-256k-loss1e3_down",
+  "ep64-256k-loss1e2_down",
+  "ep64-256k-blackhole_up",
+  "ep64-256k-halfrate_up",
+  "ep64-256k-structural",
+  "ep16-2m-loss1e3_up",
+  "ep16-2m-loss1e2_up",
+  "ep16-2m-loss1e3_down",
+  "ep16-2m-loss1e2_down",
+  "ep16-2m-blackhole_up",
+  "ep16-2m-halfrate_up",
+  "ep16-2m-structural",
+  "ep16-256k-loss1e3_up",
+  "ep16-256k-loss1e2_up",
+  "ep16-256k-loss1e3_down",
+  "ep16-256k-loss1e2_down",
+  "ep16-256k-blackhole_up"
+ ],
+ "table": {
+  "graded_per_connection": [
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm100-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm100-hs81-s201",
+    "cost_ns": 334862.3,
+    "tail_cost_ns": 508400.94
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm050-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm050-hs10-s201",
+    "cost_ns": 341149.875,
+    "tail_cost_ns": 542959.03
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm025-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm025-hs2-s201",
+    "cost_ns": 348636.025,
+    "tail_cost_ns": 559252.49
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm050-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm050-hs81-s201",
+    "cost_ns": 351390.175,
+    "tail_cost_ns": 664992.59
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm050-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm050-hs2-s201",
+    "cost_ns": 352787.25,
+    "tail_cost_ns": 601743.68
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm100-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm100-hs10-s201",
+    "cost_ns": 355809.925,
+    "tail_cost_ns": 545406.61
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm100-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm100-hs2-s201",
+    "cost_ns": 358738.625,
+    "tail_cost_ns": 558186.54
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm025-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm025-hs81-s201",
+    "cost_ns": 361175.525,
+    "tail_cost_ns": 548009.2
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_connection-gm025-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_connection-gm025-hs10-s201",
+    "cost_ns": 383883.325,
+    "tail_cost_ns": 560479.36
+   }
+  ],
+  "graded_per_receiver": [
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm025-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm025-hs2-s201",
+    "cost_ns": 322666.75,
+    "tail_cost_ns": 461815.4
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm025-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm025-hs10-s201",
+    "cost_ns": 328917.425,
+    "tail_cost_ns": 495593.81
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm025-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm025-hs81-s201",
+    "cost_ns": 335848.975,
+    "tail_cost_ns": 519215.91
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm100-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm100-hs81-s201",
+    "cost_ns": 338788.075,
+    "tail_cost_ns": 524751.02
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm100-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm100-hs10-s201",
+    "cost_ns": 341043.35,
+    "tail_cost_ns": 484600.94
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 1000000
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm050-hs81-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm050-hs81-s201",
+    "cost_ns": 352601.55,
+    "tail_cost_ns": 543321.12
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm050-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm050-hs2-s201",
+    "cost_ns": 356056.425,
+    "tail_cost_ns": 534513.51
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "held_sentinel_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm100-hs2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm100-hs2-s201",
+    "cost_ns": 356229.45,
+    "tail_cost_ns": 577371.47
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "held_sentinel_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver-gm050-hs10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver-gm050-hs10-s201",
+    "cost_ns": 358150.15,
+    "tail_cost_ns": 561294.47
+   }
+  ],
+  "graded_per_receiver_mix": [
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs2-pd2-s201",
+    "cost_ns": 268576.175,
+    "tail_cost_ns": 461302.63
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs2-pd10-s201",
+    "cost_ns": 294062.4,
+    "tail_cost_ns": 527036.89
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs10-pd10-s201",
+    "cost_ns": 319321.15,
+    "tail_cost_ns": 448416.13
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs2-pd10-s201",
+    "cost_ns": 322790.35,
+    "tail_cost_ns": 514234.97
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs81-pd2-s201",
+    "cost_ns": 323850.35,
+    "tail_cost_ns": 521791.53
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs2-pd2-s201",
+    "cost_ns": 335472.35,
+    "tail_cost_ns": 488481.97
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li10-hs81-pd2-s201",
+    "cost_ns": 342524.75,
+    "tail_cost_ns": 465926.61
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw050-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw050-li2-hs81-pd2-s201",
+    "cost_ns": 345397.95,
+    "tail_cost_ns": 555675.42
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs81-pd10-s201",
+    "cost_ns": 347777.2,
+    "tail_cost_ns": 545836.56
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs81-pd10-s201",
+    "cost_ns": 350353.4,
+    "tail_cost_ns": 601511.88
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs81-pd2-s201",
+    "cost_ns": 351420.5,
+    "tail_cost_ns": 490573.76
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs81-pd10-s201",
+    "cost_ns": 357667.15,
+    "tail_cost_ns": 657341.8
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li2-hs10-pd2-s201",
+    "cost_ns": 357836.475,
+    "tail_cost_ns": 493851.1
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs10-pd10-s201",
+    "cost_ns": 358094.0,
+    "tail_cost_ns": 622156.72
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw025-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw025-li10-hs81-pd2-s201",
+    "cost_ns": 359475.325,
+    "tail_cost_ns": 565370.12
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw050-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw050-li40-hs81-pd2-s201",
+    "cost_ns": 365129.4,
+    "tail_cost_ns": 541118.26
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs2-pd2-s201",
+    "cost_ns": 368116.7,
+    "tail_cost_ns": 538029.76
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw075-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw075-li40-hs81-pd2-s201",
+    "cost_ns": 368302.05,
+    "tail_cost_ns": 564343.49
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw050-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw050-li10-hs81-pd2-s201",
+    "cost_ns": 369697.65,
+    "tail_cost_ns": 481178.7
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs10-pd10-s201",
+    "cost_ns": 371830.45,
+    "tail_cost_ns": 591364.55
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs10-pd2-s201",
+    "cost_ns": 374880.65,
+    "tail_cost_ns": 611358.82
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li40-hs81-pd2-s201",
+    "cost_ns": 375160.375,
+    "tail_cost_ns": 537103.2
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw025-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw025-li40-hs81-pd2-s201",
+    "cost_ns": 377695.525,
+    "tail_cost_ns": 533487.33
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li2-hs2-pd10-s201",
+    "cost_ns": 378890.325,
+    "tail_cost_ns": 541491.39
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw075-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw075-li10-hs81-pd2-s201",
+    "cost_ns": 380321.975,
+    "tail_cost_ns": 493252.63
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li10-hs81-pd2-s201",
+    "cost_ns": 380513.475,
+    "tail_cost_ns": 620032.82
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw025-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw025-li10-hs81-pd2-s201",
+    "cost_ns": 388506.125,
+    "tail_cost_ns": 506171.96
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm025-sw025-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm025-sw025-li2-hs81-pd2-s201",
+    "cost_ns": 388817.525,
+    "tail_cost_ns": 549909.7
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw025-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw025-li2-hs81-pd2-s201",
+    "cost_ns": 390084.075,
+    "tail_cost_ns": 561522.97
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw025-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw025-li40-hs81-pd2-s201",
+    "cost_ns": 391286.475,
+    "tail_cost_ns": 502131.32
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw050-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw050-li10-hs81-pd2-s201",
+    "cost_ns": 401881.375,
+    "tail_cost_ns": 560949.1
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw025-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw025-li10-hs81-pd2-s201",
+    "cost_ns": 401958.95,
+    "tail_cost_ns": 576129.02
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw050-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw050-li40-hs81-pd2-s201",
+    "cost_ns": 403790.725,
+    "tail_cost_ns": 590619.85
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw050-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw050-li2-hs81-pd2-s201",
+    "cost_ns": 406336.7,
+    "tail_cost_ns": 677364.78
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm050-sw025-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm050-sw025-li2-hs81-pd2-s201",
+    "cost_ns": 406804.825,
+    "tail_cost_ns": 576589.63
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs81-pd2-s201",
+    "cost_ns": 414067.2,
+    "tail_cost_ns": 561568.26
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw050-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw050-li10-hs81-pd2-s201",
+    "cost_ns": 416191.225,
+    "tail_cost_ns": 571132.86
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.25,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw025-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw025-li40-hs81-pd2-s201",
+    "cost_ns": 416541.025,
+    "tail_cost_ns": 599597.44
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw050-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw050-li40-hs81-pd2-s201",
+    "cost_ns": 421497.4,
+    "tail_cost_ns": 642094.27
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li2-hs10-pd2-s201",
+    "cost_ns": 424333.25,
+    "tail_cost_ns": 595666.48
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw050-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw050-li2-hs81-pd2-s201",
+    "cost_ns": 424378.525,
+    "tail_cost_ns": 625420.41
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "sender_pool_weight": 0.75,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_mix-gm100-sw075-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_mix-gm100-sw075-li40-hs81-pd2-s201",
+    "cost_ns": 432616.75,
+    "tail_cost_ns": 609683.1
+   }
+  ],
+  "graded_per_receiver_shared": [
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs2-pd2-s201",
+    "cost_ns": 269485.05,
+    "tail_cost_ns": 485439.05
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs2-pd10-s201",
+    "cost_ns": 299624.6,
+    "tail_cost_ns": 527267.74
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs81-pd10-s201",
+    "cost_ns": 329348.7,
+    "tail_cost_ns": 525021.01
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs81-pd2-s201",
+    "cost_ns": 331582.375,
+    "tail_cost_ns": 552756.41
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs2-pd10-s201",
+    "cost_ns": 341241.0,
+    "tail_cost_ns": 573772.12
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li40-hs81-pd2-s201",
+    "cost_ns": 341497.875,
+    "tail_cost_ns": 567646.87
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs81-pd2-s201",
+    "cost_ns": 343885.9,
+    "tail_cost_ns": 480681.93
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs2-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs2-pd10-s201",
+    "cost_ns": 344554.475,
+    "tail_cost_ns": 560096.88
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs81-pd10-s201",
+    "cost_ns": 350277.725,
+    "tail_cost_ns": 511349.6
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li10-hs81-pd2-s201",
+    "cost_ns": 352373.625,
+    "tail_cost_ns": 607243.17
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs10-pd2-s201",
+    "cost_ns": 354700.775,
+    "tail_cost_ns": 482666.17
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs81-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs81-pd10-s201",
+    "cost_ns": 358873.025,
+    "tail_cost_ns": 585752.38
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs10-pd10-s201",
+    "cost_ns": 360996.0,
+    "tail_cost_ns": 596981.29
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li40-hs81-pd2-s201",
+    "cost_ns": 366941.775,
+    "tail_cost_ns": 497801.41
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li10-hs81-pd2-s201",
+    "cost_ns": 368810.375,
+    "tail_cost_ns": 598737.17
+   },
+   {
+    "setting": {
+     "gamma": 0.25,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm025-li2-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm025-li2-hs81-pd2-s201",
+    "cost_ns": 370308.2,
+    "tail_cost_ns": 599233.2
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs10-pd2-s201",
+    "cost_ns": 372216.45,
+    "tail_cost_ns": 511039.38
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs2-pd2-s201",
+    "cost_ns": 375905.975,
+    "tail_cost_ns": 541074.13
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 24648,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs2-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs2-pd2-s201",
+    "cost_ns": 378752.325,
+    "tail_cost_ns": 605698.15
+   },
+   {
+    "setting": {
+     "gamma": 0.5,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm050-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm050-li2-hs10-pd10-s201",
+    "cost_ns": 382629.975,
+    "tail_cost_ns": 662248.19
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 123240
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs10-pd10-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs10-pd10-s201",
+    "cost_ns": 387308.2,
+    "tail_cost_ns": 484747.38
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 492960,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li40-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li40-hs81-pd2-s201",
+    "cost_ns": 427640.525,
+    "tail_cost_ns": 595418.87
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 24648,
+     "held_sentinel_interval_ns": 123240,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li2-hs10-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li2-hs10-pd2-s201",
+    "cost_ns": 432368.625,
+    "tail_cost_ns": 594356.05
+   },
+   {
+    "setting": {
+     "gamma": 1.0,
+     "loss_interval_ns": 123240,
+     "held_sentinel_interval_ns": 1000000,
+     "pool_decay_interval_ns": 24648
+    },
+    "seed": 201,
+    "faulted_key": "a2a_tuning-ep64-256k-loss1e2_up-graded_per_receiver_shared-gm100-li10-hs81-pd2-s201",
+    "healthy_key": "a2a_tuning-ep64-256k-healthy-graded_per_receiver_shared-gm100-li10-hs81-pd2-s201",
+    "cost_ns": 455657.2,
+    "tail_cost_ns": 604776.06
+   }
+  ]
+ },
+ "source": "a2a_tuning run 38203326817, ep64-256k-loss1e2_up, seed 201; lowest mean primary cost per arm"
+}
