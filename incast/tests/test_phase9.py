@@ -34,11 +34,11 @@ class Stages(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(
             self.counts(None, None),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 207},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_comparison": 207},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 591},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_comparison": 591},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -79,6 +79,7 @@ class Stages(unittest.TestCase):
         self.assertEqual(balancing["held_exploration"], "none")
         self.assertNotIn("held_sentinel_interval_ns", balancing)
         self.assertNotIn("pool_decay_interval_ns", balancing)
+        self.assertNotIn("loss_hold_clean_sentinels", balancing)
         mix = next(r for r in profiles.a2a_stage_runs("a2a_comparison", CALIBRATION, TUNING)
                    if r["arm"] == "graded_per_receiver_mix")
         balancing = profiles.a2a_stage_profile(mix, CALIBRATION)["network"]["load_balancing"]
@@ -88,6 +89,7 @@ class Stages(unittest.TestCase):
         self.assertEqual(balancing["held_exploration"], "sentinel")
         self.assertEqual(balancing["held_sentinel_interval_ns"], profiles.A2A_SENTINEL_INTERVAL_NS)
         self.assertEqual(balancing["pool_decay_interval_ns"], 2 * profiles.BASE_RTT_NS)
+        self.assertEqual(balancing["loss_hold_clean_sentinels"], profiles.A2A_LOSS_HOLD_CLEAN_SENTINELS)
         conn = next(r for r in profiles.a2a_stage_runs("a2a_comparison", CALIBRATION, TUNING)
                     if r["arm"] == "graded_per_connection")
         balancing = profiles.a2a_stage_profile(conn, CALIBRATION)["network"]["load_balancing"]
@@ -97,7 +99,7 @@ class Stages(unittest.TestCase):
     def test_tuning_sweeps_sentinel_and_pool_decay(self):
         runs = profiles.a2a_stage_runs("a2a_tuning", None, None)
         settings = {(r["arm"], json.dumps(r["setting"], sort_keys=True)) for r in runs}
-        self.assertEqual(len(settings), 84)
+        self.assertEqual(len(settings), 96)
         for run_ in runs:
             balancing = profiles.a2a_stage_profile(run_, None)["network"]["load_balancing"]
             self.assertEqual(balancing["held_sentinel_interval_ns"], run_["setting"]["held_sentinel_interval_ns"])
@@ -106,13 +108,27 @@ class Stages(unittest.TestCase):
         self.assertEqual(sentinels, {24648, 123240, 1_000_000})
         decays = {r["setting"].get("pool_decay_interval_ns") for r in runs if r["arm"] == "graded_per_receiver_mix"}
         self.assertEqual(decays, {24648, 123240})
+        self.assertEqual({r["setting"]["loss_hold_clean_sentinels"] for r in runs}, {256, 1024})
+        # The loss hold crosses gamma only: 4 arms by 3 gammas at n = 256,
+        # the other dimensions at their defaults.
+        held = [(r["arm"], r["setting"]) for r in runs if r["setting"]["loss_hold_clean_sentinels"] == 256]
+        self.assertEqual(len({(arm, json.dumps(x, sort_keys=True)) for arm, x in held}), 12)
+        for _, setting in held:
+            self.assertEqual(setting["held_sentinel_interval_ns"], profiles.A2A_SENTINEL_INTERVAL_NS)
+            self.assertEqual(setting.get("pool_decay_interval_ns", profiles.A2A_POOL_DECAY_INTERVAL_NS),
+                             profiles.A2A_POOL_DECAY_INTERVAL_NS)
+            self.assertEqual(setting.get("sender_pool_weight", 0.75), 0.75)
+            self.assertEqual(setting.get("loss_interval_ns", 24648), 24648)
+        for run_ in runs:
+            balancing = profiles.a2a_stage_profile(run_, None)["network"]["load_balancing"]
+            self.assertEqual(balancing["loss_hold_clean_sentinels"], run_["setting"]["loss_hold_clean_sentinels"])
 
     def test_tuning_cell_is_the_headline(self):
         runs = profiles.a2a_stage_runs("a2a_tuning", None, None)
         self.assertEqual({(r["group"], r["size"]) for r in runs}, {("ep64", "256k")})
         self.assertEqual({r["condition"] for r in runs}, {"loss1e2_up", "healthy"})
         runs = profiles.a2a_stage_runs("a2a_tuning", {"headline": "ep16-2m-loss1e3_down"}, None)
-        self.assertEqual(len(runs), 168)
+        self.assertEqual(len(runs), 192)
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
                          {("ep16", "2m", "loss1e3_down"), ("ep16", "2m", "healthy")})
         for bad in ("loss1e2_up", "ep64-1m-loss1e2_up", "ep64-256k-healthy", "ep32-2m-loss1e2_up"):
@@ -125,7 +141,7 @@ class Stages(unittest.TestCase):
         self.assertEqual(profiles.a2a_headline(calibration), ("ep64", "256k", "loss1e2_up"))
         self.assertIn("headline_reason", calibration)
         runs = profiles.a2a_stage_runs("a2a_tuning", calibration, None)
-        self.assertEqual(len(runs), 168)
+        self.assertEqual(len(runs), 192)
         self.assertEqual({(r["group"], r["size"]) for r in runs}, {("ep64", "256k")})
 
     def test_soft_oracle_reading(self):
@@ -371,7 +387,7 @@ class A2aCalibrate(unittest.TestCase):
         balancing = profiles.a2a_balancing("graded_per_receiver_mix", "ep64", "2m", result,
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
         self.assertEqual(balancing["loss_thresholds"], [0.001, 0.002, 0.004])
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 168)
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 192)
 
     def test_one_loss_grades_0(self):
         # A zero p99: (f/4, f/2, f), rounded down so one loss reaches f.

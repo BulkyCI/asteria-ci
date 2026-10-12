@@ -161,10 +161,12 @@ def setting_name(setting: dict[str, Any]) -> str:
         return f"g{round(1 / setting['estimator_gain'])}"
     if "gamma" in setting and set(setting) <= {
         "gamma", "sender_pool_weight", "loss_interval_ns", "held_sentinel_interval_ns", "pool_decay_interval_ns",
+        "loss_hold_clean_sentinels",
     }:
         # gm025 for gamma 0.25, sw050 for a sender pool weight of 0.5, li10
         # for a loss interval of ten base RTTs, hs81 for a held-spine
-        # sentinel every 81 base RTTs (1 ms), pd2 for a pool decay every two.
+        # sentinel every 81 base RTTs (1 ms), pd2 for a pool decay every two,
+        # lh1024 for a loss hold released after 1024 clean sentinels.
         parts = [f"gm{round(setting['gamma'] * 100):03d}"]
         if "sender_pool_weight" in setting:
             parts.append(f"sw{round(setting['sender_pool_weight'] * 100):03d}")
@@ -174,6 +176,8 @@ def setting_name(setting: dict[str, Any]) -> str:
             parts.append(f"hs{round(setting['held_sentinel_interval_ns'] / BASE_RTT_NS)}")
         if "pool_decay_interval_ns" in setting:
             parts.append(f"pd{round(setting['pool_decay_interval_ns'] / BASE_RTT_NS)}")
+        if "loss_hold_clean_sentinels" in setting:
+            parts.append(f"lh{setting['loss_hold_clean_sentinels']}")
         return "-".join(parts)
     parts = [f"f{round(setting['flag'] * 100):02d}", f"w{round(setting['omega'] * 10)}"]
     if "validity_base_rtts" in setting:
@@ -409,7 +413,7 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           a two-base-RTT interval), seeds 101-103, per
 #                           group and size: spine_reports.csv and
 #                           spine_losses.csv for the graded passes
-#   a2a_tuning              the 84 settings on the headline cell (group,
+#   a2a_tuning              the 96 settings on the headline cell (group,
 #                           size and condition, EP64 at 256 KiB loss1e2_up
 #                           by default), seed 201, each with its healthy
 #                           pair
@@ -430,11 +434,13 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 # <group>-<size>-<condition> ("ep64-256k-loss1e2_up"), and
 # "headline_reason" says why when it departs from the P17 rule. a2a_tuning.json (read when present) maps each tuned arm
 # to its setting (gamma, sender_pool_weight, loss_interval_ns,
-# held_sentinel_interval_ns, pool_decay_interval_ns) and its
+# held_sentinel_interval_ns, pool_decay_interval_ns,
+# loss_hold_clean_sentinels) and its
 # "admitted" lists the cells the gate admitted ("ep64-2m-loss1e2_up"). The
 # calibration stages themselves run at the simulator defaults, except for
-# held exploration and pool decay (see A2A_SENTINEL_INTERVAL_NS), which
-# every stage sets.
+# held exploration, pool decay and the loss hold (see
+# A2A_SENTINEL_INTERVAL_NS and A2A_LOSS_HOLD_CLEAN_SENTINELS), which every
+# stage sets.
 #
 # A run key is <stage>-<group>-<size>-<condition>-<arm>[-<setting>]-s<seed>.
 
@@ -515,6 +521,15 @@ A2A_SENTINEL_INTERVALS_NS = (A2A_REPORT_INTERVAL_NS, 10 * BASE_RTT_NS, A2A_SENTI
 # destinations its memory would be under 2 us.
 A2A_POOL_DECAY_INTERVAL_NS = A2A_REPORT_INTERVAL_NS
 A2A_POOL_DECAY_INTERVALS_NS = (A2A_REPORT_INTERVAL_NS, 10 * BASE_RTT_NS)
+# A loss-held spine releases only after A2A_LOSS_HOLD_CLEAN_SENTINELS
+# consecutive clean sentinels (loss_hold_clean_sentinels; every graded arm
+# but the oracle, which has no sender loss counting). The expected release
+# after n consecutive clean sentinels is ((1-p)^-n - 1)/p sentinels, so at
+# 2-RTT sentinels n = 1024 releases a 1e-3 link after about 44 ms and a 1e-2
+# link effectively never, while a healed link releases after about 25 ms.
+# Tuning sweeps n.
+A2A_LOSS_HOLD_CLEAN_SENTINELS = 1024
+A2A_LOSS_HOLD_CLEAN_SENTINELS_SWEEP = (256, 1024)
 A2A_TUNED_ARMS = (
     "graded_per_connection", "graded_per_receiver",
     "graded_per_receiver_mix", "graded_per_receiver_shared",
@@ -602,6 +617,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
     else:
         values["held_exploration"] = "sentinel"
         values.setdefault("held_sentinel_interval_ns", A2A_SENTINEL_INTERVAL_NS)
+        values.setdefault("loss_hold_clean_sentinels", A2A_LOSS_HOLD_CLEAN_SENTINELS)
     if pooled:
         values.setdefault("pool_decay_interval_ns", A2A_POOL_DECAY_INTERVAL_NS)
     return values
@@ -609,12 +625,14 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
 
 def a2a_tuning_settings(arm: str) -> list[dict[str, Any]]:
     """An arm's tuning settings: its gamma (and, pooled, w and loss
-    interval) grid at the default sentinel and pool decay intervals, then
-    gamma crossed with every other sentinel and pool decay interval, w and
-    the loss interval held at the calibration pass's (0.75, the report
-    interval). Crossing all five would make 234 settings."""
+    interval) grid at the default sentinel and pool decay intervals and
+    loss hold, then gamma crossed with every other sentinel and pool decay
+    interval, and gamma crossed with every other loss hold, w and the loss
+    interval held at the calibration pass's (0.75, the report interval)
+    and the other dimensions at their defaults. Crossing all six would make
+    468 settings."""
     pooled = arm in ("graded_per_receiver_mix", "graded_per_receiver_shared")
-    defaults = {"held_sentinel_interval_ns": A2A_SENTINEL_INTERVAL_NS}
+    defaults: dict[str, Any] = {"held_sentinel_interval_ns": A2A_SENTINEL_INTERVAL_NS}
     decays: tuple[int | None, ...] = (None,)
     if pooled:
         defaults["pool_decay_interval_ns"] = A2A_POOL_DECAY_INTERVAL_NS
@@ -631,13 +649,17 @@ def a2a_tuning_settings(arm: str) -> list[dict[str, Any]]:
     else:
         grid = [{"gamma": g} for g in A2A_GAMMAS]
         held = {}
-    settings = [{**setting, **defaults} for setting in grid]
+    settings = [{**setting, **defaults, "loss_hold_clean_sentinels": A2A_LOSS_HOLD_CLEAN_SENTINELS}
+                for setting in grid]
     for g, sentinel, decay in itertools.product(A2A_GAMMAS, A2A_SENTINEL_INTERVALS_NS, decays):
         intervals = {"held_sentinel_interval_ns": sentinel}
         if decay is not None:
             intervals["pool_decay_interval_ns"] = decay
         if intervals != defaults:
-            settings.append({"gamma": g, **held, **intervals})
+            settings.append({"gamma": g, **held, **intervals, "loss_hold_clean_sentinels": A2A_LOSS_HOLD_CLEAN_SENTINELS})
+    for g, hold in itertools.product(A2A_GAMMAS, A2A_LOSS_HOLD_CLEAN_SENTINELS_SWEEP):
+        if hold != A2A_LOSS_HOLD_CLEAN_SENTINELS:
+            settings.append({"gamma": g, **held, **defaults, "loss_hold_clean_sentinels": hold})
     return settings
 
 
