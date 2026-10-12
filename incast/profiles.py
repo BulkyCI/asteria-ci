@@ -575,8 +575,8 @@ A2A_GATE_REPS_ARMS = (A2A_REPS_ORACLE, "reps")
 # at that interval from the per_receiver calibration, as the mix arm does;
 # reps_hold's hold_scope keys the hold per destination leaf or per host, and
 # reps_flow_hold holds per queue pair. The floor arms are a2a_tuning.json's
-# setting of their base arm with congestion_grade_floor 1 (the mix arm
-# keeps pool_hold_propagates, A2A_POOL_HOLD_ARMS).
+# setting of their base arm with congestion_grade_floor 1 and nothing else:
+# mix_floor1 leaves pool_hold_propagates unset.
 A2A_REPS_HOLD_ARMS = {
     "reps_hold_leaf": ("reps_hold", "leaf"),
     "reps_hold_host": ("reps_hold", "host"),
@@ -663,7 +663,9 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         }
     if arm in A2A_FLOOR_ARMS:
         # The setting is the base arm's with congestion_grade_floor.
-        return a2a_balancing(A2A_FLOOR_ARMS[arm], group, size, calibration, setting)
+        values = a2a_balancing(A2A_FLOOR_ARMS[arm], group, size, calibration, setting)
+        values.pop("pool_hold_propagates", None)
+        return values
     if arm == A2A_SOFT_ORACLE:
         values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting)
         values["loss_thresholds"] = list(A2A_SOFT_LOSS_THRESHOLDS)

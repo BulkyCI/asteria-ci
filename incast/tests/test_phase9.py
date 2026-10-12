@@ -142,7 +142,7 @@ class Stages(unittest.TestCase):
         for stage in profiles.A2A_STAGES:
             for run_ in profiles.a2a_stage_runs(stage, CALIBRATION, TUNING):
                 balancing = profiles.a2a_stage_profile(run_, CALIBRATION)["network"]["load_balancing"]
-                if run_["arm"] in ("graded_per_receiver_mix", "mix_floor1"):
+                if run_["arm"] == "graded_per_receiver_mix":
                     self.assertIs(balancing["pool_hold_propagates"], True)
                     self.assertGreater(balancing["sender_pool_weight"], 0)
                 else:
@@ -298,8 +298,8 @@ class Candidates(unittest.TestCase):
         self.assertEqual(by_arm["reps_hold_leaf"], {**hold, "selector": "reps_hold", "hold_scope": "leaf"})
         self.assertEqual(by_arm["reps_hold_host"], {**hold, "selector": "reps_hold", "hold_scope": "host"})
         self.assertEqual(by_arm["reps_flow_hold"], {**hold, "selector": "reps_flow_hold"})
-        self.assertEqual(by_arm["mix_floor1"], {**by_arm["mix_floor1"], "congestion_grade_floor": 1,
-                                                "pool_hold_propagates": True, **mix})
+        self.assertEqual(by_arm["mix_floor1"], {**by_arm["mix_floor1"], "congestion_grade_floor": 1, **mix})
+        self.assertNotIn("pool_hold_propagates", by_arm["mix_floor1"])
         self.assertEqual(by_arm["shared_floor1"]["congestion_grade_floor"], 1)
         self.assertNotIn("pool_hold_propagates", by_arm["shared_floor1"])
         self.assertEqual(by_arm["shared_floor1"]["sender_pool_weight"], 1.0)
