@@ -696,16 +696,19 @@ A2A_HEADLINE_RATE = 1e-3
 A2A_HOSTS_PER_LEAF = 8
 
 
-def loss_thresholds(first_p99: float, sent_counts: list[int]) -> dict:
+def loss_thresholds(first_p99: float, sent_counts: list[int], count_floor: bool = True) -> dict:
     """The lost fraction's (t, 2t, 4t): t is the healthy 99th percentile,
-    floored at the fraction one loss reads at the median per-spine send
-    count, so a single loss reaches the first threshold; the floor is
-    flagged, as is the cap of scaled_thresholds."""
+    floored by scaled_thresholds at 1e-4 and, with count_floor, at the
+    fraction one loss reads at the median per-spine send count, so a single
+    loss reaches the first threshold; the floor is flagged, as is the cap of
+    scaled_thresholds. "rule" records which floor applied."""
     median_sent = statistics.median(sent_counts) if sent_counts else None
-    floor = 1 / median_sent if median_sent else 0.0
+    floor = 1 / median_sent if count_floor and median_sent else 0.0
     capped, values = scaled_thresholds(max(first_p99, floor))
-    return {"p99": first_p99, "median_sent": median_sent, "one_loss_fraction": floor,
-            "floored": floor > first_p99, "capped": capped, "loss_thresholds": values}
+    return {"p99": first_p99, "median_sent": median_sent,
+            "rule": "p99, count floor" if count_floor else "p99, 1e-4 floor, no count floor",
+            "one_loss_fraction": floor if count_floor else None,
+            "floored": values[0] > first_p99, "capped": capped, "loss_thresholds": values}
 
 
 def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], list[int]]:
@@ -739,8 +742,10 @@ def trace_loss_thresholds(runs: list[Path]) -> dict[str, dict]:
 
 def report_loss_thresholds(runs: list[Path]) -> dict:
     """The oracle's loss_thresholds, from its ground-truth loss fraction per
-    report and spine with arrivals, by the same rule and floor, the floor at
-    the median per-spine arrival count."""
+    report and spine with arrivals, by the rule of its congestion thresholds:
+    the healthy 99th percentile, floored at 1e-4 only. The fraction is a
+    probability read from switch state, not a count, so no count floor: one
+    over the arrivals would blind the oracle to losses of 1e-2 and 1e-3."""
     fractions, arrivals = [], []
     for run in runs:
         for rows in reports(run).values():
@@ -748,7 +753,7 @@ def report_loss_thresholds(runs: list[Path]) -> dict:
                 if int(r["arrivals"]):
                     fractions.append(float(r["loss_fraction"]))
                     arrivals.append(int(r["arrivals"]))
-    return loss_thresholds(percentile(fractions, 0.99), arrivals)
+    return loss_thresholds(percentile(fractions, 0.99), arrivals, count_floor=False)
 
 
 def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:

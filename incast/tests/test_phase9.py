@@ -281,9 +281,14 @@ class A2aCalibrate(unittest.TestCase):
         self.assertEqual(sq["ep64-2m"], {"kept": True})
         self.assertEqual(sq["ep16-256k"]["congestion_thresholds"], [0.02, 0.04, 0.08])
         self.assertNotIn("trim_thresholds", sq["ep16-256k"])
-        # Ground-truth loss: none, so the floor at one loss in 100 arrivals.
-        self.assertEqual(sq["ep16-256k"]["loss_thresholds"], [0.01, 0.02, 0.04])
+        # Ground-truth loss: none, so the 1e-4 floor of the congestion rule;
+        # no count floor at one loss in 100 arrivals.
+        self.assertEqual(sq["ep16-256k"]["loss_thresholds"], [0.0001, 0.0002, 0.0004])
         self.assertTrue(sq["ep16-256k"]["loss_calibration"]["floored"])
+        self.assertIsNone(sq["ep16-256k"]["loss_calibration"]["one_loss_fraction"])
+        self.assertEqual(sq["ep16-256k"]["loss_calibration"]["rule"], "p99, 1e-4 floor, no count floor")
+        self.assertEqual(result["per_receiver"]["ep64-2m"]["loss_calibration"]["24648"]["rule"],
+                         "p99, count floor")
         pooled = result["per_receiver"]["ep64-2m"]
         self.assertEqual(pooled["congestion_thresholds"], [0.03, 0.06, 0.12])
         self.assertEqual(pooled["trim_thresholds"], [0.02, 0.04, 0.08])
@@ -303,6 +308,16 @@ class A2aCalibrate(unittest.TestCase):
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
         self.assertEqual(balancing["loss_thresholds"], [0.004, 0.008, 0.016])
         self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 84)
+
+    def test_oracle_loss_has_no_count_floor(self):
+        # Spine 3 reads a ground-truth loss of 1e-3 in every report, an
+        # eighth of the samples: the p99 is 1e-3, well under one loss in
+        # 100 arrivals, and the thresholds follow it.
+        oracle = run("graded_switch_queue", "ep64", "2m", "healthy", 101, "a2a_oracle_calibration")
+        result = self.calibrate([(oracle, self.reports(0.0, hot_loss=1e-3), None)])
+        sq = result["switch_queue"]["ep64-2m"]
+        self.assertEqual(sq["loss_thresholds"], [0.001, 0.002, 0.004])
+        self.assertFalse(sq["loss_calibration"]["floored"])
 
     def test_p99_above_the_floor_and_the_fallback_headline(self):
         mix = run("graded_per_receiver_mix", "ep64", "2m", "healthy", 101, "a2a_calibration")

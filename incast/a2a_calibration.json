@@ -18,14 +18,15 @@
     "a2a_oracle_calibration-ep16-256k-healthy-graded_switch_queue-s103"
    ],
    "loss_thresholds": [
-    0.012195,
-    0.02439,
-    0.04878
+    0.0001,
+    0.0002,
+    0.0004
    ],
    "loss_calibration": {
     "p99": 0.0,
     "median_sent": 82.0,
-    "one_loss_fraction": 0.012195121951219513,
+    "rule": "p99, 1e-4 floor, no count floor",
+    "one_loss_fraction": null,
     "floored": true,
     "capped": false
    }
@@ -48,14 +49,15 @@
     "a2a_oracle_calibration-ep16-2m-healthy-graded_switch_queue-s103"
    ],
    "loss_thresholds": [
-    0.007463,
-    0.014925,
-    0.029851
+    0.0001,
+    0.0002,
+    0.0004
    ],
    "loss_calibration": {
     "p99": 0.0,
     "median_sent": 134,
-    "one_loss_fraction": 0.007462686567164179,
+    "rule": "p99, 1e-4 floor, no count floor",
+    "one_loss_fraction": null,
     "floored": true,
     "capped": false
    }
@@ -78,14 +80,15 @@
     "a2a_oracle_calibration-ep64-256k-healthy-graded_switch_queue-s103"
    ],
    "loss_thresholds": [
-    0.007692,
-    0.015385,
-    0.030769
+    0.0001,
+    0.0002,
+    0.0004
    ],
    "loss_calibration": {
     "p99": 0.0,
     "median_sent": 130,
-    "one_loss_fraction": 0.007692307692307693,
+    "rule": "p99, 1e-4 floor, no count floor",
+    "one_loss_fraction": null,
     "floored": true,
     "capped": false
    }
@@ -108,14 +111,15 @@
     "a2a_oracle_calibration-ep64-2m-healthy-graded_switch_queue-s103"
    ],
    "loss_thresholds": [
-    0.007353,
-    0.014706,
-    0.029412
+    0.0001,
+    0.0002,
+    0.0004
    ],
    "loss_calibration": {
     "p99": 0.0,
     "median_sent": 136,
-    "one_loss_fraction": 0.007352941176470588,
+    "rule": "p99, 1e-4 floor, no count floor",
+    "one_loss_fraction": null,
     "floored": true,
     "capped": false
    }
