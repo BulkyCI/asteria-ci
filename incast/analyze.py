@@ -696,19 +696,35 @@ A2A_HEADLINE_RATE = 1e-3
 A2A_HOSTS_PER_LEAF = 8
 
 
+def one_loss_thresholds(one_loss: float) -> list[float]:
+    """(f/4, f/2, f) for the one-loss fraction f, rounded down to 6 decimals
+    (and kept above 0) so that one loss at the median send count reaches the
+    last and grades 0."""
+    return [max(int(x * 1e6 + 1e-6) / 1e6, 1e-6) for x in (one_loss / 4, one_loss / 2, one_loss)]
+
+
 def loss_thresholds(first_p99: float, sent_counts: list[int], count_floor: bool = True) -> dict:
-    """The lost fraction's (t, 2t, 4t): t is the healthy 99th percentile,
-    floored by scaled_thresholds at 1e-4 and, with count_floor, at the
-    fraction one loss reads at the median per-spine send count, so a single
-    loss reaches the first threshold; the floor is flagged, as is the cap of
-    scaled_thresholds. "rule" records which floor applied."""
+    """The lost fraction's thresholds. Without count_floor, (t, 2t, 4t) for
+    t the healthy 99th percentile, floored by scaled_thresholds at 1e-4.
+    With it, f is the fraction one loss reads at the median per-spine send
+    count; a p99 at or above f keeps the p99's (t, 2t, 4t), but a p99 below
+    it (healthy loss on this fabric is exactly zero) gives (f/4, f/2, f):
+    one loss per interval is the anomaly and grades 0. The x2/x4 shape
+    belongs to the marked and trimmed fractions, whose healthy values are
+    nonzero. "floored" flags the second case, "capped" the cap of
+    scaled_thresholds; "rule" records which rule applied."""
     median_sent = statistics.median(sent_counts) if sent_counts else None
-    floor = 1 / median_sent if count_floor and median_sent else 0.0
-    capped, values = scaled_thresholds(max(first_p99, floor))
-    return {"p99": first_p99, "median_sent": median_sent,
-            "rule": "p99, count floor" if count_floor else "p99, 1e-4 floor, no count floor",
-            "one_loss_fraction": floor if count_floor else None,
-            "floored": values[0] > first_p99, "capped": capped, "loss_thresholds": values}
+    one_loss = 1 / median_sent if count_floor and median_sent else 0.0
+    if one_loss and first_p99 < one_loss:
+        capped, values = False, one_loss_thresholds(one_loss)
+        rule = "p99 zero: one loss grades 0" if first_p99 == 0 else "p99 below one loss: one loss grades 0"
+    else:
+        capped, values = scaled_thresholds(first_p99)
+        rule = "p99, count floor" if count_floor else "p99, 1e-4 floor, no count floor"
+    return {"p99": first_p99, "median_sent": median_sent, "rule": rule,
+            "one_loss_fraction": one_loss if count_floor else None,
+            "floored": bool(one_loss) and first_p99 < one_loss if count_floor else values[0] > first_p99,
+            "capped": capped, "loss_thresholds": values}
 
 
 def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], list[int]]:

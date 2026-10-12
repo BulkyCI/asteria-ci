@@ -336,8 +336,9 @@ class A2aCalibrate(unittest.TestCase):
         result = self.calibrate([
             (oracle, self.reports(0.02, hot_loss=0.0), None),
             (connection, self.reports(0.5, 0.05), None),
-            # 50 sends per spine per interval, none lost: the floor, 1/50,
-            # 1/250 and 1/1000 at the three intervals.
+            # 50 sends per spine per interval, none lost: a zero p99, so
+            # (f/4, f/2, f) for one loss f, 1/50, 1/250 and 1/1000 at the
+            # three intervals, and one loss grades 0.
             (mix, self.reports(0.03, 0.02), self.losses(50)),
         ], existing={"switch_queue": {"ep64-2m": {"kept": True}}})
         sq = result["switch_queue"]
@@ -351,12 +352,12 @@ class A2aCalibrate(unittest.TestCase):
         self.assertIsNone(sq["ep16-256k"]["loss_calibration"]["one_loss_fraction"])
         self.assertEqual(sq["ep16-256k"]["loss_calibration"]["rule"], "p99, 1e-4 floor, no count floor")
         self.assertEqual(result["per_receiver"]["ep64-2m"]["loss_calibration"]["24648"]["rule"],
-                         "p99, count floor")
+                         "p99 zero: one loss grades 0")
         pooled = result["per_receiver"]["ep64-2m"]
         self.assertEqual(pooled["congestion_thresholds"], [0.03, 0.06, 0.12])
         self.assertEqual(pooled["trim_thresholds"], [0.02, 0.04, 0.08])
-        self.assertEqual(pooled["loss_thresholds"], {"24648": [0.02, 0.04, 0.08], "123240": [0.004, 0.008, 0.016],
-                                                     "492960": [0.001, 0.002, 0.004]})
+        self.assertEqual(pooled["loss_thresholds"], {"24648": [0.005, 0.01, 0.02], "123240": [0.001, 0.002, 0.004],
+                                                     "492960": [0.00025, 0.0005, 0.001]})
         per_connection = result["per_connection"]["ep64-2m"]
         self.assertTrue(per_connection["capped"])
         self.assertEqual(per_connection["congestion_thresholds"], [0.25, 0.5, 1.0])
@@ -369,8 +370,25 @@ class A2aCalibrate(unittest.TestCase):
         # The listing round-trips through the stages.
         balancing = profiles.a2a_balancing("graded_per_receiver_mix", "ep64", "2m", result,
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
-        self.assertEqual(balancing["loss_thresholds"], [0.004, 0.008, 0.016])
+        self.assertEqual(balancing["loss_thresholds"], [0.001, 0.002, 0.004])
         self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 168)
+
+    def test_one_loss_grades_0(self):
+        # A zero p99: (f/4, f/2, f), rounded down so one loss reaches f.
+        zero = analyze.loss_thresholds(0.0, [133, 133, 140])
+        self.assertEqual(zero["rule"], "p99 zero: one loss grades 0")
+        self.assertTrue(zero["floored"])
+        self.assertEqual(zero["loss_thresholds"], [0.001879, 0.003759, 0.007518])
+        self.assertLessEqual(zero["loss_thresholds"][2], 1 / 133)
+        # A p99 above zero but below one loss takes the same rule.
+        below = analyze.loss_thresholds(0.001, [100])
+        self.assertEqual(below["rule"], "p99 below one loss: one loss grades 0")
+        self.assertEqual(below["loss_thresholds"], [0.0025, 0.005, 0.01])
+        # At or above one loss, the p99's (t, 2t, 4t).
+        above = analyze.loss_thresholds(0.02, [100])
+        self.assertEqual(above["rule"], "p99, count floor")
+        self.assertFalse(above["floored"])
+        self.assertEqual(above["loss_thresholds"], [0.02, 0.04, 0.08])
 
     def test_oracle_loss_has_no_count_floor(self):
         # Spine 3 reads a ground-truth loss of 1e-3 in every report, an
@@ -393,6 +411,7 @@ class A2aCalibrate(unittest.TestCase):
         self.assertAlmostEqual(calibration["24648"]["p99"], 1 / 40)
         self.assertFalse(calibration["24648"]["floored"])
         self.assertEqual(result["per_receiver"]["ep64-2m"]["loss_thresholds"]["24648"], [0.025, 0.05, 0.1])
+        self.assertEqual(calibration["24648"]["rule"], "p99, count floor")
         self.assertAlmostEqual(calibration["492960"]["p99"], 1 / 40)
         # 800 sends per 40-base-RTT interval on spine 3: 0.8 expected losses.
         self.assertAlmostEqual(result["headline_rule"]["expected_losses_at_1e3"], 0.8)

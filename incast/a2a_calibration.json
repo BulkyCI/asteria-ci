@@ -151,26 +151,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.011765,
-     0.023529,
-     0.047059
+     0.002941,
+     0.005882,
+     0.011764
     ],
     "123240": [
-     0.00346,
-     0.00692,
-     0.013841
+     0.000865,
+     0.00173,
+     0.00346
     ],
     "492960": [
-     0.000808,
-     0.001617,
-     0.003234
+     0.000202,
+     0.000404,
+     0.000808
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 85.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.011764705882352941,
      "floored": true,
      "capped": false
@@ -178,7 +178,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 289.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0034602076124567475,
      "floored": true,
      "capped": false
@@ -186,7 +186,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1237.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0008084074373484236,
      "floored": true,
      "capped": false
@@ -223,26 +223,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007299,
-     0.014599,
-     0.029197
+     0.001824,
+     0.003649,
+     0.007299
     ],
     "123240": [
-     0.001529,
-     0.003058,
-     0.006116
+     0.000382,
+     0.000764,
+     0.001529
     ],
     "492960": [
-     0.000709,
-     0.001419,
-     0.002838
+     0.000177,
+     0.000354,
+     0.000709
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 137,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0072992700729927005,
      "floored": true,
      "capped": false
@@ -250,7 +250,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 654,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0015290519877675841,
      "floored": true,
      "capped": false
@@ -258,7 +258,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1409.5,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.000709471443774388,
      "floored": true,
      "capped": false
@@ -295,26 +295,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007519,
-     0.015038,
-     0.030075
+     0.001879,
+     0.003759,
+     0.007518
     ],
     "123240": [
-     0.001701,
-     0.003401,
-     0.006803
+     0.000425,
+     0.00085,
+     0.0017
     ],
     "492960": [
-     0.000683,
-     0.001366,
-     0.002732
+     0.00017,
+     0.000341,
+     0.000683
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 133,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.007518796992481203,
      "floored": true,
      "capped": false
@@ -322,7 +322,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 588.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0017006802721088435,
      "floored": true,
      "capped": false
@@ -330,7 +330,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1464.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0006830601092896175,
      "floored": true,
      "capped": false
@@ -367,26 +367,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007194,
-     0.014388,
-     0.028777
+     0.001798,
+     0.003597,
+     0.007194
     ],
     "123240": [
-     0.001443,
-     0.002886,
-     0.005772
+     0.00036,
+     0.000721,
+     0.001443
     ],
     "492960": [
-     0.000366,
-     0.000732,
-     0.001463
+     9.1e-05,
+     0.000182,
+     0.000365
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 139,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.007194244604316547,
      "floored": true,
      "capped": false
@@ -394,7 +394,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 693.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.001443001443001443,
      "floored": true,
      "capped": false
@@ -402,7 +402,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 2734.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.000365764447695684,
      "floored": true,
      "capped": false
@@ -441,26 +441,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.011765,
-     0.023529,
-     0.047059
+     0.002941,
+     0.005882,
+     0.011764
     ],
     "123240": [
-     0.00346,
-     0.00692,
-     0.013841
+     0.000865,
+     0.00173,
+     0.00346
     ],
     "492960": [
-     0.000808,
-     0.001617,
-     0.003234
+     0.000202,
+     0.000404,
+     0.000808
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 85.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.011764705882352941,
      "floored": true,
      "capped": false
@@ -468,7 +468,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 289.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0034602076124567475,
      "floored": true,
      "capped": false
@@ -476,7 +476,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1237.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0008084074373484236,
      "floored": true,
      "capped": false
@@ -513,26 +513,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007299,
-     0.014599,
-     0.029197
+     0.001824,
+     0.003649,
+     0.007299
     ],
     "123240": [
-     0.001529,
-     0.003058,
-     0.006116
+     0.000382,
+     0.000764,
+     0.001529
     ],
     "492960": [
-     0.000709,
-     0.001419,
-     0.002838
+     0.000177,
+     0.000354,
+     0.000709
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 137,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0072992700729927005,
      "floored": true,
      "capped": false
@@ -540,7 +540,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 654,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0015290519877675841,
      "floored": true,
      "capped": false
@@ -548,7 +548,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1409.5,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.000709471443774388,
      "floored": true,
      "capped": false
@@ -585,26 +585,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007519,
-     0.015038,
-     0.030075
+     0.001879,
+     0.003759,
+     0.007518
     ],
     "123240": [
-     0.001701,
-     0.003401,
-     0.006803
+     0.000425,
+     0.00085,
+     0.0017
     ],
     "492960": [
-     0.000683,
-     0.001366,
-     0.002732
+     0.00017,
+     0.000341,
+     0.000683
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 133,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.007518796992481203,
      "floored": true,
      "capped": false
@@ -612,7 +612,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 588.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0017006802721088435,
      "floored": true,
      "capped": false
@@ -620,7 +620,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 1464.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.0006830601092896175,
      "floored": true,
      "capped": false
@@ -657,26 +657,26 @@
    ],
    "loss_thresholds": {
     "24648": [
-     0.007194,
-     0.014388,
-     0.028777
+     0.001798,
+     0.003597,
+     0.007194
     ],
     "123240": [
-     0.001443,
-     0.002886,
-     0.005772
+     0.00036,
+     0.000721,
+     0.001443
     ],
     "492960": [
-     0.000366,
-     0.000732,
-     0.001463
+     9.1e-05,
+     0.000182,
+     0.000365
     ]
    },
    "loss_calibration": {
     "24648": {
      "p99": 0.0,
      "median_sent": 139,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.007194244604316547,
      "floored": true,
      "capped": false
@@ -684,7 +684,7 @@
     "123240": {
      "p99": 0.0,
      "median_sent": 693.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.001443001443001443,
      "floored": true,
      "capped": false
@@ -692,7 +692,7 @@
     "492960": {
      "p99": 0.0,
      "median_sent": 2734.0,
-     "rule": "p99, count floor",
+     "rule": "p99 zero: one loss grades 0",
      "one_loss_fraction": 0.000365764447695684,
      "floored": true,
      "capped": false
