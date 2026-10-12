@@ -430,6 +430,9 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           softer loss thresholds, see A2A_SOFT_ORACLE) on
 #                           the four EP64 2 MiB loss cells and their healthy
 #                           pair, seeds 301-303, whatever the gate admitted
+#   a2a_gate_reps           reps_oracle (REPS over the spines the switches'
+#                           state shows no fault on) and reps on the 28 cells
+#                           and their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -557,8 +560,13 @@ A2A_SCOPES = {
 A2A_POOL_HOLD_ARMS = ("graded_per_receiver_mix",)
 # Stages that run a2a_tuning's settings, and the arms each tunes.
 A2A_TUNING_STAGES = {"a2a_tuning": A2A_TUNED_ARMS, "a2a_tuning_mix": ("graded_per_receiver_mix",)}
+# reps_oracle: REPS under spray_uniform, leaving out the spines the
+# switches' state shows a fault on; REPS's buffer_size and
+# freezing_timeout_ns at the defaults the reps arm runs at.
+A2A_REPS_ORACLE = "reps_oracle"
+A2A_GATE_REPS_ARMS = (A2A_REPS_ORACLE, "reps")
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
-              "a2a_comparison")
+              "a2a_comparison", "a2a_gate_reps")
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -615,6 +623,8 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
 
     if arm in ("uniform",) + A2A_FIXED_ARMS:
         return balancing(arm, 0, None)
+    if arm == A2A_REPS_ORACLE:
+        return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
     if arm == A2A_SOFT_ORACLE:
         values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting)
         values["loss_thresholds"] = list(A2A_SOFT_LOSS_THRESHOLDS)
@@ -723,6 +733,10 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             for arm, setting in arms:
                 for condition in ("healthy",) + A2A_FAULTS:
                     add(arm, group, size, condition, seed, setting)
+    elif stage == "a2a_gate_reps":
+        for (group, size), seed, arm in itertools.product(A2A_CELLS, A2A_SEEDS["comparison"], A2A_GATE_REPS_ARMS):
+            for condition in ("healthy",) + A2A_FAULTS:
+                add(arm, group, size, condition, seed)
     elif stage in A2A_TUNING_STAGES:
         group, size, headline = a2a_headline(calibration)
         for seed, arm in itertools.product(A2A_SEEDS["tuning"], A2A_TUNING_STAGES[stage]):

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps)
         required: true
         type: string
       record_filter:
@@ -287,6 +287,8 @@ jobs:
         path: profiles
 
     - name: Tabulate
+      env:
+        STAGES: ${{ inputs.stages }}
       run: |
         set -euo pipefail
         mkdir -p results
@@ -297,6 +299,11 @@ jobs:
         python3 incast/analyze.py cost --runs results/runs.json --out-root results \
           --reference graded_per_connection > results/cost.json
         cat results/report.md >> "$GITHUB_STEP_SUMMARY"
+        if [[ ",${STAGES// /}," == *,a2a_gate_reps,* ]]; then
+          python3 incast/analyze.py a2a_gate_reps --runs results/runs.json --out-root results \
+            --markdown results/a2a_gate_reps.md > results/a2a_gate_reps.json
+          cat results/a2a_gate_reps.md >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     # Best-effort: the artifacts above are the copy that always exists, and
     # a results tarball can exceed GitHub's 2 GiB asset limit.

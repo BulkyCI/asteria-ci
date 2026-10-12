@@ -12,6 +12,8 @@
     analyze.py cost --runs RUNS.json --out-root DIR --reference ARM [--stage S]  transient cost table
     analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
     analyze.py a2a_gate --runs RUNS.json... --out-root DIR [--json]     Phase 9 oracle-headroom gate, a row per cell
+    analyze.py a2a_gate_reps --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     reps_oracle against reps, a row per cell
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -25,6 +27,11 @@ fraction is 1 - cost / cost(uniform) per seed on the same (group, size,
 condition) cell. Those cells follow the transient cells in cost's output. The
 gate admits a cell when the oracle's mean primary cost is at most half of
 uniform's and the oracle beats uniform on primary cost by the seed rule.
+a2a_gate_reps reads the a2a_gate_reps stage's runs alone (--stage) and
+gives each cell the mean primary cost of reps_oracle and of reps, and the
+verdict "data_helps" when reps_oracle beats reps on primary cost by the
+seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
+seeds with a known cost).
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -681,6 +688,56 @@ def a2a_gate(cells: list[dict], oracle: str = A2A_ORACLE, uniform: str = "unifor
     return rows
 
 
+A2A_REPS_ORACLE = "reps_oracle"
+
+
+def a2a_gate_reps(cells: list[dict], oracle: str = A2A_REPS_ORACLE, reps: str = "reps") -> list[dict]:
+    """Per cell, reps_oracle's and reps's per-seed and mean primary cost and
+    the verdict: "data_helps" when reps_oracle beats reps by the seed rule
+    on the same three seeds, "seed_rule_not_met" when it does not, None
+    while either arm lacks three seeds with a known cost."""
+    rows = []
+    for cell in cells:
+        o, r = cell["arms"].get(oracle), cell["arms"].get(reps)
+        row = {"group": cell["group"], "size": cell["size"], "condition": cell["condition"],
+               "reps_oracle_cost_ns": None if o is None else o["cost_ns"],
+               "reps_cost_ns": None if r is None else r["cost_ns"],
+               "reps_oracle_mean_ns": None, "reps_mean_ns": None, "verdict": None}
+        readable = (
+            o is not None and r is not None and o["seeds"] == r["seeds"] and len(o["seeds"]) == 3
+            and None not in o["cost_ns"] and None not in r["cost_ns"]
+        )
+        if readable:
+            row.update(reps_oracle_mean_ns=o["cost_ns_mean"], reps_mean_ns=r["cost_ns_mean"],
+                       verdict="data_helps" if beats(o["cost_ns"], r["cost_ns"]) else "seed_rule_not_met")
+        rows.append(row)
+    return rows
+
+
+def _us(value) -> str:
+    if value is None:
+        return "-"
+    return "inf" if value == float("inf") else f"{value / 1000:,.1f}"
+
+
+def gate_reps_markdown(rows: list[dict]) -> str:
+    lines = [
+        "| group | size | condition | reps_oracle cost us (seeds) | reps cost us (seeds) "
+        "| reps_oracle mean us | reps mean us | verdict |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for row in rows:
+        def seeds(values):
+            return "-" if values is None else ", ".join(_us(v) for v in values)
+
+        lines.append(
+            f"| {row['group']} | {row['size']} | {row['condition']} | {seeds(row['reps_oracle_cost_ns'])} "
+            f"| {seeds(row['reps_cost_ns'])} | {_us(row['reps_oracle_mean_ns'])} | {_us(row['reps_mean_ns'])} "
+            f"| {row['verdict'] or 'unreadable'} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration and a2a_calibration.
 
@@ -863,10 +920,10 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
-    for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate"):
+    for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
-                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate") else None)
+                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -876,6 +933,9 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
+        if name == "a2a_gate_reps":
+            x.add_argument("--stage", default="a2a_gate_reps")
+            x.add_argument("--markdown", type=Path)
         if name == "a2a_calibrate":
             x.add_argument("--into", type=Path, default=Path(__file__).resolve().parent / "a2a_calibration.json")
     arguments = parser.parse_args()
@@ -899,6 +959,14 @@ def main() -> int:
         else:
             for row in verdicts:
                 print(gate_line(row))
+        return 0
+    if arguments.command == "a2a_gate_reps":
+        rows = [r for r in a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+                if r["arm"] in (A2A_REPS_ORACLE, "reps")]
+        verdicts = a2a_gate_reps(a2a_cost_cells(rows))
+        if arguments.markdown:
+            arguments.markdown.write_text(gate_reps_markdown(verdicts))
+        print(json.dumps(verdicts, indent=1))
         return 0
     if arguments.command in ("calibrate", "gains"):
         existing = json.loads(arguments.into.read_text()) if arguments.into and arguments.into.exists() else {}

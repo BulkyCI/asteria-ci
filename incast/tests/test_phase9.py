@@ -34,11 +34,13 @@ class Stages(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(
             self.counts(None, None),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
+             "a2a_gate_reps": 192},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
+             "a2a_gate_reps": 192},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -276,6 +278,39 @@ def gate_rows(uniform_costs, oracle_costs, healthy=1000):
             rows.append({**run(arm, "ep64", "2m", "halfrate_up", seed),
                          "iterations_ns": None if cost is None else [healthy + cost, healthy + cost]})
     return rows
+
+
+class GateReps(unittest.TestCase):
+    def rows(self, oracle_costs, reps_costs, healthy=1000):
+        rows = []
+        for arm, costs in (("reps_oracle", oracle_costs), ("reps", reps_costs)):
+            for seed, cost in zip((301, 302, 303), costs):
+                rows.append({**run(arm, "ep64", "256k", "healthy", seed, "a2a_gate_reps"),
+                             "iterations_ns": [healthy, healthy]})
+                rows.append({**run(arm, "ep64", "256k", "loss1e2_up", seed, "a2a_gate_reps"),
+                             "iterations_ns": None if cost is None else [healthy + cost, healthy + cost]})
+        (row,) = analyze.a2a_gate_reps(analyze.a2a_cost_cells(rows))
+        return row
+
+    def test_verdicts(self):
+        row = self.rows([100, 110, 120], [300, 310, 320])
+        self.assertEqual((row["reps_oracle_mean_ns"], row["reps_mean_ns"], row["verdict"]), (110, 310, "data_helps"))
+        self.assertEqual(self.rows([100, 300, 120], [300, 310, 320])["verdict"], "seed_rule_not_met")
+        # An incomplete run costs infinity, so it is read, not unreadable.
+        self.assertEqual(self.rows([100, None, 120], [300, 310, 320])["verdict"], "seed_rule_not_met")
+        (empty,) = analyze.a2a_gate_reps([{"group": "ep64", "size": "256k", "condition": "loss1e2_up", "arms": {}}])
+        self.assertIsNone(empty["verdict"])
+        self.assertIn("| data_helps |", analyze.gate_reps_markdown([row]))
+
+    def test_stage_profiles(self):
+        runs = profiles.a2a_stage_runs("a2a_gate_reps", CALIBRATION, TUNING)
+        self.assertEqual({r["arm"] for r in runs}, {"reps_oracle", "reps"})
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual(len({(r["group"], r["size"], r["condition"]) for r in runs}), 32)
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, CALIBRATION)["network"]["load_balancing"] for r in runs}
+        self.assertEqual(by_arm["reps_oracle"],
+                         {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"})
+        self.assertEqual(by_arm["reps"], {"mode": "ev_hash", "selector": "reps"})
 
 
 class Gate(unittest.TestCase):
