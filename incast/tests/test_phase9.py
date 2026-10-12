@@ -34,11 +34,11 @@ class Stages(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(
             self.counts(None, None),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 84, "a2a_comparison": 192},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 192},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
-            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 84, "a2a_comparison": 576},
+            {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 168, "a2a_comparison": 576},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3 seeds.
@@ -74,12 +74,36 @@ class Stages(unittest.TestCase):
         self.assertEqual(balancing["loss_thresholds"], [0.01, 0.02, 0.04])
         self.assertEqual(balancing["congestion_thresholds"], [0.1, 0.2, 0.4])
         self.assertNotIn("sender_pool_weight", balancing)
+        self.assertEqual(balancing["held_exploration"], "none")
+        self.assertNotIn("held_sentinel_interval_ns", balancing)
+        self.assertNotIn("pool_decay_interval_ns", balancing)
         mix = next(r for r in profiles.a2a_stage_runs("a2a_comparison", CALIBRATION, TUNING)
                    if r["arm"] == "graded_per_receiver_mix")
         balancing = profiles.a2a_stage_profile(mix, CALIBRATION)["network"]["load_balancing"]
         self.assertEqual((balancing["sender_pool_weight"], balancing["loss_interval_ns"]), (0.75, 123240))
         self.assertEqual(balancing["loss_thresholds"], [0.01, 0.02, 0.04])
         self.assertEqual(balancing["trim_thresholds"], [0.03, 0.06, 0.12])
+        self.assertEqual(balancing["held_exploration"], "sentinel")
+        self.assertEqual(balancing["held_sentinel_interval_ns"], profiles.A2A_SENTINEL_INTERVAL_NS)
+        self.assertEqual(balancing["pool_decay_interval_ns"], 2 * profiles.BASE_RTT_NS)
+        conn = next(r for r in profiles.a2a_stage_runs("a2a_comparison", CALIBRATION, TUNING)
+                    if r["arm"] == "graded_per_connection")
+        balancing = profiles.a2a_stage_profile(conn, CALIBRATION)["network"]["load_balancing"]
+        self.assertEqual(balancing["held_exploration"], "sentinel")
+        self.assertNotIn("pool_decay_interval_ns", balancing)
+
+    def test_tuning_sweeps_sentinel_and_pool_decay(self):
+        runs = profiles.a2a_stage_runs("a2a_tuning", None, None)
+        settings = {(r["arm"], json.dumps(r["setting"], sort_keys=True)) for r in runs}
+        self.assertEqual(len(settings), 84)
+        for run_ in runs:
+            balancing = profiles.a2a_stage_profile(run_, None)["network"]["load_balancing"]
+            self.assertEqual(balancing["held_sentinel_interval_ns"], run_["setting"]["held_sentinel_interval_ns"])
+            self.assertEqual("pool_decay_interval_ns" in balancing, balancing.get("sender_pool_weight", 0) > 0)
+        sentinels = {r["setting"]["held_sentinel_interval_ns"] for r in runs}
+        self.assertEqual(sentinels, {24648, 123240, 1_000_000})
+        decays = {r["setting"].get("pool_decay_interval_ns") for r in runs if r["arm"] == "graded_per_receiver_mix"}
+        self.assertEqual(decays, {24648, 123240})
 
     def test_calibration_runs_use_defaults_and_trace(self):
         runs = profiles.a2a_stage_runs("a2a_calibration", CALIBRATION, None)
@@ -307,7 +331,7 @@ class A2aCalibrate(unittest.TestCase):
         balancing = profiles.a2a_balancing("graded_per_receiver_mix", "ep64", "2m", result,
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
         self.assertEqual(balancing["loss_thresholds"], [0.004, 0.008, 0.016])
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 84)
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 168)
 
     def test_oracle_loss_has_no_count_floor(self):
         # Spine 3 reads a ground-truth loss of 1e-3 in every report, an
