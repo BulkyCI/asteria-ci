@@ -35,12 +35,12 @@ class Stages(unittest.TestCase):
         self.assertEqual(
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
-             "a2a_gate_reps": 192},
+             "a2a_gate_reps": 192, "a2a_candidates": 288},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
-             "a2a_gate_reps": 192},
+             "a2a_gate_reps": 192, "a2a_candidates": 480},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -142,7 +142,7 @@ class Stages(unittest.TestCase):
         for stage in profiles.A2A_STAGES:
             for run_ in profiles.a2a_stage_runs(stage, CALIBRATION, TUNING):
                 balancing = profiles.a2a_stage_profile(run_, CALIBRATION)["network"]["load_balancing"]
-                if run_["arm"] == "graded_per_receiver_mix":
+                if run_["arm"] in ("graded_per_receiver_mix", "mix_floor1"):
                     self.assertIs(balancing["pool_hold_propagates"], True)
                     self.assertGreater(balancing["sender_pool_weight"], 0)
                 else:
@@ -278,6 +278,88 @@ def gate_rows(uniform_costs, oracle_costs, healthy=1000):
             rows.append({**run(arm, "ep64", "2m", "halfrate_up", seed),
                          "iterations_ns": None if cost is None else [healthy + cost, healthy + cost]})
     return rows
+
+
+class Candidates(unittest.TestCase):
+    def test_runs_and_settings(self):
+        tuning = json.loads((Path(profiles.__file__).parent / "a2a_tuning.json").read_text())
+        calibration = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
+        # 22 admitted cells and 4 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(runs), (22 + 4) * 5 * 3)
+        self.assertLessEqual({r["condition"] for r in runs}, {"healthy", *profiles.A2A_FAULTS})
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
+                  for r in runs if (r["group"], r["size"], r["condition"]) == ("ep64", "256k", "loss1e2_up")}
+        mix = tuning["graded_per_receiver_mix"]
+        thresholds = calibration["per_receiver"]["ep64-256k"]["loss_thresholds"][str(mix["loss_interval_ns"])]
+        hold = {"mode": "spray_uniform", "loss_thresholds": thresholds, "held_exploration": "sentinel",
+                "loss_interval_ns": mix["loss_interval_ns"], "loss_hold_clean_sentinels": 1024,
+                "held_sentinel_interval_ns": 1_000_000}
+        self.assertEqual(by_arm["reps_hold_leaf"], {**hold, "selector": "reps_hold", "hold_scope": "leaf"})
+        self.assertEqual(by_arm["reps_hold_host"], {**hold, "selector": "reps_hold", "hold_scope": "host"})
+        self.assertEqual(by_arm["reps_flow_hold"], {**hold, "selector": "reps_flow_hold"})
+        self.assertEqual(by_arm["mix_floor1"], {**by_arm["mix_floor1"], "congestion_grade_floor": 1,
+                                                "pool_hold_propagates": True, **mix})
+        self.assertEqual(by_arm["shared_floor1"]["congestion_grade_floor"], 1)
+        self.assertNotIn("pool_hold_propagates", by_arm["shared_floor1"])
+        self.assertEqual(by_arm["shared_floor1"]["sender_pool_weight"], 1.0)
+
+
+class Reaction(unittest.TestCase):
+    def trace(self, root, header, rows):
+        (root / "ns3").mkdir(parents=True)
+        (root / "ns3" / "spine_losses.csv").write_text(header + "\n" + "".join(",".join(map(str, r)) + "\n" for r in rows))
+
+    def test_share_below_a_sixteenth_after_onset(self):
+        onset = analyze.DEGRADE_AT_NS
+        interval = 100_000
+        first = onset // interval  # the interval holding the onset
+        rows = []
+        for index, share3 in ((first - 2, 0), (first, 10), (first + 1, 7), (first + 2, 5)):
+            end = (index + 1) * interval
+            # host 0 (leaf 0) sends 100 per interval, spine 3 share3 of them;
+            # host 9 (leaf 1) sends only on spine 3.
+            rows += [(end, 0, 3, share3, 0, 3), (end, 0, 1, 100 - share3, 0, 3), (end, 9, 3, 50, 0, 3)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.trace(root, "time_ns,rank,spine,sent,lost,grade", rows)
+            result = analyze.reaction(root, "loss1e2_up", interval)
+            self.assertEqual(result, {"reaction_ns": (first + 3) * interval - onset, "share_basis": "hosts of leaf 0"})
+            # Down: without destination_leaf, the hosts off leaf 1 (host 0 alone here).
+            self.assertEqual(analyze.reaction(root, "loss1e2_down", interval)["share_basis"], "hosts off leaf 1")
+            self.assertIsNone(analyze.reaction(root / "none", "loss1e2_up", interval)["reaction_ns"])
+
+    def test_destination_leaf_rows(self):
+        end = (analyze.DEGRADE_AT_NS // 1000 + 2) * 1000
+        rows = [(end, 0, 1, 3, 1, 0, 3), (end, 0, 1, 0, 99, 0, 3), (end, 0, 2, 3, 50, 0, 3), (end, 0, 2, 0, 50, 0, 3)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.trace(root, "time_ns,rank,destination_leaf,spine,sent,lost,grade", rows)
+            result = analyze.reaction(root, "loss1e2_down", 1000)
+        self.assertEqual(result, {"reaction_ns": end - analyze.DEGRADE_AT_NS, "share_basis": "destination_leaf 1"})
+
+    def test_early_cost(self):
+        onset = analyze.DEGRADE_AT_NS
+
+        def write(root, starts, completions, complete=True):
+            root.mkdir()
+            timing = {"complete": complete,
+                      "iteration_completion_ns": {str(i + 1): c for i, c in enumerate(completions)},
+                      "iteration_start_ns": {str(i + 1): s for i, s in enumerate(starts)}}
+            (root / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+            return root
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            starts = [0, onset - 1, onset + 100_000, onset + 400_000, onset + 600_000]
+            healthy = write(root / "h", starts, [100, 100, 100, 100, 100])
+            faulted = write(root / "f", starts, [100, 150, 170, 120, 900])
+            self.assertEqual(analyze.early_cost(faulted, healthy, "loss1e2_up"), 70 + 20)
+            # Structural's onset is 0: iteration 1 alone starts within 500 us of it.
+            self.assertEqual(analyze.early_cost(faulted, healthy, "structural"), 0)
+            incomplete = write(root / "i", starts, [100], complete=False)
+            self.assertEqual(analyze.early_cost(incomplete, healthy, "loss1e2_up"), float("inf"))
+            self.assertIsNone(analyze.early_cost(faulted, None, "loss1e2_up"))
 
 
 class GateReps(unittest.TestCase):

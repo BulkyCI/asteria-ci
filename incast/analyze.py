@@ -14,6 +14,8 @@
     analyze.py a2a_gate --runs RUNS.json... --out-root DIR [--json]     Phase 9 oracle-headroom gate, a row per cell
     analyze.py a2a_gate_reps --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      reps_oracle against reps, a row per cell
+    analyze.py a2a_candidates --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     cost and reaction per arm and cell
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -32,6 +34,26 @@ gives each cell the mean primary cost of reps_oracle and of reps, and the
 verdict "data_helps" when reps_oracle beats reps on primary cost by the
 seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
 seeds with a known cost).
+
+a2a_candidates gives every arm of the runs given (all stages unless --stage)
+per cell its per-seed and mean primary and tail cost, and two measures per
+faulted run:
+
+* reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
+  the end of the first sender loss interval ending after it in which spine
+  3's share of the sends falls below 1/16, from ns3/spine_losses.csv summed
+  over the senders of the faulted link: the hosts of leaf 0 for an _up
+  fault; for a _down fault the rows with destination_leaf 1 when the trace
+  has that column, otherwise the hosts off leaf 1; every host for
+  structural. Intervals are the run's loss_interval_ns. None when the run
+  writes no trace (ns3/spine_arrivals.csv holds cumulative counters only at
+  the link events, so it gives no share over time) or the share never
+  falls below 1/16.
+* early_cost_ns: the sum, over the iterations that start within 500 us of
+  the onset, of the iteration's completion minus the paired healthy run's
+  completion of the same iteration; infinite when the faulted run is
+  incomplete, None when no iteration starts in the window or the healthy
+  run lacks one of them.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -637,6 +659,7 @@ def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str 
             table[label] = {
                 "setting": by_seed[seeds[0]]["setting"],
                 "stages": sorted({by_seed[x]["stage"] for x in seeds}),
+                "keys": [by_seed[x]["key"] for x in seeds],
                 "seeds": seeds,
                 "cost_ns": cost,
                 "cost_ns_mean": mean(cost),
@@ -735,6 +758,132 @@ def gate_reps_markdown(rows: list[dict]) -> str:
             f"| {seeds(row['reps_cost_ns'])} | {_us(row['reps_oracle_mean_ns'])} | {_us(row['reps_mean_ns'])} "
             f"| {row['verdict'] or 'unreadable'} |"
         )
+    return "\n".join(lines) + "\n"
+
+
+# Reaction measures of a faulted all-to-all run (a2a_candidates).
+
+A2A_SHARE_LIMIT = 1 / 16
+A2A_EARLY_WINDOW_NS = 500_000
+A2A_HOSTS_PER_LEAF_OF_TRACE = 8
+A2A_DEFAULT_LOSS_INTERVAL_NS = 2 * BASE_RTT_NS
+
+
+def fault_onset_ns(condition: str) -> int:
+    return 0 if condition == "structural" else DEGRADE_AT_NS
+
+
+def faulted_share_rows(condition: str, leaf_column: bool):
+    """The trace rows of the senders of the faulted link, and the basis."""
+    hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
+    if condition == "structural":
+        return (lambda row: True), "every host"
+    if condition.endswith("_up"):
+        return (lambda row: int(row["rank"]) // hosts == 0), "hosts of leaf 0"
+    if leaf_column:
+        return (lambda row: int(row["destination_leaf"]) == 1), "destination_leaf 1"
+    return (lambda row: int(row["rank"]) // hosts != 1), "hosts off leaf 1"
+
+
+def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE) -> dict:
+    """reaction_ns (see the module docstring) and the rows' basis."""
+    path = directory / "ns3" / "spine_losses.csv"
+    if not path.exists():
+        return {"reaction_ns": None, "share_basis": None}
+    onset = fault_onset_ns(condition)
+    totals: dict[int, int] = defaultdict(int)
+    faulted: dict[int, int] = defaultdict(int)
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        keep, basis = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
+        for row in reader:
+            if not keep(row):
+                continue
+            index = (int(row["time_ns"]) - 1) // interval_ns
+            totals[index] += int(row["sent"])
+            if int(row["spine"]) == spine:
+                faulted[index] += int(row["sent"])
+    for index in sorted(totals):
+        end = (index + 1) * interval_ns
+        if end > onset and totals[index] and faulted[index] / totals[index] < A2A_SHARE_LIMIT:
+            return {"reaction_ns": end - onset, "share_basis": basis}
+    return {"reaction_ns": None, "share_basis": basis}
+
+
+def iteration_timing(directory: Path) -> dict[int, tuple[int, int]] | None:
+    """{iteration: (start, completion)} of a run's completed iterations, the
+    starts from summary.json or, for a summary that has none, from
+    telemetry/collective_events.csv; None when the run is incomplete."""
+    timing = json.loads((directory / "summary.json").read_text()).get("all_to_all") or {}
+    if not timing.get("complete"):
+        return None
+    completions = {int(i): v for i, v in timing.get("iteration_completion_ns", {}).items()}
+    starts = {int(i): v for i, v in (timing.get("iteration_start_ns") or {}).items()}
+    events = directory / "telemetry" / "collective_events.csv"
+    if not starts and events.exists():
+        with events.open() as handle:
+            for row in csv.DictReader(handle):
+                if row["collective_type"] == "all_to_all":
+                    step, start = int(row["training_step"]), int(row["start_time_ns"])
+                    starts[step] = min(starts.get(step, start), start)
+    return {i: (starts[i], completions[i]) for i in completions if i in starts}
+
+
+def early_cost(directory: Path, healthy: Path | None, condition: str) -> float | None:
+    """early_cost_ns (see the module docstring)."""
+    if healthy is None or not (healthy / "summary.json").exists():
+        return None
+    reference = iteration_timing(healthy)
+    if reference is None:
+        return None
+    timing = iteration_timing(directory)
+    if timing is None:
+        return float("inf")
+    onset = fault_onset_ns(condition)
+    window = [i for i, (start, _) in timing.items() if onset <= start <= onset + A2A_EARLY_WINDOW_NS]
+    if not window or any(i not in reference for i in window):
+        return None
+    return sum(timing[i][1] - reference[i][1] for i in window)
+
+
+def a2a_candidates(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_cost_cells with every arm's reaction_ns and early_cost_ns per seed
+    and their means over the seeds that have one."""
+    measured = {}
+    for row in a2a_costs(rows):
+        interval = (row.get("setting") or {}).get("loss_interval_ns", A2A_DEFAULT_LOSS_INTERVAL_NS)
+        directory = out_root / row["key"]
+        healthy = None if row["healthy_key"] is None else out_root / row["healthy_key"]
+        measured[row["key"]] = {**reaction(directory, row["condition"], interval),
+                                "early_cost_ns": early_cost(directory, healthy, row["condition"])}
+    cells = a2a_cost_cells(rows)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in ("reaction_ns", "early_cost_ns"):
+                values = [measured[k][name] for k in entry["keys"]]
+                entry[name] = values
+                known = [v for v in values if v is not None]
+                entry[f"{name}_mean"] = sum(known) / len(known) if known else None
+                entry[f"{name}_count"] = len(known)
+            entry["share_basis"] = next((measured[k]["share_basis"] for k in entry["keys"]
+                                         if measured[k]["share_basis"]), None)
+    return cells
+
+
+def candidates_markdown(cells: list[dict]) -> str:
+    lines = [
+        "| group | size | condition | arm | cost mean us | tail cost mean us "
+        "| reaction mean us (seeds) | early cost mean us (seeds) |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} | {_us(entry['tail_cost_ns_mean'])} "
+                f"| {_us(entry['reaction_ns_mean'])} ({entry['reaction_ns_count']}) "
+                f"| {_us(entry['early_cost_ns_mean'])} ({entry['early_cost_ns_count']}) |"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -920,10 +1069,11 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
-    for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps"):
+    for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
+                 "a2a_candidates"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
-                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps") else None)
+                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -935,6 +1085,9 @@ def main() -> int:
             x.add_argument("--json", action="store_true")
         if name == "a2a_gate_reps":
             x.add_argument("--stage", default="a2a_gate_reps")
+            x.add_argument("--markdown", type=Path)
+        if name == "a2a_candidates":
+            x.add_argument("--stage")
             x.add_argument("--markdown", type=Path)
         if name == "a2a_calibrate":
             x.add_argument("--into", type=Path, default=Path(__file__).resolve().parent / "a2a_calibration.json")
@@ -967,6 +1120,12 @@ def main() -> int:
         if arguments.markdown:
             arguments.markdown.write_text(gate_reps_markdown(verdicts))
         print(json.dumps(verdicts, indent=1))
+        return 0
+    if arguments.command == "a2a_candidates":
+        cells = a2a_candidates(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(candidates_markdown(cells))
+        print(json.dumps(cells, indent=1))
         return 0
     if arguments.command in ("calibrate", "gains"):
         existing = json.loads(arguments.into.read_text()) if arguments.into and arguments.into.exists() else {}

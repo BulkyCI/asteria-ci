@@ -433,6 +433,8 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_gate_reps           reps_oracle (REPS over the spines the switches'
 #                           state shows no fault on) and reps on the 28 cells
 #                           and their healthy pairs, seeds 301-303
+#   a2a_candidates          the A2A_CANDIDATE_ARMS on the admitted cells and
+#                           their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -565,8 +567,29 @@ A2A_TUNING_STAGES = {"a2a_tuning": A2A_TUNED_ARMS, "a2a_tuning_mix": ("graded_pe
 # freezing_timeout_ns at the defaults the reps arm runs at.
 A2A_REPS_ORACLE = "reps_oracle"
 A2A_GATE_REPS_ARMS = (A2A_REPS_ORACLE, "reps")
+# a2a_candidates' arms. The REPS loss-hold arms (spray_uniform, selector
+# reps_hold or reps_flow_hold, REPS's buffer_size and freezing_timeout_ns at
+# their defaults, held_exploration sentinel) take loss_interval_ns,
+# loss_hold_clean_sentinels and held_sentinel_interval_ns from
+# a2a_tuning.json's graded_per_receiver_mix setting and its loss_thresholds
+# at that interval from the per_receiver calibration, as the mix arm does;
+# reps_hold's hold_scope keys the hold per destination leaf or per host, and
+# reps_flow_hold holds per queue pair. The floor arms are a2a_tuning.json's
+# setting of their base arm with congestion_grade_floor 1 (the mix arm
+# keeps pool_hold_propagates, A2A_POOL_HOLD_ARMS).
+A2A_REPS_HOLD_ARMS = {
+    "reps_hold_leaf": ("reps_hold", "leaf"),
+    "reps_hold_host": ("reps_hold", "host"),
+    "reps_flow_hold": ("reps_flow_hold", None),
+}
+A2A_FLOOR_ARMS = {
+    "shared_floor1": "graded_per_receiver_shared",
+    "mix_floor1": "graded_per_receiver_mix",
+}
+A2A_CONGESTION_GRADE_FLOOR = 1
+A2A_CANDIDATE_ARMS = tuple(A2A_REPS_HOLD_ARMS) + tuple(A2A_FLOOR_ARMS)
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
-              "a2a_comparison", "a2a_gate_reps")
+              "a2a_comparison", "a2a_gate_reps", "a2a_candidates")
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -625,6 +648,22 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return balancing(arm, 0, None)
     if arm == A2A_REPS_ORACLE:
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
+    if arm in A2A_REPS_HOLD_ARMS:
+        # The setting holds the loss interval, the clean sentinels, the
+        # sentinel interval and, for reps_hold, hold_scope.
+        selector, _ = A2A_REPS_HOLD_ARMS[arm]
+        setting = dict(setting or {})
+        entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
+        return {
+            "mode": "spray_uniform",
+            "selector": selector,
+            "loss_thresholds": _a2a_loss_thresholds(entry, setting["loss_interval_ns"]),
+            "held_exploration": "sentinel",
+            **setting,
+        }
+    if arm in A2A_FLOOR_ARMS:
+        # The setting is the base arm's with congestion_grade_floor.
+        return a2a_balancing(A2A_FLOOR_ARMS[arm], group, size, calibration, setting)
     if arm == A2A_SOFT_ORACLE:
         values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting)
         values["loss_thresholds"] = list(A2A_SOFT_LOSS_THRESHOLDS)
@@ -690,6 +729,35 @@ def a2a_tuning_settings(arm: str) -> list[dict[str, Any]]:
     return settings
 
 
+def a2a_candidate_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each candidate arm's setting; a floor arm is left out while
+    a2a_tuning.json has no setting for its base arm."""
+    mix = (tuning or {}).get("graded_per_receiver_mix") or {}
+    hold = {
+        "loss_interval_ns": mix.get("loss_interval_ns", A2A_REPORT_INTERVAL_NS),
+        "loss_hold_clean_sentinels": mix.get("loss_hold_clean_sentinels", A2A_LOSS_HOLD_CLEAN_SENTINELS),
+        "held_sentinel_interval_ns": mix.get("held_sentinel_interval_ns", A2A_SENTINEL_INTERVAL_NS),
+    }
+    settings: dict[str, dict[str, Any]] = {}
+    for arm, (_, scope) in A2A_REPS_HOLD_ARMS.items():
+        settings[arm] = {**hold, **({} if scope is None else {"hold_scope": scope})}
+    for arm, base in A2A_FLOOR_ARMS.items():
+        if (tuning or {}).get(base):
+            settings[arm] = {**tuning[base], "congestion_grade_floor": A2A_CONGESTION_GRADE_FLOOR}
+    return settings
+
+
+def a2a_admitted_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+    """The (group, size, condition) cells a2a_tuning.json admits, every
+    cell without it."""
+    admitted = (tuning or {}).get("admitted")
+    return [
+        (group, size, condition)
+        for (group, size), condition in itertools.product(A2A_CELLS, A2A_FAULTS)
+        if admitted is None or f"{a2a_cell_name(group, size)}-{condition}" in admitted
+    ]
+
+
 def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                    tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Every run of a Phase 9 stage."""
@@ -743,13 +811,16 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             for setting in a2a_tuning_settings(arm):
                 for condition in (headline, "healthy"):
                     add(arm, group, size, condition, seed, setting, True)
+    elif stage == "a2a_candidates":
+        cells = a2a_admitted_cells(tuning)
+        pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_candidate_settings(tuning).items()):
+            for group, size, condition in cells:
+                add(arm, group, size, condition, seed, setting)
+            for group, size in pairs:
+                add(arm, group, size, "healthy", seed, setting)
     elif stage == "a2a_comparison":
-        admitted = (tuning or {}).get("admitted")
-        cells = [
-            (group, size, condition)
-            for (group, size), condition in itertools.product(A2A_CELLS, A2A_FAULTS)
-            if admitted is None or f"{a2a_cell_name(group, size)}-{condition}" in admitted
-        ]
+        cells = a2a_admitted_cells(tuning)
         pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
         arms = [(arm, (tuning or {}).get(arm)) for arm in A2A_TUNED_ARMS if (tuning or {}).get(arm)]
         arms += [(arm, None) for arm in A2A_FIXED_ARMS]

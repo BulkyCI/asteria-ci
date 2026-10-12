@@ -42,7 +42,8 @@ For workload kind all_to_all, completion comes from
 RUN_DIR/telemetry/collective_events.csv instead of fct.txt: per iteration
 (training_step), the collective's completion is the latest end_time_ns over
 the group's ranks minus the earliest start_time_ns, and summary.json's
-"all_to_all" holds every iteration's value and their mean, p50, p99 and max.
+"all_to_all" holds every iteration's value and their mean, p50, p99 and max,
+and every iteration's start (the earliest start_time_ns).
 The run is complete when every iteration has a row from every rank of the
 group. The windows are taken for leaf 0, where the probe's faulted link is.
 
@@ -231,6 +232,7 @@ def all_to_all_timing(path: Path, iterations: int, group: list[int]) -> dict:
         "first_start_ns": min((s[0] for s in spans.values()), default=None),
         "last_end_ns": max((s[1] for s in spans.values()), default=None),
         "iteration_completion_ns": {str(i): t for i, t in zip(done, times)},
+        "iteration_start_ns": {str(i): spans[i][0] for i in done},
         "mean_ns": sum(times) / len(times) if times else None,
         "p50_ns": nearest_rank(times, 0.50) if times else None,
         "p99_ns": nearest_rank(times, 0.99) if times else None,
