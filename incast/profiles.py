@@ -573,12 +573,12 @@ A2A_GATE_REPS_ARMS = (A2A_REPS_ORACLE, "reps")
 # loss_hold_clean_sentinels and held_sentinel_interval_ns from
 # a2a_tuning.json's graded_per_receiver_mix setting and its loss_thresholds
 # at that interval from the per_receiver calibration, as the mix arm does;
-# reps_hold's hold_scope keys the hold per destination leaf or per host, and
-# reps_flow_hold holds per queue pair. The floor arms are a2a_tuning.json's
+# reps_hold's hold_scope keys the hold per host, or per spine per host or per
+# destination leaf (auto), and reps_flow_hold holds per queue pair. The floor arms are a2a_tuning.json's
 # setting of their base arm with congestion_grade_floor 1 and nothing else:
 # mix_floor1 leaves pool_hold_propagates unset.
 A2A_REPS_HOLD_ARMS = {
-    "reps_hold_leaf": ("reps_hold", "leaf"),
+    "reps_hold_auto": ("reps_hold", "auto"),
     "reps_hold_host": ("reps_hold", "host"),
     "reps_flow_hold": ("reps_flow_hold", None),
 }

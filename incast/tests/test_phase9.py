@@ -287,6 +287,8 @@ class Candidates(unittest.TestCase):
         runs = profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
         # 22 admitted cells and 4 healthy pairs by 5 arms by 3 seeds.
         self.assertEqual(len(runs), (22 + 4) * 5 * 3)
+        self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto", "reps_hold_host", "reps_flow_hold",
+                                                    "shared_floor1", "mix_floor1"})
         self.assertLessEqual({r["condition"] for r in runs}, {"healthy", *profiles.A2A_FAULTS})
         by_arm = {r["arm"]: profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
                   for r in runs if (r["group"], r["size"], r["condition"]) == ("ep64", "256k", "loss1e2_up")}
@@ -295,7 +297,7 @@ class Candidates(unittest.TestCase):
         hold = {"mode": "spray_uniform", "loss_thresholds": thresholds, "held_exploration": "sentinel",
                 "loss_interval_ns": mix["loss_interval_ns"], "loss_hold_clean_sentinels": 1024,
                 "held_sentinel_interval_ns": 1_000_000}
-        self.assertEqual(by_arm["reps_hold_leaf"], {**hold, "selector": "reps_hold", "hold_scope": "leaf"})
+        self.assertEqual(by_arm["reps_hold_auto"], {**hold, "selector": "reps_hold", "hold_scope": "auto"})
         self.assertEqual(by_arm["reps_hold_host"], {**hold, "selector": "reps_hold", "hold_scope": "host"})
         self.assertEqual(by_arm["reps_flow_hold"], {**hold, "selector": "reps_flow_hold"})
         self.assertEqual(by_arm["mix_floor1"], {**by_arm["mix_floor1"], "congestion_grade_floor": 1, **mix})
