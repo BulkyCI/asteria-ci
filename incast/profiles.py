@@ -628,9 +628,8 @@ A2A_RS3_ERROR_RATE = 1e-2
 A2A_RS3_ON_NS = 50_000_000
 A2A_RS3_OFF_NS = 200_000_000
 A2A_RS3_CYCLE_NS = A2A_RS3_ON_NS + A2A_RS3_OFF_NS
-A2A_RS3_CYCLES = 4
+A2A_RS3_CYCLES = 3
 A2A_RS3_PERIOD_NS = {
-    ("ep64", "256k"): 670_700,  # 411.7 us completion + 259 us compute
     ("ep16", "2m"): 1_232_500,  # 739.5 us completion + 493 us compute
 }
 A2A_RS3_CELLS = tuple(A2A_RS3_PERIOD_NS)

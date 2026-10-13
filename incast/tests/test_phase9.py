@@ -35,12 +35,12 @@ class Stages(unittest.TestCase):
         self.assertEqual(
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
-             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 48},
+             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
-             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 48},
+             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -342,21 +342,21 @@ class Rs3(unittest.TestCase):
         self.runs = profiles.a2a_stage_runs("a2a_rs3", self.calibration, self.tuning)
 
     def test_runs(self):
-        # 2 cells by 4 arms by 3 seeds, faulted and healthy.
-        self.assertEqual(len(self.runs), 2 * 4 * 3 * 2)
+        # 1 cell by 4 arms by 3 seeds, faulted and healthy.
+        self.assertEqual(len(self.runs), 1 * 4 * 3 * 2)
         self.assertEqual({r["arm"] for r in self.runs}, set(profiles.A2A_RS3_ARMS))
-        self.assertEqual({(r["group"], r["size"]) for r in self.runs}, {("ep64", "256k"), ("ep16", "2m")})
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs}, {("ep16", "2m")})
         self.assertEqual({r["condition"] for r in self.runs}, {"healthy", "flap1e2_up"})
         self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
-        self.assertEqual(profiles.A2A_RS3_ITERATIONS, {("ep64", "256k"): 1493, ("ep16", "2m"): 813})
-        self.assertEqual(profiles.A2A_RS3_REPEAT, {("ep64", "256k"): 9, ("ep16", "2m"): 9})
+        self.assertEqual(profiles.A2A_RS3_ITERATIONS, {("ep16", "2m"): 610})
+        self.assertEqual(profiles.A2A_RS3_REPEAT, {("ep16", "2m"): 7})
         for r in self.runs:
             cell = (r["group"], r["size"])
             self.assertEqual(r["iterations"], profiles.A2A_RS3_ITERATIONS[cell])
-            # The healthy run covers the onset and four cycles.
+            # The healthy run covers the onset and three cycles.
             period = profiles.A2A_RS3_PERIOD_NS[cell]
-            self.assertGreaterEqual(r["iterations"] * period, profiles.DEGRADE_AT_NS + 4 * 250_000_000)
-            self.assertLess((r["iterations"] - 1) * period, profiles.DEGRADE_AT_NS + 4 * 250_000_000)
+            self.assertGreaterEqual(r["iterations"] * period, profiles.DEGRADE_AT_NS + 3 * 250_000_000)
+            self.assertLess((r["iterations"] - 1) * period, profiles.DEGRADE_AT_NS + 3 * 250_000_000)
             self.assertEqual("flap" in r, r["condition"] == "flap1e2_up")
 
     def test_profiles(self):
@@ -371,7 +371,7 @@ class Rs3(unittest.TestCase):
                 continue
             self.assertEqual(failures, [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
                                          "spine": 3, "leaf": 0, "direction": "up", "duration_ns": 50_000_000,
-                                         "repeat": 9, "period_ns": 250_000_000}])
+                                         "repeat": 7, "period_ns": 250_000_000}])
             by_arm[r["arm"]] = document["network"]["load_balancing"]
         candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
                       for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
