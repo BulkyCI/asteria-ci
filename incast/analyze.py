@@ -16,13 +16,15 @@
                                                      reps_oracle against reps, a row per cell
     analyze.py a2a_candidates --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      cost and reaction per arm and cell
+    analyze.py a2a_cycles --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     cost and re-admission per on- and off-period, per arm
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
 
 Phase 9 (all-to-all runs, those with a group): cost pairs each faulted run
-with the healthy run of the same arm and setting, group, size and seed, from
-any stage of the runs files given (the comparison reuses the gate's uniform
+with the healthy run of the same arm and setting, group, size, iteration
+count and seed, from any stage of the runs files given (the comparison reuses the gate's uniform
 and oracle runs). Primary cost is the mean iteration completion minus the
 pair's, tail cost the same on the p99 with linear interpolation; recovered
 fraction is 1 - cost / cost(uniform) per seed on the same (group, size,
@@ -65,6 +67,25 @@ faulted run:
   completion of the same iteration; infinite when the faulted run is
   incomplete, None when no iteration starts in the window or the healthy
   run lacks one of them.
+
+a2a_cycles reads the runs with a flapping link (a2a_rs3: a "flap" entry of
+start_ns, on_ns, period_ns and repeat in runs.json). Occurrence k's
+on-period is [start_ns + k period_ns, + on_ns) and its off-period runs from
+there to the next occurrence's start. Per faulted run and period:
+
+* cost_ns: the mean, over the iterations that start inside the period (by
+  summary.json's iteration starts), of the iteration's completion minus the
+  paired healthy run's completion of the same iteration; None when no
+  iteration starts in it or the healthy run lacks one of them, infinite
+  when the faulted run is incomplete.
+* readmission_ns (off-periods): from the off-period's start to the end of
+  the first sender loss interval starting at or after it, and ending by
+  the next on-period's start, in which spine 3's share of the sends of the
+  faulted link's senders (as reaction_ns reads them) is above 1/16; None
+  when the run writes no ns3/spine_losses.csv or no such interval comes.
+
+Per arm the table gives each period's per-seed values and their means over
+the seeds that have one.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -609,11 +630,11 @@ def a2a_costs(rows: list[dict]) -> list[dict]:
     """Every faulted all-to-all row with its primary cost (mean iteration
     completion minus the paired healthy run's) and tail cost (the same on the
     linearly interpolated p99), the pair being the healthy run of the same
-    arm and setting, group, size and seed, from any stage. Costs are None
+    arm and setting, group, size, iteration count and seed, from any stage. Costs are None
     when the healthy run is missing or incomplete and infinite when the
     faulted run is incomplete."""
     def pair(row):
-        return (_label(row), row["group"], row["size"], row["seed"])
+        return (_label(row), row["group"], row["size"], row.get("iterations"), row["seed"])
 
     healthy: dict[tuple, dict] = {}
     for row in rows:
@@ -955,6 +976,158 @@ def candidates_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def flap_periods(flap: dict) -> list[tuple[str, int, int, int | None]]:
+    """(kind, occurrence, start, end) of every on- and off-period of a
+    flapping link, in time order; the last off-period has no end."""
+    out = []
+    for k in range(flap["repeat"]):
+        start = flap["start_ns"] + k * flap["period_ns"]
+        out.append(("on", k, start, start + flap["on_ns"]))
+        last = k == flap["repeat"] - 1
+        out.append(("off", k, start + flap["on_ns"], None if last else start + flap["period_ns"]))
+    return out
+
+
+def _inside(time: int, start: int, end: int | None) -> bool:
+    return start <= time and (end is None or time < end)
+
+
+def period_costs(directory: Path, healthy: Path | None, periods) -> list[dict]:
+    """cost_ns and the iteration count of every period (see the module
+    docstring)."""
+    reference = None
+    if healthy is not None and (healthy / "summary.json").exists():
+        reference = iteration_timing(healthy)
+    timing = iteration_timing(directory)
+    out = []
+    for _, _, start, end in periods:
+        if timing is None:
+            out.append({"cost_ns": None if reference is None else float("inf"), "iterations": None})
+            continue
+        inside = [i for i, (s, _) in timing.items() if _inside(s, start, end)]
+        if not inside or reference is None or any(i not in reference for i in inside):
+            out.append({"cost_ns": None, "iterations": len(inside)})
+            continue
+        out.append({"cost_ns": sum(timing[i][1] - reference[i][1] for i in inside) / len(inside),
+                    "iterations": len(inside)})
+    return out
+
+
+def readmissions(directory: Path, condition: str, interval_ns: int, periods,
+                 spine: int = DEGRADED_SPINE) -> list[int | None]:
+    """readmission_ns of every off-period, None for an on-period (see the
+    module docstring)."""
+    path = directory / "ns3" / "spine_losses.csv"
+    if not path.exists():
+        return [None for _ in periods]
+    totals: dict[int, int] = defaultdict(int)
+    faulted: dict[int, int] = defaultdict(int)
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        keep, _ = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
+        for row in reader:
+            if not keep(row):
+                continue
+            index = (int(row["time_ns"]) - 1) // interval_ns
+            totals[index] += int(row["sent"])
+            if int(row["spine"]) == spine:
+                faulted[index] += int(row["sent"])
+    readmitted = sorted(index for index in totals
+                        if totals[index] and faulted[index] / totals[index] > A2A_SHARE_LIMIT)
+    out = []
+    for kind, _, start, end in periods:
+        found = None
+        if kind == "off":
+            for index in readmitted:
+                first, last = index * interval_ns, (index + 1) * interval_ns
+                if first >= start and (end is None or last <= end):
+                    found = last - start
+                    break
+        out.append(found)
+    return out
+
+
+def a2a_cycles(rows: list[dict], out_root: Path) -> list[dict]:
+    """Per (group, size, condition) cell with a flapping link, per arm and
+    period: per-seed cost_ns, iteration counts and readmission_ns, and the
+    means over the seeds that have one."""
+    cells: dict[tuple, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for row in a2a_costs(rows):
+        if "flap" not in row:
+            continue
+        periods = flap_periods(row["flap"])
+        interval = (row.get("setting") or {}).get("loss_interval_ns", A2A_DEFAULT_LOSS_INTERVAL_NS)
+        directory = out_root / row["key"]
+        healthy = None if row["healthy_key"] is None else out_root / row["healthy_key"]
+        costs = period_costs(directory, healthy, periods)
+        admitted = readmissions(directory, row["condition"], interval, periods)
+        cells[(row["group"], row["size"], row["condition"])][row["arm"]].append(
+            {"row": row, "periods": periods, "costs": costs, "readmission": admitted})
+
+    def mean(values):
+        known = [v for v in values if v is not None]
+        return (sum(known) / len(known) if known else None), len(known)
+
+    out = []
+    for (group, size, condition), arms in sorted(cells.items()):
+        table = {}
+        for arm, runs in sorted(arms.items()):
+            runs.sort(key=lambda r: r["row"]["seed"])
+            periods = runs[0]["periods"]
+            if any(r["periods"] != periods for r in runs):
+                raise ValueError(f"{arm} on {group}-{size}-{condition} runs different flap layouts")
+            entries = []
+            for n, (kind, occurrence, start, end) in enumerate(periods):
+                cost = [r["costs"][n]["cost_ns"] for r in runs]
+                admitted = [r["readmission"][n] for r in runs]
+                cost_mean, cost_count = mean(cost)
+                admitted_mean, admitted_count = mean(admitted)
+                entries.append({
+                    "kind": kind, "occurrence": occurrence, "start_ns": start, "end_ns": end,
+                    "iterations": [r["costs"][n]["iterations"] for r in runs],
+                    "cost_ns": cost, "cost_ns_mean": cost_mean, "cost_ns_count": cost_count,
+                    "readmission_ns": admitted if kind == "off" else None,
+                    "readmission_ns_mean": admitted_mean if kind == "off" else None,
+                    "readmission_ns_count": admitted_count if kind == "off" else None,
+                })
+            table[arm] = {"keys": [r["row"]["key"] for r in runs], "seeds": [r["row"]["seed"] for r in runs],
+                          "periods": entries}
+        out.append({"group": group, "size": size, "condition": condition, "arms": table})
+    return out
+
+
+def _ms(value) -> str:
+    return "end" if value is None else f"{value / 1e6:,.3f}"
+
+
+def cycles_markdown(cells: list[dict]) -> str:
+    """A table per arm: a row per cell and period."""
+    arms = sorted({arm for cell in cells for arm in cell["arms"]})
+    lines = []
+    for arm in arms:
+        lines += [
+            f"### {arm}", "",
+            "| group | size | condition | period | start ms | end ms | iterations (seeds) "
+            "| cost mean us (seeds) | re-admission mean us (seeds) |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
+        for cell in cells:
+            entry = cell["arms"].get(arm)
+            if entry is None:
+                continue
+            for period in entry["periods"]:
+                iterations = ", ".join("-" if v is None else str(v) for v in period["iterations"])
+                admitted = ("" if period["kind"] == "on" else
+                            f"{_us(period['readmission_ns_mean'])} ({period['readmission_ns_count']})")
+                lines.append(
+                    f"| {cell['group']} | {cell['size']} | {cell['condition']} "
+                    f"| {period['kind']} {period['occurrence']} | {_ms(period['start_ns'])} | {_ms(period['end_ns'])} "
+                    f"| {iterations} | {_us(period['cost_ns_mean'])} ({period['cost_ns_count']}) | {admitted} |"
+                )
+        lines.append("")
+    return "\n".join(lines)
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration and a2a_calibration.
 
@@ -1138,10 +1311,11 @@ def main() -> int:
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates"):
+                 "a2a_candidates", "a2a_cycles"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
-                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates") else None)
+                       nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
+                                             "a2a_cycles") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -1154,7 +1328,7 @@ def main() -> int:
         if name == "a2a_gate_reps":
             x.add_argument("--stage", default="a2a_gate_reps")
             x.add_argument("--markdown", type=Path)
-        if name == "a2a_candidates":
+        if name in ("a2a_candidates", "a2a_cycles"):
             x.add_argument("--stage")
             x.add_argument("--markdown", type=Path)
         if name == "a2a_calibrate":
@@ -1193,6 +1367,12 @@ def main() -> int:
         cells = a2a_candidates(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(candidates_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_cycles":
+        cells = a2a_cycles(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(cycles_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command in ("calibrate", "gains"):

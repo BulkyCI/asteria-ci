@@ -35,12 +35,12 @@ class Stages(unittest.TestCase):
         self.assertEqual(
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
-             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288},
+             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 48},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
-             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288},
+             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 48},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -332,6 +332,143 @@ class Receiver(unittest.TestCase):
         self.assertEqual(by_arm["reps_hold_auto_rx"], {**candidates["reps_hold_auto"], **receiver})
         self.assertEqual(by_arm["reps_flow_hold_rx"], {**candidates["reps_flow_hold"], **receiver})
         self.assertEqual(by_arm["reps_hold_auto_rx"]["sentinel_mode"], "duplicate")
+
+
+class Rs3(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+        self.runs = profiles.a2a_stage_runs("a2a_rs3", self.calibration, self.tuning)
+
+    def test_runs(self):
+        # 2 cells by 4 arms by 3 seeds, faulted and healthy.
+        self.assertEqual(len(self.runs), 2 * 4 * 3 * 2)
+        self.assertEqual({r["arm"] for r in self.runs}, set(profiles.A2A_RS3_ARMS))
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs}, {("ep64", "256k"), ("ep16", "2m")})
+        self.assertEqual({r["condition"] for r in self.runs}, {"healthy", "flap1e2_up"})
+        self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
+        self.assertEqual(profiles.A2A_RS3_ITERATIONS, {("ep64", "256k"): 1493, ("ep16", "2m"): 813})
+        self.assertEqual(profiles.A2A_RS3_REPEAT, {("ep64", "256k"): 9, ("ep16", "2m"): 9})
+        for r in self.runs:
+            cell = (r["group"], r["size"])
+            self.assertEqual(r["iterations"], profiles.A2A_RS3_ITERATIONS[cell])
+            # The healthy run covers the onset and four cycles.
+            period = profiles.A2A_RS3_PERIOD_NS[cell]
+            self.assertGreaterEqual(r["iterations"] * period, profiles.DEGRADE_AT_NS + 4 * 250_000_000)
+            self.assertLess((r["iterations"] - 1) * period, profiles.DEGRADE_AT_NS + 4 * 250_000_000)
+            self.assertEqual("flap" in r, r["condition"] == "flap1e2_up")
+
+    def test_profiles(self):
+        by_arm = {}
+        for r in self.runs:
+            document = profiles.a2a_stage_profile(r, self.calibration)
+            self.assertEqual(document["steps"], r["iterations"])
+            self.assertEqual(document["workload"]["iterations"], r["iterations"])
+            failures = document["network"]["link_failures"]
+            if r["condition"] == "healthy":
+                self.assertEqual(failures, [])
+                continue
+            self.assertEqual(failures, [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
+                                         "spine": 3, "leaf": 0, "direction": "up", "duration_ns": 50_000_000,
+                                         "repeat": 9, "period_ns": 250_000_000}])
+            by_arm[r["arm"]] = document["network"]["load_balancing"]
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep16", "2m", "healthy", 301)}
+        self.assertEqual(by_arm["reps_hold_auto"], candidates["reps_hold_auto"])
+        trickle = by_arm["reps_hold_auto_trickle"]
+        self.assertEqual(trickle, {
+            "mode": "spray_uniform", "selector": "reps_hold", "held_exploration": "sentinel",
+            "loss_thresholds": candidates["reps_hold_auto"]["loss_thresholds"],
+            "loss_interval_ns": candidates["reps_hold_auto"]["loss_interval_ns"], "hold_scope": "auto",
+            "hold_rule": "llr", "loss_p0": 0.0, "loss_p1": 0.001, "hold_alpha": 0.001, "hold_beta": 0.001,
+            "hold_release": "trickle", "hold_trickle": 0.01, "sentinel_mode": "duplicate", "path_seq": False,
+        })
+        self.assertEqual(by_arm["reps"], {"mode": "ev_hash", "selector": "reps"})
+        self.assertEqual(by_arm["uniform"]["mode"], "spray_uniform")
+
+    def test_pairs_by_iteration_count(self):
+        rows = [
+            {**run("reps", "ep16", "2m", "healthy", 301, "a2a_candidates"), "iterations": 40, "iterations_ns": [1]},
+            {**run("reps", "ep16", "2m", "healthy", 301, "a2a_rs3"), "iterations": 813, "iterations_ns": [2]},
+            {**run("reps", "ep16", "2m", "flap1e2_up", 301, "a2a_rs3"), "iterations": 813, "iterations_ns": [5]},
+        ]
+        (row,) = analyze.a2a_costs(rows)
+        self.assertEqual((row["healthy_key"], row["cost_ns"]), ("a2a_rs3-ep16-2m-healthy-reps-s301", 3))
+
+
+class Cycles(unittest.TestCase):
+    FLAP = {"error_rate": 0.01, "start_ns": 1000, "on_ns": 100, "period_ns": 500, "repeat": 2}
+
+    def test_periods(self):
+        self.assertEqual(analyze.flap_periods(self.FLAP), [
+            ("on", 0, 1000, 1100), ("off", 0, 1100, 1500), ("on", 1, 1500, 1600), ("off", 1, 1600, None)])
+
+    def write(self, root, r, starts, completions, trace=None):
+        d = root / r["key"]
+        (d / "ns3").mkdir(parents=True)
+        timing = {"complete": True,
+                  "iteration_completion_ns": {str(i + 1): c for i, c in enumerate(completions)},
+                  "iteration_start_ns": {str(i + 1): s for i, s in enumerate(starts)}}
+        (d / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+        if trace is not None:
+            (d / "ns3" / "spine_losses.csv").write_text(
+                "time_ns,rank,spine,sent,lost,grade\n" + "".join(",".join(map(str, t)) + "\n" for t in trace))
+
+    def test_costs_and_readmission(self):
+        setting = {"loss_interval_ns": 100}
+        healthy = {**run("reps_hold_auto", "ep64", "256k", "healthy", 301, "a2a_rs3", setting), "iterations": 6}
+        faulted = {**run("reps_hold_auto", "ep64", "256k", "flap1e2_up", 301, "a2a_rs3", setting),
+                   "iterations": 6, "flap": self.FLAP}
+        starts = [0, 1000, 1050, 1200, 1550, 1700]
+        # Host 0 (leaf 0) sends 100 per interval; spine 3's share is held to
+        # 0 from the first on-period and returns above 1/16 in the interval
+        # [1300, 1400), and in [1800, 1900) after the second; host 9 (leaf
+        # 1) sends on spine 3 alone and is not read.
+        share = {i: 0 for i in range(10, 20)} | {13: 7, 14: 10, 18: 7}
+        trace = []
+        for i, n in share.items():
+            end = (i + 1) * 100
+            trace += [(end, 0, 3, n, 0, 3), (end, 0, 1, 100 - n, 0, 3), (end, 9, 3, 50, 0, 3)]
+        # Exactly 1/16 is not above it.
+        trace += [(1200, 1, 3, 25, 0, 3), (1200, 1, 2, 275, 0, 3)]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, healthy, starts, [100] * 6)
+            self.write(root, faulted, starts, [100, 300, 200, 150, 400, 120], trace)
+            listing = root / "runs.json"
+            listing.write_text(json.dumps([healthy, faulted]))
+            (cell,) = analyze.a2a_cycles(analyze.a2a_rows([listing], root, "a2a_rs3"), root)
+        self.assertEqual((cell["group"], cell["size"], cell["condition"]), ("ep64", "256k", "flap1e2_up"))
+        periods = cell["arms"]["reps_hold_auto"]["periods"]
+        self.assertEqual([(p["kind"], p["occurrence"]) for p in periods],
+                         [("on", 0), ("off", 0), ("on", 1), ("off", 1)])
+        self.assertEqual([p["iterations"] for p in periods], [[2], [1], [1], [1]])
+        self.assertEqual([p["cost_ns_mean"] for p in periods], [150, 50, 300, 20])
+        self.assertEqual([p["readmission_ns"] for p in periods], [None, [300], None, [300]])
+        self.assertEqual(periods[1]["readmission_ns_count"], 1)
+        text = analyze.cycles_markdown([cell])
+        self.assertIn("### reps_hold_auto", text)
+        self.assertIn("| ep64 | 256k | flap1e2_up | off 0 | 0.001 | 0.002 | 1 | 0.1 (1) | 0.3 (1) |", text)
+
+    def test_no_trace_and_incomplete(self):
+        healthy = {**run("uniform", "ep16", "2m", "healthy", 302, "a2a_rs3"), "iterations": 2}
+        faulted = {**run("uniform", "ep16", "2m", "flap1e2_up", 302, "a2a_rs3"), "iterations": 2, "flap": self.FLAP}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write(root, healthy, [0, 1000], [100, 100])
+            self.write(root, faulted, [0, 1000], [100])
+            summary = root / faulted["key"] / "summary.json"
+            data = json.loads(summary.read_text())
+            data["all_to_all"]["complete"] = False
+            summary.write_text(json.dumps(data))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps([healthy, faulted]))
+            (cell,) = analyze.a2a_cycles(analyze.a2a_rows([listing], root), root)
+        periods = cell["arms"]["uniform"]["periods"]
+        self.assertEqual([p["cost_ns"] for p in periods], [[float("inf")]] * 4)
+        self.assertEqual(periods[1]["readmission_ns"], [None])
 
 
 class ReceiverAndTimeouts(unittest.TestCase):

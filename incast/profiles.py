@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -437,6 +438,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           gate and their healthy pairs, seeds 301-303
 #   a2a_receiver            the A2A_RECEIVER_ARMS on the 28 cells and their
 #                           healthy pairs, seeds 301-303
+#   a2a_rs3                 the A2A_RS3_ARMS under a flapping gray link
+#                           (A2A_RS3_CONDITION) on the A2A_RS3_CELLS and
+#                           their healthy pairs, seeds 301-303, at
+#                           A2A_RS3_ITERATIONS
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -608,8 +613,46 @@ A2A_FLOOR_ARMS = {
 }
 A2A_CONGESTION_GRADE_FLOOR = 1
 A2A_CANDIDATE_ARMS = tuple(A2A_REPS_HOLD_ARMS) + tuple(A2A_FLOOR_ARMS)
+# a2a_rs3: leaf 0's uplink to spine 3 at loss 1e-2 for A2A_RS3_ON_NS, then
+# healthy for A2A_RS3_OFF_NS, from the onset (100 base RTTs) on, one
+# link_failures entry with duration_ns, repeat and period_ns (the backend
+# restores each on-period's loss at its end and fails the link again at the
+# next start). The run covers A2A_RS3_CYCLES cycles after the onset at the
+# healthy period per iteration of A2A_RS3_PERIOD_NS (mean iteration
+# completion of the healthy runs of the cell plus compute_ns), and the
+# cycles repeat until twice that healthy run length, so a run the fault
+# slows down stays under the flapping link to its end.
+A2A_RS3_STAGE = "a2a_rs3"
+A2A_RS3_CONDITION = "flap1e2_up"
+A2A_RS3_ERROR_RATE = 1e-2
+A2A_RS3_ON_NS = 50_000_000
+A2A_RS3_OFF_NS = 200_000_000
+A2A_RS3_CYCLE_NS = A2A_RS3_ON_NS + A2A_RS3_OFF_NS
+A2A_RS3_CYCLES = 4
+A2A_RS3_PERIOD_NS = {
+    ("ep64", "256k"): 670_700,  # 411.7 us completion + 259 us compute
+    ("ep16", "2m"): 1_232_500,  # 739.5 us completion + 493 us compute
+}
+A2A_RS3_CELLS = tuple(A2A_RS3_PERIOD_NS)
+A2A_RS3_ITERATIONS = {
+    cell: math.ceil((DEGRADE_AT_NS + A2A_RS3_CYCLES * A2A_RS3_CYCLE_NS) / period)
+    for cell, period in A2A_RS3_PERIOD_NS.items()
+}
+A2A_RS3_REPEAT = {
+    cell: math.ceil((2 * A2A_RS3_ITERATIONS[cell] * period - DEGRADE_AT_NS) / A2A_RS3_CYCLE_NS)
+    for cell, period in A2A_RS3_PERIOD_NS.items()
+}
+# reps_hold_auto's loss hold under the llr rule and the trickle release:
+# reps_hold_auto's loss interval, without the clean sentinels and the
+# sentinel interval the trickle release does not read.
+A2A_TRICKLE_ARMS = {"reps_hold_auto_trickle": "reps_hold_auto"}
+A2A_TRICKLE_HOLD = {
+    "hold_rule": "llr", "loss_p0": 0.0, "loss_p1": 0.001, "hold_alpha": 0.001, "hold_beta": 0.001,
+    "hold_release": "trickle", "hold_trickle": 0.01, "sentinel_mode": "duplicate", "path_seq": False,
+}
+A2A_RS3_ARMS = ("reps_hold_auto", "reps_hold_auto_trickle", "reps", "uniform")
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
-              "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver")
+              "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -650,6 +693,14 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
     return [{**model, **onset, **link}]
 
 
+def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
+    """The link_failures of a2a_rs3's flapping link: leaf 0's uplink to
+    spine 3 at its error rate for on_ns, repeat times, period_ns apart."""
+    return [{"model": "gray", "error_rate": flap["error_rate"], "start_ns": flap["start_ns"],
+             "spine": A2A_SPINE, "leaf": 0, "direction": "up", "duration_ns": flap["on_ns"],
+             "repeat": flap["repeat"], "period_ns": flap["period_ns"]}]
+
+
 def _a2a_loss_thresholds(entry: dict[str, Any], interval_ns: int) -> list[float]:
     value = entry.get("loss_thresholds")
     if isinstance(value, dict):
@@ -668,11 +719,13 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return balancing(arm, 0, None)
     if arm == A2A_REPS_ORACLE:
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
-    if arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS:
-        # The setting holds the loss interval, the clean sentinels, the
-        # sentinel interval, the exploration sends, hold_scope where the
-        # selector reads it, and the receiver's hold where the arm has it.
-        base = A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS else arm
+    if arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS:
+        # The setting holds the loss interval, the clean sentinels and the
+        # sentinel interval (or the trickle release's hold test), the
+        # exploration sends, hold_scope where the selector reads it, and the
+        # receiver's hold where the arm has it.
+        base = (A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS
+                else A2A_TRICKLE_ARMS.get(arm, arm))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
@@ -779,6 +832,19 @@ def a2a_receiver_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, 
             for arm, (base, receiver) in A2A_RECEIVER_ARMS.items()}
 
 
+def a2a_rs3_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any] | None]:
+    """Each a2a_rs3 arm's setting: reps_hold_auto's candidate setting, the
+    trickle arm's from it (A2A_TRICKLE_HOLD), none for reps and uniform."""
+    hold = a2a_candidate_settings(tuning)["reps_hold_auto"]
+    trickle = {key: value for key, value in hold.items()
+               if key not in ("loss_hold_clean_sentinels", "held_sentinel_interval_ns", "hold_release")}
+    settings: dict[str, dict[str, Any] | None] = {
+        "reps_hold_auto": hold, "reps_hold_auto_trickle": {**trickle, **A2A_TRICKLE_HOLD},
+        "reps": None, "uniform": None,
+    }
+    return {arm: settings[arm] for arm in A2A_RS3_ARMS}
+
+
 def a2a_gate_cells() -> list[tuple[str, str, str]]:
     """The 28 (group, size, condition) cells of the gate."""
     return [(group, size, condition)
@@ -801,7 +867,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
     """Every run of a Phase 9 stage."""
     out: list[dict[str, Any]] = []
 
-    def add(arm, group, size, condition, seed, setting=None, label_setting=False):
+    def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None):
         label = arm if not label_setting else f"{arm}-{setting_name(setting)}"
         out.append(
             {
@@ -815,8 +881,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "message_bytes": A2A_SIZES[size],
                 "condition": condition,
                 "compute_ns": A2A_COMPUTE_NS[(group, size)],
-                "iterations": A2A_ITERATIONS[(group, size)],
+                "iterations": iterations or A2A_ITERATIONS[(group, size)],
                 "seed": seed,
+                **({} if flap is None else {"flap": flap}),
             }
         )
 
@@ -856,6 +923,14 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
+    elif stage == A2A_RS3_STAGE:
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
+            for group, size in A2A_RS3_CELLS:
+                iterations = A2A_RS3_ITERATIONS[(group, size)]
+                flap = {"error_rate": A2A_RS3_ERROR_RATE, "start_ns": DEGRADE_AT_NS, "on_ns": A2A_RS3_ON_NS,
+                        "period_ns": A2A_RS3_CYCLE_NS, "repeat": A2A_RS3_REPEAT[(group, size)]}
+                add(arm, group, size, A2A_RS3_CONDITION, seed, setting, iterations=iterations, flap=flap)
+                add(arm, group, size, "healthy", seed, setting, iterations=iterations)
     elif stage == "a2a_comparison":
         cells = a2a_admitted_cells(tuning)
         pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
@@ -894,7 +969,7 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
         "iterations": run["iterations"],
         "compute_ns": run["compute_ns"],
     }
-    document["network"]["link_failures"] = a2a_fault(run["condition"])
+    document["network"]["link_failures"] = a2a_flap(run["flap"]) if "flap" in run else a2a_fault(run["condition"])
     return document
 
 
