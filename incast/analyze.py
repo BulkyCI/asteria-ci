@@ -49,8 +49,8 @@ faulted run:
   fault; for a _down fault the rows with destination_leaf 1 when the trace
   has that column, otherwise the hosts off leaf 1; every host for
   structural. Intervals are the run's loss_interval_ns. None when the run
-  writes no trace, as under the uniform draw and reps_oracle (a2a_tail's
-  uniform_tail and reps_tail among them; ns3/spine_arrivals.csv holds
+  writes no trace, as under the uniform draw, reps_oracle and reps_spine
+  (a2a_tail's uniform_tail and reps_tail among them; ns3/spine_arrivals.csv holds
   cumulative counters only at the link events, so it gives no share over
   time), or the share never falls below 1/16.
 * receiver_reaction_ns: from the onset to the end of the first receiver

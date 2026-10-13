@@ -344,18 +344,19 @@ class Tail(unittest.TestCase):
         self.runs = profiles.a2a_stage_runs("a2a_tail", self.calibration, self.tuning)
 
     def test_runs(self):
-        # The 12 admitted loss cells and the 4 blackhole cells, and 4
-        # healthy pairs, by 3 arms by 3 seeds.
-        self.assertEqual(len(self.runs), (12 + 4 + 4) * 3 * 3)
+        # The 16 loss cells and the 4 blackhole cells of the gate, whatever
+        # the tuning file admits, and 4 healthy pairs, by 3 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (16 + 4 + 4) * 3 * 3)
         self.assertEqual({r["arm"] for r in self.runs}, {"uniform_tail", "reps_tail", "reps_hold_auto_tail"})
         self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
         faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
         loss = {c for c in faulted if c[2].startswith("loss")}
-        self.assertEqual(len(loss), 12)
-        self.assertNotIn("ep64-2m", {f"{g}-{s}" for g, s, _ in loss})
+        self.assertEqual(loss, {(g, s, c) for g, s in profiles.A2A_CELLS
+                                for c in ("loss1e2_up", "loss1e3_up", "loss1e2_down", "loss1e3_down")})
+        self.assertEqual(self.runs, profiles.a2a_stage_runs("a2a_tail", self.calibration, None))
         self.assertEqual({c for c in faulted if c[2] == "blackhole_up"},
                          {(g, s, "blackhole_up") for g, s in profiles.A2A_CELLS})
-        self.assertEqual(len(faulted), 16)
+        self.assertEqual(len(faulted), 20)
         self.assertEqual({(r["group"], r["size"]) for r in self.runs if r["condition"] == "healthy"},
                          set(profiles.A2A_CELLS))
         self.assertEqual(len({r["key"] for r in self.runs}), len(self.runs))
@@ -368,8 +369,7 @@ class Tail(unittest.TestCase):
                       if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep16", "2m", "loss1e2_up", 301)}
         tail = {"path_seq": True, "tail_recovery": True}
         self.assertEqual(by_arm["uniform_tail"], {"mode": "spray_uniform", **tail})
-        self.assertEqual(by_arm["reps_tail"], {"mode": "spray_uniform", "selector": "reps_oracle",
-                                               "grade_cost_source": "switch_queue", **tail})
+        self.assertEqual(by_arm["reps_tail"], {"mode": "spray_uniform", "selector": "reps_spine", **tail})
         self.assertEqual(by_arm["reps_hold_auto_tail"], {**candidates["reps_hold_auto"], **tail})
         self.assertEqual(by_arm["reps_hold_auto_tail"]["sentinel_mode"], "duplicate")
         self.assertNotIn("hold_rule", by_arm["reps_hold_auto_tail"])
