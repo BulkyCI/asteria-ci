@@ -37,7 +37,8 @@ verdict "data_helps" when reps_oracle beats reps on primary cost by the
 seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
 seeds with a known cost).
 
-a2a_candidates gives every arm of the runs given (all stages unless --stage)
+a2a_candidates gives every arm of the runs given (all stages unless --stage;
+the workflow tabulates a2a_candidates, a2a_receiver and a2a_tail each so)
 per cell its per-seed and mean primary and tail cost, and these measures per
 faulted run:
 
@@ -48,9 +49,10 @@ faulted run:
   fault; for a _down fault the rows with destination_leaf 1 when the trace
   has that column, otherwise the hosts off leaf 1; every host for
   structural. Intervals are the run's loss_interval_ns. None when the run
-  writes no trace (ns3/spine_arrivals.csv holds cumulative counters only at
-  the link events, so it gives no share over time) or the share never
-  falls below 1/16.
+  writes no trace, as under the uniform draw and reps_oracle (a2a_tail's
+  uniform_tail and reps_tail among them; ns3/spine_arrivals.csv holds
+  cumulative counters only at the link events, so it gives no share over
+  time), or the share never falls below 1/16.
 * receiver_reaction_ns: from the onset to the end of the first receiver
   hold interval ending after it in which a receiving host holds spine 3
   (hold not none), from ns3/receiver_holds.csv, over the rows of the

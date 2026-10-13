@@ -35,12 +35,14 @@ class Stages(unittest.TestCase):
         self.assertEqual(
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
-             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24},
+             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
+             "a2a_tail": 216},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
-             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24},
+             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
+             "a2a_tail": 216},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -332,6 +334,83 @@ class Receiver(unittest.TestCase):
         self.assertEqual(by_arm["reps_hold_auto_rx"], {**candidates["reps_hold_auto"], **receiver})
         self.assertEqual(by_arm["reps_flow_hold_rx"], {**candidates["reps_flow_hold"], **receiver})
         self.assertEqual(by_arm["reps_hold_auto_rx"]["sentinel_mode"], "duplicate")
+
+
+class Tail(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+        self.runs = profiles.a2a_stage_runs("a2a_tail", self.calibration, self.tuning)
+
+    def test_runs(self):
+        # The 12 admitted loss cells and the 4 blackhole cells, and 4
+        # healthy pairs, by 3 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (12 + 4 + 4) * 3 * 3)
+        self.assertEqual({r["arm"] for r in self.runs}, {"uniform_tail", "reps_tail", "reps_hold_auto_tail"})
+        self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
+        faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
+        loss = {c for c in faulted if c[2].startswith("loss")}
+        self.assertEqual(len(loss), 12)
+        self.assertNotIn("ep64-2m", {f"{g}-{s}" for g, s, _ in loss})
+        self.assertEqual({c for c in faulted if c[2] == "blackhole_up"},
+                         {(g, s, "blackhole_up") for g, s in profiles.A2A_CELLS})
+        self.assertEqual(len(faulted), 16)
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs if r["condition"] == "healthy"},
+                         set(profiles.A2A_CELLS))
+        self.assertEqual(len({r["key"] for r in self.runs}), len(self.runs))
+
+    def test_settings(self):
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                  for r in self.runs if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep16", "2m", "loss1e2_up", 301)}
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep16", "2m", "loss1e2_up", 301)}
+        tail = {"path_seq": True, "tail_recovery": True}
+        self.assertEqual(by_arm["uniform_tail"], {"mode": "spray_uniform", **tail})
+        self.assertEqual(by_arm["reps_tail"], {"mode": "spray_uniform", "selector": "reps_oracle",
+                                               "grade_cost_source": "switch_queue", **tail})
+        self.assertEqual(by_arm["reps_hold_auto_tail"], {**candidates["reps_hold_auto"], **tail})
+        self.assertEqual(by_arm["reps_hold_auto_tail"]["sentinel_mode"], "duplicate")
+        self.assertNotIn("hold_rule", by_arm["reps_hold_auto_tail"])
+        self.assertNotIn("tail_recovery_delay_ns", by_arm["reps_hold_auto_tail"])
+
+    def test_candidates_cover_the_tail_arms(self):
+        onset = analyze.DEGRADE_AT_NS
+        settings = profiles.a2a_tail_settings(self.tuning)
+        interval = settings["reps_hold_auto_tail"]["loss_interval_ns"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for arm, setting in settings.items():
+                for condition, mean in (("healthy", 10), ("loss1e2_up", 30)):
+                    r = run(arm, "ep16", "2m", condition, 301, "a2a_tail", setting)
+                    runs.append(r)
+                    d = root / r["key"]
+                    (d / "ns3").mkdir(parents=True)
+                    timing = {"complete": True, "iteration_completion_ns": {"1": mean, "2": mean},
+                              "iteration_start_ns": {"1": 0, "2": onset}}
+                    (d / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+                    (d / "ns3" / "rto_events.csv").write_text(
+                        "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n5,0,1,3,0,1\n")
+                    if arm == "reps_hold_auto_tail":
+                        end = (onset // interval + 1) * interval
+                        (d / "ns3" / "spine_losses.csv").write_text(
+                            "time_ns,rank,spine,sent,lost,grade\n"
+                            f"{end},0,3,0,0,3\n{end},0,1,100,0,3\n")
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_candidates(analyze.a2a_rows([listing], root, "a2a_tail"), root)
+        self.assertEqual(set(cell["arms"]), set(settings))
+        for arm, entry in cell["arms"].items():
+            self.assertEqual(entry["cost_ns"], [20.0])
+            self.assertEqual(entry["rto_per_iteration"], [[1, 0]])
+            self.assertEqual(entry["setting"], settings[arm])
+        self.assertEqual(cell["arms"]["reps_hold_auto_tail"]["reaction_ns"],
+                         [(onset // interval + 1) * interval - onset])
+        # No sender loss trace under the uniform draw or reps_oracle.
+        self.assertEqual(cell["arms"]["uniform_tail"]["reaction_ns"], [None])
+        self.assertEqual(cell["arms"]["reps_tail"]["reaction_ns"], [None])
 
 
 class Rs3(unittest.TestCase):

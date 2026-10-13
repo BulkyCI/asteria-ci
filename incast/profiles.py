@@ -442,6 +442,9 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           (A2A_RS3_CONDITION) on the A2A_RS3_CELLS and
 #                           their healthy pairs, seeds 301-303, at
 #                           A2A_RS3_ITERATIONS
+#   a2a_tail                the A2A_TAIL_ARMS on the admitted loss cells and
+#                           every blackhole cell (a2a_tail_cells) and their
+#                           healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -650,8 +653,22 @@ A2A_TRICKLE_HOLD = {
     "hold_release": "trickle", "hold_trickle": 0.01, "sentinel_mode": "duplicate", "path_seq": False,
 }
 A2A_RS3_ARMS = ("reps_hold_auto", "reps_hold_auto_trickle", "reps", "uniform")
+# a2a_tail's arms: tail recovery (A2A_TAIL: path sequences in the data
+# headers, and the closing packets' per-spine counts from which the receiver
+# requests each missing run, at the backend's default delay) on a base arm:
+# the uniform draw; reps_oracle, the spray_uniform form of REPS (the backend
+# takes PATH_SELECTOR reps only under ev_hash, and the generator refuses
+# tail_recovery there); and reps_hold_auto with its a2a_candidates setting,
+# the count rule, the clean sentinels' release and duplicate sentinels. The
+# cells: the a2a_tuning.json admitted cells (every gate cell without it)
+# under a loss or blackhole condition.
+A2A_TAIL_STAGE = "a2a_tail"
+A2A_TAIL = {"path_seq": True, "tail_recovery": True}
+A2A_TAIL_ARMS = {"uniform_tail": "uniform", "reps_tail": A2A_REPS_ORACLE, "reps_hold_auto_tail": "reps_hold_auto"}
+A2A_TAIL_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "blackhole_up")
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
-              "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE)
+              "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
+              A2A_TAIL_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -718,13 +735,18 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return balancing(arm, 0, None)
     if arm == A2A_REPS_ORACLE:
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
-    if arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS:
+    if arm in A2A_TAIL_ARMS and A2A_TAIL_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
+        # The setting is A2A_TAIL alone.
+        return {**a2a_balancing(A2A_TAIL_ARMS[arm], group, size, calibration, None), **(setting or {})}
+    if (arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS
+            or arm in A2A_TAIL_ARMS):
         # The setting holds the loss interval, the clean sentinels and the
         # sentinel interval (or the trickle release's hold test), the
-        # exploration sends, hold_scope where the selector reads it, and the
-        # receiver's hold where the arm has it.
+        # exploration sends, hold_scope where the selector reads it, the
+        # receiver's hold where the arm has it, and tail recovery where the
+        # arm has it.
         base = (A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS
-                else A2A_TRICKLE_ARMS.get(arm, arm))
+                else A2A_TRICKLE_ARMS.get(arm, A2A_TAIL_ARMS.get(arm, arm)))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
@@ -844,6 +866,18 @@ def a2a_rs3_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any] 
     return {arm: settings[arm] for arm in A2A_RS3_ARMS}
 
 
+def a2a_tail_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_tail arm's setting: A2A_TAIL, on reps_hold_auto's candidate
+    setting for reps_hold_auto_tail."""
+    candidates = a2a_candidate_settings(tuning)
+    return {arm: {**candidates.get(base, {}), **A2A_TAIL} for arm, base in A2A_TAIL_ARMS.items()}
+
+
+def a2a_tail_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, str]]:
+    """The admitted cells under a loss or blackhole condition."""
+    return [cell for cell in a2a_admitted_cells(tuning) if cell[2] in A2A_TAIL_CONDITIONS]
+
+
 def a2a_gate_cells() -> list[tuple[str, str, str]]:
     """The 28 (group, size, condition) cells of the gate."""
     return [(group, size, condition)
@@ -921,6 +955,14 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             for group, size, condition in a2a_gate_cells():
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
+                add(arm, group, size, "healthy", seed, setting)
+    elif stage == A2A_TAIL_STAGE:
+        cells = a2a_tail_cells(tuning)
+        pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_tail_settings(tuning).items()):
+            for group, size, condition in cells:
+                add(arm, group, size, condition, seed, setting)
+            for group, size in pairs:
                 add(arm, group, size, "healthy", seed, setting)
     elif stage == A2A_RS3_STAGE:
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
