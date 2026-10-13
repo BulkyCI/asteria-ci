@@ -17,7 +17,7 @@
     analyze.py a2a_candidates --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      cost and reaction per arm and cell
     analyze.py a2a_cycles --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
-                                                     cost and re-admission per on- and off-period, per arm
+                                                     cost, detection and re-admission per on- and off-period, per arm
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -44,11 +44,16 @@ faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
   the end of the first sender loss interval ending after it in which spine
-  3's share of the sends falls below 1/16, from ns3/spine_losses.csv summed
-  over the senders of the faulted link: the hosts of leaf 0 for an _up
-  fault; for a _down fault the rows with destination_leaf 1 when the trace
-  has that column, otherwise the hosts off leaf 1; every host for
-  structural. Intervals are the run's loss_interval_ns. None when the run
+  3's share of the sends falls below 1/16, from ns3/spine_losses.csv. With
+  a destination_leaf column (leaf and auto scopes) the sends read are those
+  that cross a spine toward the faulted link: for an _up fault the sends of
+  the hosts of leaf 0 toward every other leaf; for a _down fault every
+  sender's sends toward leaf 1, those of the hosts of leaf 1 excluded; for
+  structural every host's sends toward another leaf (share_basis
+  "remote"). Without that column (host scope) the sends are those of the
+  hosts of leaf 0 for an _up fault, of the hosts off leaf 1 for a _down
+  fault and of every host for structural, toward any destination
+  (share_basis "all"). Intervals are the run's loss_interval_ns. None when the run
   writes no trace, as under the uniform draw, reps_oracle and reps_spine
   (a2a_tail's uniform_tail and reps_tail among them; ns3/spine_arrivals.csv holds
   cumulative counters only at the link events, so it gives no share over
@@ -80,11 +85,26 @@ there to the next occurrence's start. Per faulted run and period:
   paired healthy run's completion of the same iteration; None when no
   iteration starts in it or the healthy run lacks one of them, infinite
   when the faulted run is incomplete.
+* detection_ns (on-periods): from the on-period's start to the end of the
+  first sender loss interval with sends ending after it, and by the
+  on-period's end, in which spine 3's share of the sends (read as for
+  reaction_ns) is below 1/16; None when the run writes no
+  ns3/spine_losses.csv or no such interval comes.
 * readmission_ns (off-periods): from the off-period's start to the end of
   the first sender loss interval starting at or after it, and ending by
-  the next on-period's start, in which spine 3's share of the sends of the
-  faulted link's senders (as reaction_ns reads them) is above 1/16; None
-  when the run writes no ns3/spine_losses.csv or no such interval comes.
+  the next on-period's start, in which spine 3's share of the sends (read
+  as for reaction_ns) is above 1/16; None when the run writes no
+  ns3/spine_losses.csv or no such interval comes.
+* readmission_1ms_ns (off-periods): as readmission_ns, with the share
+  taken over the intervals with sends that end in the 1 ms up to and
+  including the end of the interval (which may reach before the
+  off-period's start) rather than over the interval alone.
+* readmission_90pct_1ms_ns (off-periods): as readmission_1ms_ns, with the
+  level 0.9 / 8 (90 percent of a share spread evenly over the 8 spines) in
+  place of 1/16.
+
+Per arm, share_basis gives each seed's basis ("remote" or "all", as for
+reaction_ns; None without a trace).
 
 Per arm the table gives each period's per-seed values and their means over
 the seeds that have one.
@@ -127,7 +147,7 @@ import argparse
 import csv
 import json
 import statistics
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 TOP_GRADE = 3
@@ -801,6 +821,8 @@ A2A_SHARE_LIMIT = 1 / 16
 A2A_EARLY_WINDOW_NS = 500_000
 A2A_HOSTS_PER_LEAF_OF_TRACE = 8
 A2A_DEFAULT_LOSS_INTERVAL_NS = 2 * BASE_RTT_NS
+A2A_WINDOW_NS = 1_000_000
+A2A_FULL_SHARE = 0.9 / SPINES
 
 
 def fault_onset_ns(condition: str) -> int:
@@ -808,23 +830,33 @@ def fault_onset_ns(condition: str) -> int:
 
 
 def faulted_share_rows(condition: str, leaf_column: bool):
-    """The trace rows of the senders of the faulted link, and the basis."""
+    """The trace rows that read the faulted link's spine share, and the
+    basis: "remote" with a destination_leaf column (sends toward a leaf
+    other than the sender's), "all" without one (every destination)."""
     hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
-    if condition == "structural":
-        return (lambda row: True), "every host"
-    if condition.endswith("_up"):
-        return (lambda row: int(row["rank"]) // hosts == 0), "hosts of leaf 0"
+
+    def leaf(row):
+        return int(row["rank"]) // hosts
+
     if leaf_column:
-        return (lambda row: int(row["destination_leaf"]) == 1), "destination_leaf 1"
-    return (lambda row: int(row["rank"]) // hosts != 1), "hosts off leaf 1"
+        if condition == "structural":
+            return (lambda row: int(row["destination_leaf"]) != leaf(row)), "remote"
+        if condition.endswith("_up"):
+            return (lambda row: leaf(row) == 0 and int(row["destination_leaf"]) != 0), "remote"
+        return (lambda row: int(row["destination_leaf"]) == 1 and leaf(row) != 1), "remote"
+    if condition == "structural":
+        return (lambda row: True), "all"
+    if condition.endswith("_up"):
+        return (lambda row: leaf(row) == 0), "all"
+    return (lambda row: leaf(row) != 1), "all"
 
 
-def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE) -> dict:
-    """reaction_ns (see the module docstring) and the rows' basis."""
+def share_series(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE):
+    """Per sender loss interval index, the sends of faulted_share_rows'
+    rows and those on the spine, and the basis; None without a trace."""
     path = directory / "ns3" / "spine_losses.csv"
     if not path.exists():
-        return {"reaction_ns": None, "share_basis": None}
-    onset = fault_onset_ns(condition)
+        return None
     totals: dict[int, int] = defaultdict(int)
     faulted: dict[int, int] = defaultdict(int)
     with path.open() as handle:
@@ -837,11 +869,64 @@ def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEG
             totals[index] += int(row["sent"])
             if int(row["spine"]) == spine:
                 faulted[index] += int(row["sent"])
+    return totals, faulted, basis
+
+
+def first_below(totals: dict, faulted: dict, interval_ns: int, start: int, end: int | None) -> int | None:
+    """From start to the end of the first interval with sends ending after
+    start (and by end) whose spine share is below A2A_SHARE_LIMIT."""
     for index in sorted(totals):
-        end = (index + 1) * interval_ns
-        if end > onset and totals[index] and faulted[index] / totals[index] < A2A_SHARE_LIMIT:
-            return {"reaction_ns": end - onset, "share_basis": basis}
-    return {"reaction_ns": None, "share_basis": basis}
+        last = (index + 1) * interval_ns
+        if last <= start or not totals[index]:
+            continue
+        if end is not None and last > end:
+            break
+        if faulted[index] / totals[index] < A2A_SHARE_LIMIT:
+            return last - start
+    return None
+
+
+def first_above(totals: dict, faulted: dict, interval_ns: int, start: int, end: int | None) -> int | None:
+    """From start to the end of the first interval starting at or after
+    start, and ending by end, whose spine share is above A2A_SHARE_LIMIT."""
+    for index in sorted(totals):
+        first, last = index * interval_ns, (index + 1) * interval_ns
+        if first >= start and (end is None or last <= end) and totals[index] \
+                and faulted[index] / totals[index] > A2A_SHARE_LIMIT:
+            return last - start
+    return None
+
+
+def first_window_above(totals: dict, faulted: dict, interval_ns: int, start: int, end: int | None,
+                       level: float, window_ns: int = A2A_WINDOW_NS) -> int | None:
+    """From start to the end e of the first interval with sends starting at
+    or after start, and ending by end, at which the spine share over the
+    intervals with sends ending in (e - window_ns, e] is above level."""
+    indices = [i for i in sorted(totals) if totals[i]]
+    queue: deque[int] = deque()
+    sent = on_spine = 0
+    for index in indices:
+        last = (index + 1) * interval_ns
+        queue.append(index)
+        sent += totals[index]
+        on_spine += faulted[index]
+        while queue and (queue[0] + 1) * interval_ns <= last - window_ns:
+            gone = queue.popleft()
+            sent -= totals[gone]
+            on_spine -= faulted[gone]
+        if index * interval_ns >= start and (end is None or last <= end) and sent and on_spine / sent > level:
+            return last - start
+    return None
+
+
+def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE) -> dict:
+    """reaction_ns (see the module docstring) and the rows' basis."""
+    series = share_series(directory, condition, interval_ns, spine)
+    if series is None:
+        return {"reaction_ns": None, "share_basis": None}
+    totals, faulted, basis = series
+    return {"reaction_ns": first_below(totals, faulted, interval_ns, fault_onset_ns(condition), None),
+            "share_basis": basis}
 
 
 def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> dict:
@@ -1015,44 +1100,37 @@ def period_costs(directory: Path, healthy: Path | None, periods) -> list[dict]:
     return out
 
 
-def readmissions(directory: Path, condition: str, interval_ns: int, periods,
-                 spine: int = DEGRADED_SPINE) -> list[int | None]:
-    """readmission_ns of every off-period, None for an on-period (see the
-    module docstring)."""
-    path = directory / "ns3" / "spine_losses.csv"
-    if not path.exists():
-        return [None for _ in periods]
-    totals: dict[int, int] = defaultdict(int)
-    faulted: dict[int, int] = defaultdict(int)
-    with path.open() as handle:
-        reader = csv.DictReader(handle)
-        keep, _ = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
-        for row in reader:
-            if not keep(row):
-                continue
-            index = (int(row["time_ns"]) - 1) // interval_ns
-            totals[index] += int(row["sent"])
-            if int(row["spine"]) == spine:
-                faulted[index] += int(row["sent"])
-    readmitted = sorted(index for index in totals
-                        if totals[index] and faulted[index] / totals[index] > A2A_SHARE_LIMIT)
+CYCLE_MEASURES = {"on": ("detection_ns",),
+                  "off": ("readmission_ns", "readmission_1ms_ns", "readmission_90pct_1ms_ns")}
+
+
+def period_shares(directory: Path, condition: str, interval_ns: int, periods,
+                  spine: int = DEGRADED_SPINE) -> dict:
+    """Per period, the CYCLE_MEASURES of its kind (see the module
+    docstring), and the rows' basis."""
+    series = share_series(directory, condition, interval_ns, spine)
     out = []
     for kind, _, start, end in periods:
-        found = None
-        if kind == "off":
-            for index in readmitted:
-                first, last = index * interval_ns, (index + 1) * interval_ns
-                if first >= start and (end is None or last <= end):
-                    found = last - start
-                    break
-        out.append(found)
-    return out
+        values = dict.fromkeys(CYCLE_MEASURES[kind])
+        if series is not None:
+            totals, faulted, _ = series
+            if kind == "on":
+                values["detection_ns"] = first_below(totals, faulted, interval_ns, start, end)
+            else:
+                values["readmission_ns"] = first_above(totals, faulted, interval_ns, start, end)
+                values["readmission_1ms_ns"] = first_window_above(
+                    totals, faulted, interval_ns, start, end, A2A_SHARE_LIMIT)
+                values["readmission_90pct_1ms_ns"] = first_window_above(
+                    totals, faulted, interval_ns, start, end, A2A_FULL_SHARE)
+        out.append(values)
+    return {"periods": out, "share_basis": None if series is None else series[2]}
 
 
 def a2a_cycles(rows: list[dict], out_root: Path) -> list[dict]:
     """Per (group, size, condition) cell with a flapping link, per arm and
-    period: per-seed cost_ns, iteration counts and readmission_ns, and the
-    means over the seeds that have one."""
+    period: per-seed cost_ns, iteration counts and the CYCLE_MEASURES of the
+    period's kind, and the means over the seeds that have one; per arm, the
+    per-seed share_basis."""
     cells: dict[tuple, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
     for row in a2a_costs(rows):
         if "flap" not in row:
@@ -1062,9 +1140,9 @@ def a2a_cycles(rows: list[dict], out_root: Path) -> list[dict]:
         directory = out_root / row["key"]
         healthy = None if row["healthy_key"] is None else out_root / row["healthy_key"]
         costs = period_costs(directory, healthy, periods)
-        admitted = readmissions(directory, row["condition"], interval, periods)
+        shares = period_shares(directory, row["condition"], interval, periods)
         cells[(row["group"], row["size"], row["condition"])][row["arm"]].append(
-            {"row": row, "periods": periods, "costs": costs, "readmission": admitted})
+            {"row": row, "periods": periods, "costs": costs, "shares": shares})
 
     def mean(values):
         known = [v for v in values if v is not None]
@@ -1081,18 +1159,22 @@ def a2a_cycles(rows: list[dict], out_root: Path) -> list[dict]:
             entries = []
             for n, (kind, occurrence, start, end) in enumerate(periods):
                 cost = [r["costs"][n]["cost_ns"] for r in runs]
-                admitted = [r["readmission"][n] for r in runs]
                 cost_mean, cost_count = mean(cost)
-                admitted_mean, admitted_count = mean(admitted)
-                entries.append({
+                entry = {
                     "kind": kind, "occurrence": occurrence, "start_ns": start, "end_ns": end,
                     "iterations": [r["costs"][n]["iterations"] for r in runs],
                     "cost_ns": cost, "cost_ns_mean": cost_mean, "cost_ns_count": cost_count,
-                    "readmission_ns": admitted if kind == "off" else None,
-                    "readmission_ns_mean": admitted_mean if kind == "off" else None,
-                    "readmission_ns_count": admitted_count if kind == "off" else None,
-                })
+                }
+                for names in CYCLE_MEASURES.values():
+                    for name in names:
+                        entry[name] = entry[f"{name}_mean"] = entry[f"{name}_count"] = None
+                for name in CYCLE_MEASURES[kind]:
+                    values = [r["shares"]["periods"][n][name] for r in runs]
+                    entry[name] = values
+                    entry[f"{name}_mean"], entry[f"{name}_count"] = mean(values)
+                entries.append(entry)
             table[arm] = {"keys": [r["row"]["key"] for r in runs], "seeds": [r["row"]["seed"] for r in runs],
+                          "share_basis": [r["shares"]["share_basis"] for r in runs],
                           "periods": entries}
         out.append({"group": group, "size": size, "condition": condition, "arms": table})
     return out
@@ -1109,22 +1191,26 @@ def cycles_markdown(cells: list[dict]) -> str:
     for arm in arms:
         lines += [
             f"### {arm}", "",
-            "| group | size | condition | period | start ms | end ms | iterations (seeds) "
-            "| cost mean us (seeds) | re-admission mean us (seeds) |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| group | size | condition | share basis | period | start ms | end ms | iterations (seeds) "
+            "| cost mean us (seeds) | detection mean us (seeds) | re-admission mean us (seeds) "
+            "| re-admission 1 ms mean us (seeds) | 90 percent 1 ms mean us (seeds) |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
         ]
         for cell in cells:
             entry = cell["arms"].get(arm)
             if entry is None:
                 continue
+            basis = ", ".join(sorted({b for b in entry["share_basis"] if b})) or "-"
             for period in entry["periods"]:
                 iterations = ", ".join("-" if v is None else str(v) for v in period["iterations"])
-                admitted = ("" if period["kind"] == "on" else
-                            f"{_us(period['readmission_ns_mean'])} ({period['readmission_ns_count']})")
+                measures = " | ".join(
+                    "" if period[f"{name}_count"] is None else
+                    f"{_us(period[f'{name}_mean'])} ({period[f'{name}_count']})"
+                    for name in ("detection_ns", "readmission_ns", "readmission_1ms_ns", "readmission_90pct_1ms_ns"))
                 lines.append(
-                    f"| {cell['group']} | {cell['size']} | {cell['condition']} "
+                    f"| {cell['group']} | {cell['size']} | {cell['condition']} | {basis} "
                     f"| {period['kind']} {period['occurrence']} | {_ms(period['start_ns'])} | {_ms(period['end_ns'])} "
-                    f"| {iterations} | {_us(period['cost_ns_mean'])} ({period['cost_ns_count']}) | {admitted} |"
+                    f"| {iterations} | {_us(period['cost_ns_mean'])} ({period['cost_ns_count']}) | {measures} |"
                 )
         lines.append("")
     return "\n".join(lines)

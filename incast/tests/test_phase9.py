@@ -527,9 +527,56 @@ class Cycles(unittest.TestCase):
         self.assertEqual([p["cost_ns_mean"] for p in periods], [150, 50, 300, 20])
         self.assertEqual([p["readmission_ns"] for p in periods], [None, [300], None, [300]])
         self.assertEqual(periods[1]["readmission_ns_count"], 1)
+        self.assertEqual([p["detection_ns"] for p in periods], [[100], None, [100], None])
+        self.assertEqual(cell["arms"]["reps_hold_auto"]["share_basis"], ["all"])
         text = analyze.cycles_markdown([cell])
         self.assertIn("### reps_hold_auto", text)
-        self.assertIn("| ep64 | 256k | flap1e2_up | off 0 | 0.001 | 0.002 | 1 | 0.1 (1) | 0.3 (1) |", text)
+        self.assertIn("| ep64 | 256k | flap1e2_up | all | off 0 | 0.001 | 0.002 | 1 | 0.1 (1) |  | 0.3 (1) "
+                      "| - (0) | - (0) |", text)
+        self.assertIn("| on 0 | 0.001 | 0.001 | 2 | 0.1 (1) | 0.1 (1) |  |  |  |", text)
+
+    def test_remote_and_all_bases(self):
+        flap = {"error_rate": 0.01, "start_ns": 1_000_000, "on_ns": 1_000_000, "period_ns": 5_000_000, "repeat": 1}
+        interval = 250_000
+        setting = {"loss_interval_ns": interval}
+        healthy = {**run("reps_hold_auto", "ep16", "2m", "healthy", 301, "a2a_rs3", setting), "iterations": 2}
+        faulted = {**run("reps_hold_auto", "ep16", "2m", "flap1e2_up", 301, "a2a_rs3", setting),
+                   "iterations": 2, "flap": flap}
+        # Host 0 (leaf 0) sends 100 per interval toward leaf 1, spine 3
+        # taking share[i] of them, and 100 toward leaf 0 on spine 1; host 9
+        # (leaf 1) sends 100 toward leaf 0 on spine 3.
+        share = [12, 12, 12, 12, 12, 5, 0, 0, 0, 7, 10, 12, 13, 13, 13, 13]
+        rows = []
+        for i, n in enumerate(share):
+            end = (i + 1) * interval
+            rows += [(end, 0, 1, 3, n), (end, 0, 1, 1, 100 - n), (end, 0, 0, 1, 100), (end, 9, 0, 3, 100)]
+        found = {}
+        for basis, header, form in (
+                ("remote", "time_ns,rank,destination_leaf,spine,sent,lost,grade",
+                 lambda r: f"{r[0]},{r[1]},{r[2]},{r[3]},{r[4]},0,3"),
+                ("all", "time_ns,rank,spine,sent,lost,grade",
+                 lambda r: f"{r[0]},{r[1]},{r[3]},{r[4]},0,3")):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.write(root, healthy, [0, 3_000_000], [100, 100])
+                self.write(root, faulted, [0, 3_000_000], [100, 100])
+                (root / faulted["key"] / "ns3" / "spine_losses.csv").write_text(
+                    header + "\n" + "".join(form(r) + "\n" for r in rows))
+                listing = root / "runs.json"
+                listing.write_text(json.dumps([healthy, faulted]))
+                (cell,) = analyze.a2a_cycles(analyze.a2a_rows([listing], root, "a2a_rs3"), root)
+            entry = cell["arms"]["reps_hold_auto"]
+            self.assertEqual(entry["share_basis"], [basis])
+            on, off = entry["periods"]
+            found[basis] = (on["detection_ns"], off["readmission_ns"], off["readmission_1ms_ns"],
+                            off["readmission_90pct_1ms_ns"])
+            self.assertIsNone(on["readmission_ns"])
+            self.assertIsNone(off["detection_ns_mean"])
+        # Remote: 5 / 100 in [1.25, 1.5) ms; 7 / 100 in [2.25, 2.5) ms; over
+        # 1 ms, 29 / 400 by 3 ms and 48 / 400 (above 0.9 / 8) by 3.5 ms.
+        self.assertEqual(found["remote"], ([500_000], [500_000], [1_000_000], [1_500_000]))
+        # All: the sends toward leaf 0 halve every share.
+        self.assertEqual(found["all"], ([250_000], [1_250_000], [1_750_000], [None]))
 
     def test_no_trace_and_incomplete(self):
         healthy = {**run("uniform", "ep16", "2m", "healthy", 302, "a2a_rs3"), "iterations": 2}
@@ -632,9 +679,9 @@ class Reaction(unittest.TestCase):
             root = Path(directory)
             self.trace(root, "time_ns,rank,spine,sent,lost,grade", rows)
             result = analyze.reaction(root, "loss1e2_up", interval)
-            self.assertEqual(result, {"reaction_ns": (first + 3) * interval - onset, "share_basis": "hosts of leaf 0"})
+            self.assertEqual(result, {"reaction_ns": (first + 3) * interval - onset, "share_basis": "all"})
             # Down: without destination_leaf, the hosts off leaf 1 (host 0 alone here).
-            self.assertEqual(analyze.reaction(root, "loss1e2_down", interval)["share_basis"], "hosts off leaf 1")
+            self.assertEqual(analyze.reaction(root, "loss1e2_down", interval)["share_basis"], "all")
             self.assertIsNone(analyze.reaction(root / "none", "loss1e2_up", interval)["reaction_ns"])
 
     def test_destination_leaf_rows(self):
@@ -644,7 +691,40 @@ class Reaction(unittest.TestCase):
             root = Path(directory)
             self.trace(root, "time_ns,rank,destination_leaf,spine,sent,lost,grade", rows)
             result = analyze.reaction(root, "loss1e2_down", 1000)
-        self.assertEqual(result, {"reaction_ns": end - analyze.DEGRADE_AT_NS, "share_basis": "destination_leaf 1"})
+        self.assertEqual(result, {"reaction_ns": end - analyze.DEGRADE_AT_NS, "share_basis": "remote"})
+
+    def test_remote_rows_per_condition(self):
+        # (rank, destination_leaf): rank 0 is on leaf 0, rank 9 on leaf 1.
+        pairs = [(0, 0), (0, 1), (0, 2), (9, 0), (9, 1), (17, 1)]
+
+        def kept(condition, leaf_column):
+            keep, basis = analyze.faulted_share_rows(condition, leaf_column)
+            return [pair for pair in pairs
+                    if keep({"rank": str(pair[0]), "destination_leaf": str(pair[1])})], basis
+
+        self.assertEqual(kept("loss1e2_up", True), ([(0, 1), (0, 2)], "remote"))
+        self.assertEqual(kept("loss1e2_down", True), ([(0, 1), (17, 1)], "remote"))
+        self.assertEqual(kept("structural", True), ([(0, 1), (0, 2), (9, 0), (17, 1)], "remote"))
+        self.assertEqual(kept("loss1e2_up", False), ([(0, 0), (0, 1), (0, 2)], "all"))
+        self.assertEqual(kept("loss1e2_down", False), ([(0, 0), (0, 1), (0, 2), (17, 1)], "all"))
+        self.assertEqual(kept("structural", False), (pairs, "all"))
+
+    def test_window_share(self):
+        # Interval 1, window 3: the share over the intervals ending in (e - 3, e].
+        totals = {i: 100 for i in range(8)} | {8: 0}
+        faulted = {0: 30, 1: 0, 2: 0, 3: 0, 4: 0, 5: 7, 6: 6, 7: 7, 8: 0}
+
+        def at(start, end, level):
+            return analyze.first_window_above(totals, faulted, 1, start, end, level, window_ns=3)
+        # The window at 3 reaches back to 1 only; interval 0 is out of it.
+        self.assertIsNone(at(3, 5, 1 / 16))
+        # 5..7 holds 20 / 300, above 1/16; 4..6 holds 13 / 300.
+        self.assertEqual(at(3, None, 1 / 16), 5)
+        self.assertIsNone(at(3, 7, 1 / 16))
+        # The window takes intervals before start: at 2, 0..2 holds 30 / 300.
+        self.assertEqual(at(2, None, 0.09), 1)
+        # Per interval, 7 / 100 in interval 5 is above 1/16.
+        self.assertEqual(analyze.first_above(totals, faulted, 1, 3, None), 3)
 
     def test_early_cost(self):
         onset = analyze.DEGRADE_AT_NS
