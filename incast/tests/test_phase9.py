@@ -334,6 +334,69 @@ class Receiver(unittest.TestCase):
         self.assertEqual(by_arm["reps_hold_auto_rx"]["sentinel_mode"], "duplicate")
 
 
+class ReceiverAndTimeouts(unittest.TestCase):
+    def test_receiver_reaction(self):
+        onset = analyze.DEGRADE_AT_NS
+        header = "time_ns,rank,sender_leaf,spine,arrivals,lost,hold\n"
+        rows = [
+            (onset - 10, 9, 0, 3, 100, 1, "leaf"),  # before the onset
+            (onset + 100, 9, 1, 3, 100, 1, "leaf"),  # another sender leaf
+            (onset + 200, 9, 0, 2, 100, 1, "leaf"),  # another spine
+            (onset + 300, 9, 0, 3, 100, 0, "none"),
+            (onset + 400, 9, 0, 3, 100, 1, "host"),
+            (onset + 500, 1, 0, 3, 100, 1, "leaf"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ns3").mkdir()
+            (root / "ns3" / "receiver_holds.csv").write_text(
+                header + "".join(",".join(map(str, r)) + "\n" for r in rows))
+            self.assertEqual(analyze.receiver_reaction(root, "loss1e2_up"),
+                             {"receiver_reaction_ns": 400, "receiver_basis": "sender_leaf 0"})
+            # Down: the receivers of leaf 1 (rank 9) alone, any sender leaf.
+            self.assertEqual(analyze.receiver_reaction(root, "loss1e2_down")["receiver_reaction_ns"], 100)
+            self.assertEqual(analyze.receiver_reaction(root, "structural")["receiver_reaction_ns"],
+                             onset - 10)
+            self.assertEqual(analyze.receiver_reaction(root / "none", "loss1e2_up"),
+                             {"receiver_reaction_ns": None, "receiver_basis": None})
+
+    def test_rto_counts_per_iteration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ns3").mkdir()
+            timing = {"complete": True, "iteration_start_ns": {"1": 100, "2": 1000, "3": 5000}}
+            (root / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+            self.assertEqual(analyze.rto_counts(root), {"rto_events": None, "rto_per_iteration": None})
+            times = (50, 100, 999, 1000, 4000, 6000, 7000)
+            (root / "ns3" / "rto_events.csv").write_text(
+                "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n"
+                + "".join(f"{t},0,1,3,0,4096\n" for t in times))
+            self.assertEqual(analyze.rto_counts(root), {"rto_events": 7, "rto_per_iteration": [3, 2, 2]})
+
+    def test_candidates_carry_the_new_measures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for condition in ("healthy", "loss1e2_up"):
+                r = run("reps_hold_auto_rx", "ep64", "2m", condition, 301, "a2a_receiver")
+                runs.append(r)
+                d = root / r["key"]
+                (d / "ns3").mkdir(parents=True)
+                timing = {"complete": True, "iteration_completion_ns": {"1": 10, "2": 10},
+                          "iteration_start_ns": {"1": 0, "2": 10}}
+                (d / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+                (d / "ns3" / "rto_events.csv").write_text(
+                    "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n5,0,1,3,1,1\n")
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_candidates(analyze.a2a_rows([listing], root, "a2a_receiver"), root)
+            entry = cell["arms"]["reps_hold_auto_rx"]
+            self.assertEqual(entry["rto_events"], [1])
+            self.assertEqual(entry["rto_per_iteration"], [[1, 0]])
+            self.assertEqual(entry["receiver_reaction_ns"], [None])
+            self.assertIn("RTOs mean", analyze.candidates_markdown([cell]))
+
+
 class Reaction(unittest.TestCase):
     def trace(self, root, header, rows):
         (root / "ns3").mkdir(parents=True)

@@ -36,7 +36,7 @@ seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
 seeds with a known cost).
 
 a2a_candidates gives every arm of the runs given (all stages unless --stage)
-per cell its per-seed and mean primary and tail cost, and two measures per
+per cell its per-seed and mean primary and tail cost, and these measures per
 faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -49,6 +49,17 @@ faulted run:
   writes no trace (ns3/spine_arrivals.csv holds cumulative counters only at
   the link events, so it gives no share over time) or the share never
   falls below 1/16.
+* receiver_reaction_ns: from the onset to the end of the first receiver
+  hold interval ending after it in which a receiving host holds spine 3
+  (hold not none), from ns3/receiver_holds.csv, over the rows of the
+  faulted link: sender_leaf 0 for an _up fault, the receiving hosts of leaf
+  1 for a _down fault, every row for structural. None when the run writes
+  no receiver hold trace or no such interval comes.
+* rto_events: the retransmission timeouts the run's queue pairs took, from
+  ns3/rto_events.csv, and rto_per_iteration their count per iteration, an
+  event counted in the latest iteration started at or before it (the
+  first for one before every start) by summary.json's iteration starts.
+  None when the run writes no timeout trace.
 * early_cost_ns: the sum, over the iterations that start within 500 us of
   the onset, of the iteration's completion minus the paired healthy run's
   completion of the same iteration; infinite when the faulted run is
@@ -810,6 +821,53 @@ def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEG
     return {"reaction_ns": None, "share_basis": basis}
 
 
+def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> dict:
+    """receiver_reaction_ns (see the module docstring) and the rows' basis."""
+    path = directory / "ns3" / "receiver_holds.csv"
+    if not path.exists():
+        return {"receiver_reaction_ns": None, "receiver_basis": None}
+    hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
+    if condition == "structural":
+        keep, basis = (lambda row: True), "every row"
+    elif condition.endswith("_up"):
+        keep, basis = (lambda row: int(row["sender_leaf"]) == 0), "sender_leaf 0"
+    else:
+        keep, basis = (lambda row: int(row["rank"]) // hosts == 1), "receivers on leaf 1"
+    onset = fault_onset_ns(condition)
+    ends = []
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            end = int(row["time_ns"])
+            if end > onset and int(row["spine"]) == spine and row["hold"] != "none" and keep(row):
+                ends.append(end)
+    return {"receiver_reaction_ns": min(ends) - onset if ends else None, "receiver_basis": basis}
+
+
+def rto_counts(directory: Path) -> dict:
+    """rto_events and rto_per_iteration (see the module docstring)."""
+    path = directory / "ns3" / "rto_events.csv"
+    if not path.exists():
+        return {"rto_events": None, "rto_per_iteration": None}
+    timing = json.loads((directory / "summary.json").read_text()).get("all_to_all") or {}
+    starts = sorted((v, int(i)) for i, v in (timing.get("iteration_start_ns") or {}).items())
+    per_iteration = {i: 0 for _, i in starts}
+    total = 0
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            total += 1
+            if not starts:
+                continue
+            time = int(row["time_ns"])
+            iteration = starts[0][1]
+            for start, i in starts:
+                if start > time:
+                    break
+                iteration = i
+            per_iteration[iteration] += 1
+    return {"rto_events": total,
+            "rto_per_iteration": [per_iteration[i] for i in sorted(per_iteration)] if starts else None}
+
+
 def iteration_timing(directory: Path) -> dict[int, tuple[int, int]] | None:
     """{iteration: (start, completion)} of a run's completed iterations, the
     starts from summary.json or, for a summary that has none, from
@@ -855,26 +913,34 @@ def a2a_candidates(rows: list[dict], out_root: Path) -> list[dict]:
         directory = out_root / row["key"]
         healthy = None if row["healthy_key"] is None else out_root / row["healthy_key"]
         measured[row["key"]] = {**reaction(directory, row["condition"], interval),
+                                **receiver_reaction(directory, row["condition"]),
+                                **rto_counts(directory),
                                 "early_cost_ns": early_cost(directory, healthy, row["condition"])}
     cells = a2a_cost_cells(rows)
     for cell in cells:
         for entry in cell["arms"].values():
-            for name in ("reaction_ns", "early_cost_ns"):
+            entry["rto_per_iteration"] = [measured[k]["rto_per_iteration"] for k in entry["keys"]]
+            for name in ("reaction_ns", "receiver_reaction_ns", "rto_events", "early_cost_ns"):
                 values = [measured[k][name] for k in entry["keys"]]
                 entry[name] = values
                 known = [v for v in values if v is not None]
                 entry[f"{name}_mean"] = sum(known) / len(known) if known else None
                 entry[f"{name}_count"] = len(known)
-            entry["share_basis"] = next((measured[k]["share_basis"] for k in entry["keys"]
-                                         if measured[k]["share_basis"]), None)
+            for basis in ("share_basis", "receiver_basis"):
+                entry[basis] = next((measured[k][basis] for k in entry["keys"] if measured[k][basis]), None)
     return cells
+
+
+def _count(value) -> str:
+    return "-" if value is None else f"{value:,.1f}"
 
 
 def candidates_markdown(cells: list[dict]) -> str:
     lines = [
         "| group | size | condition | arm | cost mean us | tail cost mean us "
-        "| reaction mean us (seeds) | early cost mean us (seeds) |",
-        "|---|---|---|---|---|---|---|---|",
+        "| reaction mean us (seeds) | receiver reaction mean us (seeds) "
+        "| early cost mean us (seeds) | RTOs mean (seeds) |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -882,7 +948,9 @@ def candidates_markdown(cells: list[dict]) -> str:
                 f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
                 f"| {_us(entry['cost_ns_mean'])} | {_us(entry['tail_cost_ns_mean'])} "
                 f"| {_us(entry['reaction_ns_mean'])} ({entry['reaction_ns_count']}) "
-                f"| {_us(entry['early_cost_ns_mean'])} ({entry['early_cost_ns_count']}) |"
+                f"| {_us(entry['receiver_reaction_ns_mean'])} ({entry['receiver_reaction_ns_count']}) "
+                f"| {_us(entry['early_cost_ns_mean'])} ({entry['early_cost_ns_count']}) "
+                f"| {_count(entry['rto_events_mean'])} ({entry['rto_events_count']}) |"
             )
     return "\n".join(lines) + "\n"
 
