@@ -433,8 +433,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_gate_reps           reps_oracle (REPS over the spines the switches'
 #                           state shows no fault on) and reps on the 28 cells
 #                           and their healthy pairs, seeds 301-303
-#   a2a_candidates          the A2A_CANDIDATE_ARMS on the admitted cells and
-#                           their healthy pairs, seeds 301-303
+#   a2a_candidates          the A2A_CANDIDATE_ARMS on the 28 cells of the
+#                           gate and their healthy pairs, seeds 301-303
+#   a2a_receiver            the A2A_RECEIVER_ARMS on the 28 cells and their
+#                           healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -567,20 +569,38 @@ A2A_TUNING_STAGES = {"a2a_tuning": A2A_TUNED_ARMS, "a2a_tuning_mix": ("graded_pe
 # freezing_timeout_ns at the defaults the reps arm runs at.
 A2A_REPS_ORACLE = "reps_oracle"
 A2A_GATE_REPS_ARMS = (A2A_REPS_ORACLE, "reps")
-# a2a_candidates' arms. The REPS loss-hold arms (spray_uniform, selector
-# reps_hold or reps_flow_hold, REPS's buffer_size and freezing_timeout_ns at
-# their defaults, held_exploration sentinel) take loss_interval_ns,
-# loss_hold_clean_sentinels and held_sentinel_interval_ns from
-# a2a_tuning.json's graded_per_receiver_mix setting and its loss_thresholds
-# at that interval from the per_receiver calibration, as the mix arm does;
-# reps_hold's hold_scope keys the hold per host, or per spine per host or per
-# destination leaf (auto), and reps_flow_hold holds per queue pair. The floor arms are a2a_tuning.json's
+# a2a_candidates' arms. The loss-hold arms (spray_uniform, selector
+# reps_hold, reps_flow_hold or mrc_hold, REPS's buffer_size and
+# freezing_timeout_ns, or MRC's skip_base_rtts and probe_timeouts as the mrc
+# arm runs them, at their defaults, held_exploration sentinel) take
+# loss_interval_ns, loss_hold_clean_sentinels and held_sentinel_interval_ns
+# from a2a_tuning.json's graded_per_receiver_mix setting and its
+# loss_thresholds at that interval from the per_receiver calibration, as the
+# mix arm does; hold_scope keys the hold of reps_hold and mrc_hold per host,
+# or per spine per host or per destination leaf (auto), and reps_flow_hold
+# holds per queue pair. Every loss-hold arm keeps the count rule and the
+# clean sentinels' release and sends its sentinels as copies of data
+# packets (A2A_HELD_EXPLORATION). The floor arms are a2a_tuning.json's
 # setting of their base arm with congestion_grade_floor 1 and nothing else:
 # mix_floor1 leaves pool_hold_propagates unset.
 A2A_REPS_HOLD_ARMS = {
     "reps_hold_auto": ("reps_hold", "auto"),
     "reps_hold_host": ("reps_hold", "host"),
     "reps_flow_hold": ("reps_flow_hold", None),
+    "mrc_hold_auto": ("mrc_hold", "auto"),
+}
+A2A_HELD_EXPLORATION = {"sentinel_mode": "duplicate", "hold_release": "sentinels"}
+# a2a_receiver's arms: each a candidate arm's setting, with the receiver's
+# hold (path sequences in the data headers, the receiver's hold reported in
+# every acknowledgement, released after A2A_RECEIVER_HOLD_CLEAN clean
+# arrivals) or without it.
+A2A_RECEIVER_HOLD_CLEAN = 1024
+A2A_RECEIVER_HOLD = {"path_seq": True, "receiver_hold": True,
+                     "receiver_hold_clean": A2A_RECEIVER_HOLD_CLEAN}
+A2A_RECEIVER_ARMS = {
+    "reps_hold_auto_rx": ("reps_hold_auto", True),
+    "reps_hold_auto": ("reps_hold_auto", False),
+    "reps_flow_hold_rx": ("reps_flow_hold", True),
 }
 A2A_FLOOR_ARMS = {
     "shared_floor1": "graded_per_receiver_shared",
@@ -589,7 +609,7 @@ A2A_FLOOR_ARMS = {
 A2A_CONGESTION_GRADE_FLOOR = 1
 A2A_CANDIDATE_ARMS = tuple(A2A_REPS_HOLD_ARMS) + tuple(A2A_FLOOR_ARMS)
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
-              "a2a_comparison", "a2a_gate_reps", "a2a_candidates")
+              "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver")
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -648,10 +668,12 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return balancing(arm, 0, None)
     if arm == A2A_REPS_ORACLE:
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
-    if arm in A2A_REPS_HOLD_ARMS:
+    if arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS:
         # The setting holds the loss interval, the clean sentinels, the
-        # sentinel interval and, for reps_hold, hold_scope.
-        selector, _ = A2A_REPS_HOLD_ARMS[arm]
+        # sentinel interval, the exploration sends, hold_scope where the
+        # selector reads it, and the receiver's hold where the arm has it.
+        base = A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS else arm
+        selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
         return {
@@ -742,11 +764,25 @@ def a2a_candidate_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str,
     }
     settings: dict[str, dict[str, Any]] = {}
     for arm, (_, scope) in A2A_REPS_HOLD_ARMS.items():
-        settings[arm] = {**hold, **({} if scope is None else {"hold_scope": scope})}
+        settings[arm] = {**hold, **({} if scope is None else {"hold_scope": scope}), **A2A_HELD_EXPLORATION}
     for arm, base in A2A_FLOOR_ARMS.items():
         if (tuning or {}).get(base):
             settings[arm] = {**tuning[base], "congestion_grade_floor": A2A_CONGESTION_GRADE_FLOOR}
     return settings
+
+
+def a2a_receiver_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each receiver arm's setting: its base candidate arm's, with
+    A2A_RECEIVER_HOLD where the arm holds at the receiver."""
+    candidates = a2a_candidate_settings(tuning)
+    return {arm: {**candidates[base], **(A2A_RECEIVER_HOLD if receiver else {})}
+            for arm, (base, receiver) in A2A_RECEIVER_ARMS.items()}
+
+
+def a2a_gate_cells() -> list[tuple[str, str, str]]:
+    """The 28 (group, size, condition) cells of the gate."""
+    return [(group, size, condition)
+            for (group, size), condition in itertools.product(A2A_CELLS, A2A_FAULTS)]
 
 
 def a2a_admitted_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, str]]:
@@ -755,7 +791,7 @@ def a2a_admitted_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, st
     admitted = (tuning or {}).get("admitted")
     return [
         (group, size, condition)
-        for (group, size), condition in itertools.product(A2A_CELLS, A2A_FAULTS)
+        for group, size, condition in a2a_gate_cells()
         if admitted is None or f"{a2a_cell_name(group, size)}-{condition}" in admitted
     ]
 
@@ -813,13 +849,12 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             for setting in a2a_tuning_settings(arm):
                 for condition in (headline, "healthy"):
                     add(arm, group, size, condition, seed, setting, True)
-    elif stage == "a2a_candidates":
-        cells = a2a_admitted_cells(tuning)
-        pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
-        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_candidate_settings(tuning).items()):
-            for group, size, condition in cells:
+    elif stage in ("a2a_candidates", "a2a_receiver"):
+        settings = (a2a_candidate_settings if stage == "a2a_candidates" else a2a_receiver_settings)(tuning)
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
+            for group, size, condition in a2a_gate_cells():
                 add(arm, group, size, condition, seed, setting)
-            for group, size in pairs:
+            for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
     elif stage == "a2a_comparison":
         cells = a2a_admitted_cells(tuning)

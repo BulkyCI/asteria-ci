@@ -35,12 +35,12 @@ class Stages(unittest.TestCase):
         self.assertEqual(
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
-             "a2a_gate_reps": 192, "a2a_candidates": 288},
+             "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
-             "a2a_gate_reps": 192, "a2a_candidates": 480},
+             "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -285,10 +285,13 @@ class Candidates(unittest.TestCase):
         tuning = json.loads((Path(profiles.__file__).parent / "a2a_tuning.json").read_text())
         calibration = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         runs = profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
-        # 22 admitted cells and 4 healthy pairs by 5 arms by 3 seeds.
-        self.assertEqual(len(runs), (22 + 4) * 5 * 3)
+        # The gate's 28 cells, whatever a2a_tuning.json admits, and 4
+        # healthy pairs by 6 arms by 3 seeds.
+        self.assertEqual(len(runs), (28 + 4) * 6 * 3)
         self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto", "reps_hold_host", "reps_flow_hold",
-                                                    "shared_floor1", "mix_floor1"})
+                                                    "mrc_hold_auto", "shared_floor1", "mix_floor1"})
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"},
+                         set(profiles.a2a_gate_cells()))
         self.assertLessEqual({r["condition"] for r in runs}, {"healthy", *profiles.A2A_FAULTS})
         by_arm = {r["arm"]: profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
                   for r in runs if (r["group"], r["size"], r["condition"]) == ("ep64", "256k", "loss1e2_up")}
@@ -296,15 +299,39 @@ class Candidates(unittest.TestCase):
         thresholds = calibration["per_receiver"]["ep64-256k"]["loss_thresholds"][str(mix["loss_interval_ns"])]
         hold = {"mode": "spray_uniform", "loss_thresholds": thresholds, "held_exploration": "sentinel",
                 "loss_interval_ns": mix["loss_interval_ns"], "loss_hold_clean_sentinels": 1024,
-                "held_sentinel_interval_ns": 1_000_000}
+                "held_sentinel_interval_ns": 1_000_000, "sentinel_mode": "duplicate",
+                "hold_release": "sentinels"}
         self.assertEqual(by_arm["reps_hold_auto"], {**hold, "selector": "reps_hold", "hold_scope": "auto"})
         self.assertEqual(by_arm["reps_hold_host"], {**hold, "selector": "reps_hold", "hold_scope": "host"})
         self.assertEqual(by_arm["reps_flow_hold"], {**hold, "selector": "reps_flow_hold"})
+        # MRC's skip_base_rtts and probe_timeouts at the defaults the mrc arm runs at.
+        self.assertEqual(by_arm["mrc_hold_auto"], {**hold, "selector": "mrc_hold", "hold_scope": "auto"})
+        for arm in profiles.A2A_REPS_HOLD_ARMS:
+            self.assertNotIn("hold_rule", by_arm[arm])
         self.assertEqual(by_arm["mix_floor1"], {**by_arm["mix_floor1"], "congestion_grade_floor": 1, **mix})
         self.assertNotIn("pool_hold_propagates", by_arm["mix_floor1"])
         self.assertEqual(by_arm["shared_floor1"]["congestion_grade_floor"], 1)
         self.assertNotIn("pool_hold_propagates", by_arm["shared_floor1"])
         self.assertEqual(by_arm["shared_floor1"]["sender_pool_weight"], 1.0)
+
+
+class Receiver(unittest.TestCase):
+    def test_runs_and_settings(self):
+        tuning = json.loads((Path(profiles.__file__).parent / "a2a_tuning.json").read_text())
+        calibration = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_receiver", calibration, tuning)
+        self.assertEqual(len(runs), (28 + 4) * 3 * 3)
+        self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto_rx", "reps_hold_auto", "reps_flow_hold_rx"})
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
+                  for r in runs if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep64", "2m", "healthy", 301)}
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep64", "2m", "healthy", 301)}
+        receiver = {"path_seq": True, "receiver_hold": True, "receiver_hold_clean": 1024}
+        self.assertEqual(by_arm["reps_hold_auto"], candidates["reps_hold_auto"])
+        self.assertEqual(by_arm["reps_hold_auto_rx"], {**candidates["reps_hold_auto"], **receiver})
+        self.assertEqual(by_arm["reps_flow_hold_rx"], {**candidates["reps_flow_hold"], **receiver})
+        self.assertEqual(by_arm["reps_hold_auto_rx"]["sentinel_mode"], "duplicate")
 
 
 class Reaction(unittest.TestCase):
