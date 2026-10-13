@@ -2,6 +2,7 @@
 all-to-all cost pairing and the oracle-headroom gate."""
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -315,6 +316,28 @@ class Candidates(unittest.TestCase):
         self.assertEqual(by_arm["shared_floor1"]["congestion_grade_floor"], 1)
         self.assertNotIn("pool_hold_propagates", by_arm["shared_floor1"])
         self.assertEqual(by_arm["shared_floor1"]["sender_pool_weight"], 1.0)
+
+    def test_record_filter_selects_the_hold_arms(self):
+        # The workflow's record_filter, passed to shards.py as --filter, on
+        # the run keys <stage>-<group>-<size>-<condition>-<arm>-s<seed>.
+        tuning = json.loads((Path(profiles.__file__).parent / "a2a_tuning.json").read_text())
+        calibration = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
+        hold = set(profiles.A2A_REPS_HOLD_ARMS)
+        expression = "(" + "|".join(sorted(hold)) + ")-s[0-9]+$"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a2a_candidates").mkdir()
+            (root / "a2a_candidates" / "runs.json").write_text(json.dumps(runs))
+            subprocess.run(
+                [sys.executable, str(Path(profiles.__file__).parent / "shards.py"), str(root),
+                 "--filter", expression, "--runs-per-shard", "3", "--out", str(root / "shards.json")],
+                check=True,
+            )
+            keys = [k for shard in json.loads((root / "shards.json").read_text()) for k in shard["keys"].split()]
+        self.assertEqual(sorted(keys), sorted(r["key"] for r in runs if r["arm"] in hold))
+        # The 28 gate cells and 4 healthy pairs by 4 arms by 3 seeds.
+        self.assertEqual(len(keys), (28 + 4) * 4 * 3)
 
 
 class Receiver(unittest.TestCase):
