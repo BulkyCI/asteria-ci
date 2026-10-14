@@ -445,6 +445,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_tail                the A2A_TAIL_ARMS on every loss and blackhole
 #                           cell of the gate (a2a_tail_cells) and their
 #                           healthy pairs, seeds 301-303
+#   a2a_ackloss             the A2A_ACKLOSS_ARMS on the A2A_ACKLOSS_CELLS
+#                           (blackhole_up on every group and size, the four
+#                           loss conditions on EP64 at 256 KiB) and their
+#                           healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -668,9 +672,23 @@ A2A_TAIL = {"path_seq": True, "tail_recovery": True}
 A2A_REPS_SPINE = "reps_spine"
 A2A_TAIL_ARMS = {"uniform_tail": "uniform", "reps_tail": A2A_REPS_SPINE, "reps_hold_auto_tail": "reps_hold_auto"}
 A2A_TAIL_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "blackhole_up")
+# a2a_ackloss's arms: ack_loss_rtts (A2A_ACKLOSS: load_balancing
+# ack_loss_rtts, written as SPRAY_ACK_LOSS_RTTS) on a base arm:
+# reps_hold_auto with its a2a_candidates setting, and reps_spine as a2a_tail's
+# reps_tail runs it, without path_seq and tail_recovery. The cells:
+# blackhole_up on every group and size, and the four loss conditions on EP64
+# at 256 KiB.
+A2A_ACKLOSS_STAGE = "a2a_ackloss"
+A2A_ACK_LOSS_RTTS = 2
+A2A_ACKLOSS = {"ack_loss_rtts": A2A_ACK_LOSS_RTTS}
+A2A_ACKLOSS_ARMS = {"reps_hold_auto_ack": "reps_hold_auto", "reps_spine_ack": A2A_REPS_SPINE}
+A2A_ACKLOSS_CELLS = tuple(
+    [(group, size, "blackhole_up") for group, size in A2A_CELLS]
+    + [("ep64", "256k", condition) for condition in ("loss1e2_up", "loss1e3_up", "loss1e2_down", "loss1e3_down")]
+)
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
-              A2A_TAIL_STAGE)
+              A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -742,15 +760,18 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
     if arm in A2A_TAIL_ARMS and A2A_TAIL_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
         # The setting is A2A_TAIL alone.
         return {**a2a_balancing(A2A_TAIL_ARMS[arm], group, size, calibration, None), **(setting or {})}
+    if arm in A2A_ACKLOSS_ARMS and A2A_ACKLOSS_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
+        # The setting is A2A_ACKLOSS alone.
+        return {**a2a_balancing(A2A_ACKLOSS_ARMS[arm], group, size, calibration, None), **(setting or {})}
     if (arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS
-            or arm in A2A_TAIL_ARMS):
+            or arm in A2A_TAIL_ARMS or arm in A2A_ACKLOSS_ARMS):
         # The setting holds the loss interval, the clean sentinels and the
         # sentinel interval (or the trickle release's hold test), the
         # exploration sends, hold_scope where the selector reads it, the
-        # receiver's hold where the arm has it, and tail recovery where the
-        # arm has it.
+        # receiver's hold where the arm has it, and tail recovery or
+        # ack_loss_rtts where the arm has it.
         base = (A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS
-                else A2A_TRICKLE_ARMS.get(arm, A2A_TAIL_ARMS.get(arm, arm)))
+                else A2A_TRICKLE_ARMS.get(arm, A2A_TAIL_ARMS.get(arm, A2A_ACKLOSS_ARMS.get(arm, arm))))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
@@ -877,6 +898,13 @@ def a2a_tail_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     return {arm: {**candidates.get(base, {}), **A2A_TAIL} for arm, base in A2A_TAIL_ARMS.items()}
 
 
+def a2a_ackloss_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_ackloss arm's setting: A2A_ACKLOSS, on reps_hold_auto's
+    candidate setting for reps_hold_auto_ack."""
+    candidates = a2a_candidate_settings(tuning)
+    return {arm: {**candidates.get(base, {}), **A2A_ACKLOSS} for arm, base in A2A_ACKLOSS_ARMS.items()}
+
+
 def a2a_tail_cells() -> list[tuple[str, str, str]]:
     """Every gate cell under a loss or blackhole condition."""
     return [cell for cell in a2a_gate_cells() if cell[2] in A2A_TAIL_CONDITIONS]
@@ -964,6 +992,14 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         cells = a2a_tail_cells()
         pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_tail_settings(tuning).items()):
+            for group, size, condition in cells:
+                add(arm, group, size, condition, seed, setting)
+            for group, size in pairs:
+                add(arm, group, size, "healthy", seed, setting)
+    elif stage == A2A_ACKLOSS_STAGE:
+        cells = list(A2A_ACKLOSS_CELLS)
+        pairs = [cell for cell in A2A_CELLS if any(c[:2] == cell for c in cells)]
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_ackloss_settings(tuning).items()):
             for group, size, condition in cells:
                 add(arm, group, size, condition, seed, setting)
             for group, size in pairs:

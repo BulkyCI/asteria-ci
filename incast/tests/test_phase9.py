@@ -37,13 +37,13 @@ class Stages(unittest.TestCase):
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216},
+             "a2a_tail": 216, "a2a_ackloss": 72},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216},
+             "a2a_tail": 216, "a2a_ackloss": 72},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -434,6 +434,40 @@ class Tail(unittest.TestCase):
         # No sender loss trace under the uniform draw or reps_oracle.
         self.assertEqual(cell["arms"]["uniform_tail"]["reaction_ns"], [None])
         self.assertEqual(cell["arms"]["reps_tail"]["reaction_ns"], [None])
+
+
+class AckLoss(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+        self.runs = profiles.a2a_stage_runs("a2a_ackloss", self.calibration, self.tuning)
+
+    def test_runs(self):
+        # blackhole_up on the 4 groups and sizes and the 4 loss conditions on
+        # EP64 at 256 KiB, and 4 healthy pairs, by 2 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (8 + 4) * 2 * 3)
+        self.assertEqual({r["arm"] for r in self.runs}, {"reps_hold_auto_ack", "reps_spine_ack"})
+        self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
+        faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
+        self.assertEqual(faulted, {(g, s, "blackhole_up") for g, s in profiles.A2A_CELLS}
+                         | {("ep64", "256k", c) for c in ("loss1e2_up", "loss1e3_up", "loss1e2_down", "loss1e3_down")})
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs if r["condition"] == "healthy"},
+                         set(profiles.A2A_CELLS))
+        self.assertEqual(len({r["key"] for r in self.runs}), len(self.runs))
+        self.assertIn("a2a_ackloss-ep64-256k-loss1e2_up-reps_spine_ack-s301", {r["key"] for r in self.runs})
+
+    def test_settings(self):
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                  for r in self.runs if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep64", "256k", "loss1e2_up", 301)}
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == ("ep64", "256k", "loss1e2_up", 301)}
+        self.assertEqual(by_arm["reps_hold_auto_ack"], {**candidates["reps_hold_auto"], "ack_loss_rtts": 2})
+        self.assertEqual(by_arm["reps_spine_ack"], {"mode": "spray_uniform", "selector": "reps_spine", "ack_loss_rtts": 2})
+        for values in by_arm.values():
+            self.assertNotIn("path_seq", values)
+            self.assertNotIn("tail_recovery", values)
 
 
 class Rs3(unittest.TestCase):
