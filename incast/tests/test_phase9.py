@@ -37,13 +37,13 @@ class Stages(unittest.TestCase):
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216, "a2a_ackloss": 72},
+             "a2a_tail": 216, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216, "a2a_ackloss": 72},
+             "a2a_tail": 216, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -469,6 +469,62 @@ class AckLoss(unittest.TestCase):
             self.assertNotIn("path_seq", values)
             self.assertNotIn("tail_recovery", values)
 
+
+
+class CandidatesAck(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+        self.runs = profiles.a2a_stage_runs("a2a_candidates_ack", self.calibration, self.tuning)
+
+    def test_runs(self):
+        # The 28 gate cells and 4 healthy pairs by 3 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (28 + 4) * 3 * 3)
+        self.assertEqual({r["arm"] for r in self.runs},
+                         {"reps_hold_auto_ack", "reps_flow_hold_ack", "mrc_hold_auto_ack"})
+        self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
+        candidates = profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+        faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
+        self.assertEqual(faulted, set(profiles.a2a_gate_cells()))
+        self.assertEqual(faulted, {(r["group"], r["size"], r["condition"]) for r in candidates
+                                   if r["condition"] != "healthy"})
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs if r["condition"] == "healthy"},
+                         set(profiles.A2A_CELLS))
+        for arm in ("reps_hold_auto_ack", "reps_flow_hold_ack", "mrc_hold_auto_ack"):
+            self.assertEqual(len([r for r in self.runs if r["arm"] == arm and r["condition"] == "healthy"]), 4 * 3)
+        self.assertEqual(len({r["key"] for r in self.runs}), len(self.runs))
+        self.assertIn("a2a_candidates_ack-ep16-2m-structural-mrc_hold_auto_ack-s303", {r["key"] for r in self.runs})
+
+    def test_settings(self):
+        cell = ("ep64", "256k", "loss1e2_up", 301)
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                  for r in self.runs if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
+        for arm, base in (("reps_hold_auto_ack", "reps_hold_auto"), ("reps_flow_hold_ack", "reps_flow_hold"),
+                          ("mrc_hold_auto_ack", "mrc_hold_auto")):
+            self.assertEqual(by_arm[arm], {**candidates[base], "ack_loss_rtts": 2})
+
+    def test_shared_with_ackloss(self):
+        # reps_hold_auto_ack's run and profile on a cell both stages run
+        # differ from a2a_ackloss's only in the stage.
+        cell = ("ep16", "2m", "blackhole_up", 302)
+        mine = [r for r in self.runs if r["arm"] == "reps_hold_auto_ack"
+                and (r["group"], r["size"], r["condition"], r["seed"]) == cell]
+        theirs = [r for r in profiles.a2a_stage_runs("a2a_ackloss", self.calibration, self.tuning)
+                  if r["arm"] == "reps_hold_auto_ack" and (r["group"], r["size"], r["condition"], r["seed"]) == cell]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(len(theirs), 1)
+        self.assertEqual(mine[0]["setting"], theirs[0]["setting"])
+        self.assertEqual(mine[0]["key"], theirs[0]["key"].replace("a2a_ackloss-", "a2a_candidates_ack-", 1))
+        strip = lambda r: {k: v for k, v in r.items() if k not in ("key", "stage")}
+        self.assertEqual(strip(mine[0]), strip(theirs[0]))
+        profile = profiles.a2a_stage_profile(mine[0], self.calibration)
+        other = profiles.a2a_stage_profile(theirs[0], self.calibration)
+        self.assertEqual(profile["name"], mine[0]["key"])
+        self.assertEqual({**profile, "name": None}, {**other, "name": None})
 
 class Rs3(unittest.TestCase):
     def setUp(self):

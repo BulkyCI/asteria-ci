@@ -38,8 +38,8 @@ seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
 seeds with a known cost).
 
 a2a_candidates gives every arm of the runs given (all stages unless --stage;
-the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail and a2a_ackloss
-each so) per cell its per-seed and mean primary and tail cost, and these
+the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail, a2a_ackloss
+and a2a_candidates_ack each so) per cell its per-seed and mean primary and tail cost, and these
 measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
