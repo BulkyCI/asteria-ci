@@ -37,13 +37,13 @@ class Stages(unittest.TestCase):
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 216, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -368,9 +368,10 @@ class Tail(unittest.TestCase):
 
     def test_runs(self):
         # The 16 loss cells and the 4 blackhole cells of the gate, whatever
-        # the tuning file admits, and 4 healthy pairs, by 3 arms by 3 seeds.
-        self.assertEqual(len(self.runs), (16 + 4 + 4) * 3 * 3)
-        self.assertEqual({r["arm"] for r in self.runs}, {"uniform_tail", "reps_tail", "reps_hold_auto_tail"})
+        # the tuning file admits, and 4 healthy pairs, by 4 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (16 + 4 + 4) * 4 * 3)
+        self.assertEqual({r["arm"] for r in self.runs},
+                         {"uniform_tail", "reps_tail", "reps_hold_auto_tail", "reps_hold_auto_tail4"})
         self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
         faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
         loss = {c for c in faulted if c[2].startswith("loss")}
@@ -397,6 +398,9 @@ class Tail(unittest.TestCase):
         self.assertEqual(by_arm["reps_hold_auto_tail"]["sentinel_mode"], "duplicate")
         self.assertNotIn("hold_rule", by_arm["reps_hold_auto_tail"])
         self.assertNotIn("tail_recovery_delay_ns", by_arm["reps_hold_auto_tail"])
+        self.assertNotIn("tail_loss_rtts", by_arm["reps_hold_auto_tail"])
+        self.assertEqual(by_arm["reps_hold_auto_tail4"],
+                         {**candidates["reps_hold_auto"], **tail, "tail_loss_rtts": 4})
 
     def test_candidates_cover_the_tail_arms(self):
         onset = analyze.DEGRADE_AT_NS
@@ -416,7 +420,7 @@ class Tail(unittest.TestCase):
                     (d / "summary.json").write_text(json.dumps({"all_to_all": timing}))
                     (d / "ns3" / "rto_events.csv").write_text(
                         "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n5,0,1,3,0,1\n")
-                    if arm == "reps_hold_auto_tail":
+                    if arm in ("reps_hold_auto_tail", "reps_hold_auto_tail4"):
                         end = (onset // interval + 1) * interval
                         (d / "ns3" / "spine_losses.csv").write_text(
                             "time_ns,rank,spine,sent,lost,grade\n"
@@ -429,8 +433,9 @@ class Tail(unittest.TestCase):
             self.assertEqual(entry["cost_ns"], [20.0])
             self.assertEqual(entry["rto_per_iteration"], [[1, 0]])
             self.assertEqual(entry["setting"], settings[arm])
-        self.assertEqual(cell["arms"]["reps_hold_auto_tail"]["reaction_ns"],
-                         [(onset // interval + 1) * interval - onset])
+        for arm in ("reps_hold_auto_tail", "reps_hold_auto_tail4"):
+            self.assertEqual(cell["arms"][arm]["reaction_ns"],
+                             [(onset // interval + 1) * interval - onset])
         # No sender loss trace under the uniform draw or reps_oracle.
         self.assertEqual(cell["arms"]["uniform_tail"]["reaction_ns"], [None])
         self.assertEqual(cell["arms"]["reps_tail"]["reaction_ns"], [None])

@@ -666,13 +666,17 @@ A2A_RS3_ARMS = ("reps_hold_auto", "reps_hold_auto_trickle", "reps", "uniform")
 # spray_uniform with no loss hold, no sentinels and no loss keys (the backend
 # takes PATH_SELECTOR reps only under ev_hash, and the generator refuses
 # tail_recovery there); and reps_hold_auto with its a2a_candidates setting,
-# the count rule, the clean sentinels' release and duplicate sentinels. The
-# cells: every gate cell under a loss or blackhole condition, whatever
-# a2a_tuning.json admits.
+# the count rule, the clean sentinels' release and duplicate sentinels;
+# reps_hold_auto_tail4 is reps_hold_auto_tail with tail_loss_rtts 4
+# (A2A_TAIL_KEYS), written as SPRAY_TAIL_LOSS_RTTS. The cells: every gate
+# cell under a loss or blackhole condition, whatever a2a_tuning.json admits.
 A2A_TAIL_STAGE = "a2a_tail"
 A2A_TAIL = {"path_seq": True, "tail_recovery": True}
 A2A_REPS_SPINE = "reps_spine"
-A2A_TAIL_ARMS = {"uniform_tail": "uniform", "reps_tail": A2A_REPS_SPINE, "reps_hold_auto_tail": "reps_hold_auto"}
+A2A_TAIL_ARMS = {"uniform_tail": "uniform", "reps_tail": A2A_REPS_SPINE, "reps_hold_auto_tail": "reps_hold_auto",
+                 "reps_hold_auto_tail4": "reps_hold_auto"}
+# The keys an a2a_tail arm adds to A2A_TAIL.
+A2A_TAIL_KEYS = {"reps_hold_auto_tail4": {"tail_loss_rtts": 4}}
 A2A_TAIL_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "blackhole_up")
 # a2a_ackloss's arms: ack_loss_rtts (A2A_ACKLOSS: load_balancing
 # ack_loss_rtts, written as SPRAY_ACK_LOSS_RTTS) on a base arm:
@@ -902,10 +906,12 @@ def a2a_rs3_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any] 
 
 
 def a2a_tail_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Each a2a_tail arm's setting: A2A_TAIL, on reps_hold_auto's candidate
-    setting for reps_hold_auto_tail."""
+    """Each a2a_tail arm's setting: A2A_TAIL and the arm's A2A_TAIL_KEYS, on
+    reps_hold_auto's candidate setting for reps_hold_auto_tail and
+    reps_hold_auto_tail4."""
     candidates = a2a_candidate_settings(tuning)
-    return {arm: {**candidates.get(base, {}), **A2A_TAIL} for arm, base in A2A_TAIL_ARMS.items()}
+    return {arm: {**candidates.get(base, {}), **A2A_TAIL, **A2A_TAIL_KEYS.get(arm, {})}
+            for arm, base in A2A_TAIL_ARMS.items()}
 
 
 def a2a_ackloss_settings(tuning: dict[str, Any] | None,
