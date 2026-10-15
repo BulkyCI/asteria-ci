@@ -126,12 +126,14 @@ a2a_sweep reads one stage's runs alone (--stage, a2a_sweep_4k by default;
 a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
 cell:
 
-* the expected loss evidence on spine 3 of a host of leaf 0, under even
-  spraying with the pair's message per iteration as one flow of 4096-byte
-  sends: n_s = message bytes / 4096 / 8 sends per flow on the spine, the
-  loss rate p, m = n_s p losses per flow, and host_evidence, m times the
-  group's hosts off leaf 0 (p, m and host_evidence None under a condition
-  with no loss rate);
+* the expected loss evidence on spine 3 of a host of leaf 0 under even
+  spraying, from the runs' packet payload (payload_bytes, 1000 B when unset)
+  and the system layer's split of each pair's message per iteration into
+  four flows of a quarter of it: n_s_flow, a flow's packets over the 8
+  spines, and n_s_pair, four times it; the loss rate p; m_flow and m_pair,
+  their losses n_s p; and host_evidence, m_pair times the group's hosts off
+  leaf 0, the losses a host expects on the spine per iteration (p, the m
+  and host_evidence None under a condition with no uplink loss rate);
 * per arm, the per-seed and mean cost, the seed range (largest minus
   smallest cost), the per-seed and mean recovered fraction against
   uniform_tail, and spine_losses_per_host_iteration: the losses the sender
@@ -188,6 +190,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import statistics
 from collections import defaultdict, deque
 from pathlib import Path
@@ -1303,13 +1306,19 @@ def compute_gaps_markdown(rows: list[dict]) -> str:
 # on spine 3, and the hold arms' recovered fraction against the oracle's.
 
 A2A_SWEEP_POOLED = "reps_hold_auto_tail_ack"
-# The hold arms read against the pooled one: per destination leaf, per flow.
+# The hold arms read against the pooled one: per destination leaf, per flow;
+# a further hold arm of the 4096-byte stages (profiles.py A2A_HOLD_ARMS_4K)
+# joins them here.
 A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
 A2A_SWEEP_ORACLE = "reps_oracle_tail"
 A2A_SWEEP_REPS = "reps_tail"
 A2A_SWEEP_UNIFORM = "uniform_tail"
 A2A_SWEEP_LOSS_RATES = {"loss1e3_up": 1e-3, "loss3e3_up": 3e-3, "loss1e2_up": 1e-2, "loss3e2_up": 3e-2}
-A2A_SWEEP_SEND_BYTES = 4096
+# The generator's packet payload when a run sets none, and the flows each
+# pair's message per iteration is sent as (the system layer's dataset
+# splits).
+A2A_DEFAULT_PAYLOAD_BYTES = 1000
+A2A_FLOWS_PER_PAIR = 4
 
 
 def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> int | None:
@@ -1347,13 +1356,15 @@ def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
             count = spine_lost(out_root / row["key"], row["condition"])
             lost[row["key"]] = (None if count is None
                                 else count / A2A_HOSTS_PER_LEAF_OF_TRACE / row["iterations"])
-    shapes = {(r["group"], r["size"]): r for r in rows}
+    shapes = {(r["group"], r["size"], r.get("payload_bytes")): r for r in rows}
     out = []
     for cell in a2a_cost_cells(rows, uniform=A2A_SWEEP_UNIFORM):
-        shape = shapes[(cell["group"], cell["size"])]
+        shape = shapes[(cell["group"], cell["size"], cell.get("payload_bytes"))]
         arms = cell["arms"]
         off_leaf = shape["k"] + 1 - A2A_HOSTS_PER_LEAF_OF_TRACE
-        n_s = shape["message_bytes"] / A2A_SWEEP_SEND_BYTES / SPINES
+        payload = shape.get("payload_bytes") or A2A_DEFAULT_PAYLOAD_BYTES
+        n_s_flow = math.ceil(shape["message_bytes"] / A2A_FLOWS_PER_PAIR / payload) / SPINES
+        n_s_pair = A2A_FLOWS_PER_PAIR * n_s_flow
         p = A2A_SWEEP_LOSS_RATES.get(cell["condition"])
         for entry in arms.values():
             entry["cost_ns_range"] = _cost_range(entry)
@@ -1389,8 +1400,9 @@ def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
             }
         out.append({
             "group": cell["group"], "size": cell["size"], "condition": cell["condition"],
-            "n_s": n_s, "p": p, "m": None if p is None else n_s * p,
-            "host_evidence": None if p is None else n_s * p * off_leaf,
+            "payload_bytes": payload, "n_s_flow": n_s_flow, "n_s_pair": n_s_pair, "p": p,
+            "m_flow": None if p is None else n_s_flow * p, "m_pair": None if p is None else n_s_pair * p,
+            "host_evidence": None if p is None else n_s_pair * p * off_leaf,
             "arms": arms, "oracle_versus_reps": _versus(arms, A2A_SWEEP_ORACLE, A2A_SWEEP_REPS),
             "ceiling": ceiling, "gaps": gaps, "control": control,
         })
@@ -1411,18 +1423,20 @@ def sweep_markdown(cells: list[dict]) -> str:
                 f"{entry['verdict'] or 'unreadable'}")
 
     lines = [
-        "| group | size | condition | n_s | p | m | host evidence | spine 3 losses per host iteration "
+        "| group | size | condition | payload | n_s flow / pair | p | m flow / pair | host evidence "
+        "| spine 3 losses per host iteration "
         f"({' / '.join(holds)}) | {A2A_SWEEP_ORACLE} vs {A2A_SWEEP_REPS} | R ({' / '.join(holds)}) "
         + "".join(f"| {A2A_SWEEP_POOLED} - {arm}: recovered, cost us, verdict " for arm in A2A_SWEEP_HOLDS) + "|",
-        "|---|---|---|---|---|---|---|---|---|---|" + "---|" * len(A2A_SWEEP_HOLDS),
+        "|---" * 11 + "|---" * len(A2A_SWEEP_HOLDS) + "|",
     ]
     for cell in cells:
         realized = " / ".join(_number((cell["arms"].get(arm) or {}).get("spine_losses_per_host_iteration"), ".2f")
                               for arm in holds)
         ratios = " / ".join(_number(cell["ceiling"][arm], ".3f") for arm in holds)
         lines.append(
-            f"| {cell['group']} | {cell['size']} | {cell['condition']} | {_number(cell['n_s'])} | {_number(cell['p'])} "
-            f"| {_number(cell['m'])} | {_number(cell['host_evidence'])} | {realized} "
+            f"| {cell['group']} | {cell['size']} | {cell['condition']} | {cell['payload_bytes']} "
+            f"| {_number(cell['n_s_flow'])} / {_number(cell['n_s_pair'])} | {_number(cell['p'])} "
+            f"| {_number(cell['m_flow'])} / {_number(cell['m_pair'])} | {_number(cell['host_evidence'])} | {realized} "
             f"| {cell['oracle_versus_reps'] or 'unreadable'} | {ratios} "
             + "".join(f"| {gap(cell['gaps'][arm])} " for arm in A2A_SWEEP_HOLDS) + "|"
         )

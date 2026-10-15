@@ -844,6 +844,7 @@ class SweepCells(unittest.TestCase):
         ("ep64", "256k", "rate16g_up"): {"uniform_tail": [40, 50, 60]},
         ("ep8", "256k", "loss1e2_up"): {"uniform_tail": [-1, 0, 1], "reps_hold_auto_tail_ack": [5, 6, 7]},
     }
+    # EP8's runs leave the payload at the generator's default.
     SHAPE = {"ep64": 63, "ep8": 7}
 
     def cells(self):
@@ -853,7 +854,8 @@ class SweepCells(unittest.TestCase):
 
             def write(arm, group, size, condition, seed, cost):
                 r = {**run(arm, group, size, condition, seed, "a2a_sweep_4k"), "k": self.SHAPE[group],
-                     "message_bytes": 256 * 1024, "iterations": 2, "payload_bytes": 4096}
+                     "message_bytes": 256 * 1024, "iterations": 2,
+                     **({} if group == "ep8" else {"payload_bytes": 4096})}
                 runs.append(r)
                 (root / r["key"] / "ns3").mkdir(parents=True)
                 timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + cost, "2": 1000 + cost}}
@@ -885,8 +887,10 @@ class SweepCells(unittest.TestCase):
     def test_cells(self):
         cells = self.cells()
         cell = cells[("ep64", "256k", "loss1e2_up")]
-        self.assertEqual((cell["n_s"], cell["p"]), (8.0, 0.01))
-        self.assertAlmostEqual(cell["m"], 0.08)
+        # Four flows of 64 KiB per pair: 16 packets of 4096 B, 2 per spine.
+        self.assertEqual((cell["payload_bytes"], cell["n_s_flow"], cell["n_s_pair"], cell["p"]), (4096, 2.0, 8.0, 0.01))
+        self.assertAlmostEqual(cell["m_flow"], 0.02)
+        self.assertAlmostEqual(cell["m_pair"], 0.08)
         self.assertAlmostEqual(cell["host_evidence"], 4.48)
         arms = cell["arms"]
         self.assertEqual((arms["reps_flow_hold_tail_ack"]["cost_ns_mean"], arms["reps_flow_hold_tail_ack"]["cost_ns_range"]),
@@ -912,17 +916,20 @@ class SweepCells(unittest.TestCase):
         self.assertIsNone(arms["uniform_tail"]["spine_losses_per_host_iteration"])
         self.assertIsNone(cell["control"])
         handover = cells[("ep64", "256k", "rate16g_up")]
-        self.assertEqual((handover["n_s"], handover["p"], handover["m"], handover["host_evidence"]), (8.0, None, None, None))
+        self.assertEqual((handover["n_s_pair"], handover["p"], handover["m_flow"], handover["m_pair"],
+                          handover["host_evidence"]), (8.0, None, None, None, None))
         self.assertEqual(handover["ceiling"], dict.fromkeys(handover["ceiling"]))
         self.assertIsNone(handover["oracle_versus_reps"])
         control = cells[("ep8", "256k", "loss1e2_up")]
+        # At 1000 B: 66 packets per 64 KiB flow.
+        self.assertEqual((control["payload_bytes"], control["n_s_flow"], control["n_s_pair"]), (1000, 8.25, 33.0))
         self.assertEqual(control["host_evidence"], 0)
         self.assertEqual(control["control"], {
             "within_range_of_zero": {"reps_hold_auto_tail_ack": False, "uniform_tail": True},
             "seed_rule": ["uniform_tail beats reps_hold_auto_tail_ack"]})
         self.assertIsNone(control["arms"]["uniform_tail"]["recovered_mean"])
         markdown = analyze.sweep_markdown(list(cells.values()))
-        self.assertIn("| ep64 | 256k | loss1e2_up | 8 | 0.01 | 0.08 | 4.48 | 0.50 / 0.50 / 1.00 "
+        self.assertIn("| ep64 | 256k | loss1e2_up | 4096 | 2 / 8 | 0.01 | 0.02 / 0.08 | 4.48 | 0.50 / 0.50 / 1.00 "
                       "| reps_oracle_tail beats reps_tail |", markdown)
         self.assertIn("| ep64 | 256k | loss1e2_up | reps_flow_hold_tail_ack | 0.3 | 0.1 | 0.358 |", markdown)
         self.assertIn("Control ep8 256k loss1e2_up: mean cost within its seed range of zero: "
