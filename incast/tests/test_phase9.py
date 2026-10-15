@@ -1540,12 +1540,38 @@ class ReceiverAndTimeouts(unittest.TestCase):
             (root / "ns3").mkdir()
             timing = {"complete": True, "iteration_start_ns": {"1": 100, "2": 1000, "3": 5000}}
             (root / "summary.json").write_text(json.dumps({"all_to_all": timing}))
-            self.assertEqual(analyze.rto_counts(root), {"rto_events": None, "rto_per_iteration": None})
+            self.assertEqual(analyze.rto_counts(root),
+                             {"rto_events": None, "rto_per_iteration": None, "rto_run": None})
             times = (50, 100, 999, 1000, 4000, 6000, 7000)
             (root / "ns3" / "rto_events.csv").write_text(
                 "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n"
                 + "".join(f"{t},0,1,3,0,4096\n" for t in times))
-            self.assertEqual(analyze.rto_counts(root), {"rto_events": 7, "rto_per_iteration": [3, 2, 2]})
+            # Within one RTO of the first: one timeout of the queue pair.
+            self.assertEqual(analyze.rto_counts(root),
+                             {"rto_events": 7, "rto_per_iteration": [3, 2, 2], "rto_run": 1})
+
+    def test_rto_run(self):
+        rto = analyze.A2A_RTO_NS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ns3").mkdir()
+            (root / "summary.json").write_text(json.dumps({"all_to_all": {}}))
+            # Host 0 toward host 9: a timeout every RTO and a bit, with a
+            # further send's timeout inside each, 9 counted, then a gap of
+            # two RTOs and a new run of 2. Host 0 toward host 17 and host 1
+            # toward host 9, interleaved: their own runs of 3 and 1.
+            rows = [(1000 + k * (rto + 100), 0, 9) for k in range(9)]
+            rows += [(1000 + k * (rto + 100) + 500, 0, 9) for k in range(9)]
+            rows += [(rows[8][0] + 2 * rto + k * rto, 0, 9) for k in range(2)]
+            rows += [(2000 + k * rto, 0, 17) for k in range(3)] + [(2000 + rto, 1, 9)]
+            (root / "ns3" / "rto_events.csv").write_text(
+                "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n"
+                + "".join(f"{t},{rank},{dst},3,0,4096\n" for t, rank, dst in sorted(rows)))
+            counts = analyze.rto_counts(root)
+            self.assertEqual((counts["rto_events"], counts["rto_run"]), (24, 9))
+            (root / "ns3" / "rto_events.csv").write_text(
+                "time_ns,rank,dst_rank,spine,sentinel,bytes_outstanding\n")
+            self.assertEqual(analyze.rto_counts(root)["rto_run"], 0)
 
     def test_candidates_carry_the_new_measures(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1567,8 +1593,12 @@ class ReceiverAndTimeouts(unittest.TestCase):
             entry = cell["arms"]["reps_hold_auto_rx"]
             self.assertEqual(entry["rto_events"], [1])
             self.assertEqual(entry["rto_per_iteration"], [[1, 0]])
+            self.assertEqual((entry["rto_run"], entry["rto_run_longest"], entry["rto_run_over_limit"]), ([1], 1, []))
             self.assertEqual(entry["receiver_reaction_ns"], [None])
             self.assertIn("RTOs mean", analyze.candidates_markdown([cell]))
+            self.assertIn("| 1.0 (1) | 1 (none) |", analyze.candidates_markdown([cell]))
+            entry.update(rto_run=[8], rto_run_longest=8, rto_run_over_limit=[301])
+            self.assertIn("| 8 (s301) |", analyze.candidates_markdown([cell]))
 
 
 class Reaction(unittest.TestCase):

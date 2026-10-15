@@ -82,6 +82,21 @@ and these measures per faulted run:
   event counted in the latest iteration started at or before it (the
   first for one before every start) by summary.json's iteration starts.
   None when the run writes no timeout trace.
+* rto_run: the longest run of consecutive retransmission timeouts on one
+  connection, a sender host toward a destination host (the trace's rank and
+  dst_rank): one queue pair at a time where a pair's message is one flow
+  (dataset_splits 1, the settled fixture's), the queue pairs of a pair's
+  flows together otherwise. The trace records no acknowledgement, so the
+  run is read from the timeouts' spacing as an InfiniBand queue pair's
+  retry count would take them: the simulator times each outstanding send
+  out on its own, so a timeout less than one RTO (A2A_RTO_NS) after the one
+  that last counted belongs to that timeout and does not count; one from
+  one to two RTOs after it, as a repair sent at that timeout and lost again
+  times out, counts as the next retry; a longer gap ends the run. 0 without
+  a timeout, None without the trace. Per arm, rto_run_longest is the
+  longest over the seeds and rto_run_over_limit the seeds whose run exceeds
+  A2A_RTO_RUN_LIMIT, NCCL's InfiniBand retry count of 7 (the runs' own
+  max_retransmission_retries stays 1024).
 * early_cost_ns: the sum, over the iterations that start within 500 us of
   the onset, of the iteration's completion minus the paired healthy run's
   completion of the same iteration; infinite when the faulted run is
@@ -967,6 +982,11 @@ A2A_SHARE_LIMIT = 1 / 16
 A2A_EARLY_WINDOW_NS = 500_000
 A2A_HOSTS_PER_LEAF_OF_TRACE = 8
 A2A_DEFAULT_LOSS_INTERVAL_NS = 2 * BASE_RTT_NS
+# The runs' retransmission timeout (profiles.py's retransmission_timeout_ns)
+# and NCCL's InfiniBand retry count, against which rto_run is read: a queue
+# pair fails at a run of more consecutive timeouts than it.
+A2A_RTO_NS = 10 * BASE_RTT_NS
+A2A_RTO_RUN_LIMIT = 7
 A2A_WINDOW_NS = 1_000_000
 A2A_FULL_SHARE = 0.9 / SPINES
 
@@ -1099,20 +1119,31 @@ def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPI
 
 
 def rto_counts(directory: Path) -> dict:
-    """rto_events and rto_per_iteration (see the module docstring)."""
+    """rto_events, rto_per_iteration and rto_run (see the module
+    docstring)."""
     path = directory / "ns3" / "rto_events.csv"
     if not path.exists():
-        return {"rto_events": None, "rto_per_iteration": None}
+        return {"rto_events": None, "rto_per_iteration": None, "rto_run": None}
     timing = json.loads((directory / "summary.json").read_text()).get("all_to_all") or {}
     starts = sorted((v, int(i)) for i, v in (timing.get("iteration_start_ns") or {}).items())
     per_iteration = {i: 0 for _, i in starts}
-    total = 0
+    total = longest = 0
+    # Per connection, the time of the timeout that last counted and the
+    # length of its run.
+    runs: dict[tuple[str, str], tuple[int, int]] = {}
     with path.open() as handle:
         for row in csv.DictReader(handle):
             total += 1
+            time = int(row["time_ns"])
+            connection = row["rank"], row["dst_rank"]
+            counted, run = runs.get(connection, (None, 0))
+            if counted is None or time - counted >= 2 * A2A_RTO_NS:
+                runs[connection] = time, 1
+            elif time - counted >= A2A_RTO_NS:
+                runs[connection] = time, run + 1
+            longest = max(longest, runs[connection][1])
             if not starts:
                 continue
-            time = int(row["time_ns"])
             iteration = starts[0][1]
             for start, i in starts:
                 if start > time:
@@ -1120,7 +1151,8 @@ def rto_counts(directory: Path) -> dict:
                 iteration = i
             per_iteration[iteration] += 1
     return {"rto_events": total,
-            "rto_per_iteration": [per_iteration[i] for i in sorted(per_iteration)] if starts else None}
+            "rto_per_iteration": [per_iteration[i] for i in sorted(per_iteration)] if starts else None,
+            "rto_run": longest}
 
 
 def iteration_timing(directory: Path) -> dict[int, tuple[int, int]] | None:
@@ -1176,6 +1208,11 @@ def a2a_candidates(rows: list[dict], out_root: Path, reference: str | None = Non
     for cell in cells:
         for entry in cell["arms"].values():
             entry["rto_per_iteration"] = [measured[k]["rto_per_iteration"] for k in entry["keys"]]
+            entry["rto_run"] = [measured[k]["rto_run"] for k in entry["keys"]]
+            known = [v for v in entry["rto_run"] if v is not None]
+            entry["rto_run_longest"] = max(known) if known else None
+            entry["rto_run_over_limit"] = [seed for seed, v in zip(entry["seeds"], entry["rto_run"])
+                                           if v is not None and v > A2A_RTO_RUN_LIMIT]
             for name in ("reaction_ns", "receiver_reaction_ns", "rto_events", "early_cost_ns"):
                 values = [measured[k][name] for k in entry["keys"]]
                 entry[name] = values
@@ -1191,12 +1228,22 @@ def _count(value) -> str:
     return "-" if value is None else f"{value:,.1f}"
 
 
+def _rto_run(entry: dict) -> str:
+    """The arm's longest RTO run and the seeds whose run exceeds
+    A2A_RTO_RUN_LIMIT."""
+    if entry["rto_run_longest"] is None:
+        return "-"
+    over = entry["rto_run_over_limit"]
+    return f"{entry['rto_run_longest']} ({', '.join(f's{seed}' for seed in over) or 'none'})"
+
+
 def candidates_markdown(cells: list[dict]) -> str:
     lines = [
         "| group | size | condition | arm | cost mean us | tail cost mean us "
         "| reaction mean us (seeds) | receiver reaction mean us (seeds) "
-        "| early cost mean us (seeds) | RTOs mean (seeds) |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| early cost mean us (seeds) | RTOs mean (seeds) "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -1206,7 +1253,8 @@ def candidates_markdown(cells: list[dict]) -> str:
                 f"| {_us(entry['reaction_ns_mean'])} ({entry['reaction_ns_count']}) "
                 f"| {_us(entry['receiver_reaction_ns_mean'])} ({entry['receiver_reaction_ns_count']}) "
                 f"| {_us(entry['early_cost_ns_mean'])} ({entry['early_cost_ns_count']}) "
-                f"| {_count(entry['rto_events_mean'])} ({entry['rto_events_count']}) |"
+                f"| {_count(entry['rto_events_mean'])} ({entry['rto_events_count']}) "
+                f"| {_rto_run(entry)} |"
             )
     return "\n".join(lines) + "\n"
 
@@ -1680,8 +1728,9 @@ def downlink_markdown(cells: list[dict]) -> str:
     lines = [
         "| group | size | condition | arm | cost mean us (seeds) | vs reps_tail | reaction us | receiver reaction us "
         "| receiver tail missing | late | receiver holds | receiver lost | sender holds | sender lost "
-        "| false receiver holds, lost | false sender holds, lost |",
-        "|---" * 16 + "|",
+        "| false receiver holds, lost | false sender holds, lost "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 17 + "|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -1700,7 +1749,7 @@ def downlink_markdown(cells: list[dict]) -> str:
                 f"| {_per_spine([h and h['lost'] for h in entry['receiver_holds']])} "
                 f"| {_per_spine([h and h['holds'] for h in entry['sender_holds']])} "
                 f"| {_per_spine([h and h['lost'] for h in entry['sender_holds']])} "
-                f"| {false('receiver_holds')} | {false('sender_holds')} |"
+                f"| {false('receiver_holds')} | {false('sender_holds')} | {_rto_run(entry)} |"
             )
     lines.append("")
     for cell in cells:
