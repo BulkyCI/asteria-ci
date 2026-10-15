@@ -703,6 +703,294 @@
     "a2a_calibration-ep64-2m-healthy-graded_per_receiver_mix-s102",
     "a2a_calibration-ep64-2m-healthy-graded_per_receiver_mix-s103"
    ]
+  },
+  "dp64-ar25m-p4096": {
+   "reports": 325709,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "trim_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s101",
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s102",
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s103"
+   ],
+   "loss_thresholds": {
+    "24648": [
+     0.022727,
+     0.045454,
+     0.090909
+    ],
+    "123240": [
+     0.004807,
+     0.009615,
+     0.01923
+    ],
+    "492960": [
+     0.00119,
+     0.00238,
+     0.004761
+    ]
+   },
+   "loss_calibration": {
+    "24648": {
+     "p99": 0.0,
+     "median_sent": 11.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.09090909090909091,
+     "floored": true,
+     "capped": false
+    },
+    "123240": {
+     "p99": 0.0,
+     "median_sent": 52.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.019230769230769232,
+     "floored": true,
+     "capped": false
+    },
+    "492960": {
+     "p99": 0.0,
+     "median_sent": 210.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.004761904761904762,
+     "floored": true,
+     "capped": false
+    }
+   },
+   "loss_runs": [
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s101",
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s102",
+    "ar_parity_calibration_4k-dp64-ar25m-healthy-graded_per_receiver_mix-s103"
+   ]
+  },
+  "ep16-256k-p4096": {
+   "reports": 8421,
+   "p99_deviation": {
+    "mark_fraction": 0.0,
+    "trim_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s103"
+   ],
+   "loss_thresholds": {
+    "24648": [
+     0.007812,
+     0.015625,
+     0.03125
+    ],
+    "123240": [
+     0.002631,
+     0.005263,
+     0.010526
+    ],
+    "492960": [
+     0.000656,
+     0.001312,
+     0.002624
+    ]
+   },
+   "loss_calibration": {
+    "24648": {
+     "p99": 0.0,
+     "median_sent": 32,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.03125,
+     "floored": true,
+     "capped": false
+    },
+    "123240": {
+     "p99": 0.0,
+     "median_sent": 95.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.010526315789473684,
+     "floored": true,
+     "capped": false
+    },
+    "492960": {
+     "p99": 0.0,
+     "median_sent": 381.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.0026246719160104987,
+     "floored": true,
+     "capped": false
+    }
+   },
+   "loss_runs": [
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_calibration_4k-ep16-256k-healthy-graded_per_receiver_mix-s103"
+   ]
+  },
+  "ep64-256k-p4096": {
+   "reports": 114347,
+   "p99_deviation": {
+    "mark_fraction": 0.000758,
+    "trim_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.000758,
+    0.001516,
+    0.003032
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s103"
+   ],
+   "loss_thresholds": {
+    "24648": [
+     0.006944,
+     0.013888,
+     0.027777
+    ],
+    "123240": [
+     0.001533,
+     0.003067,
+     0.006134
+    ],
+    "492960": [
+     0.000614,
+     0.001228,
+     0.002457
+    ]
+   },
+   "loss_calibration": {
+    "24648": {
+     "p99": 0.0,
+     "median_sent": 36.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.027777777777777776,
+     "floored": true,
+     "capped": false
+    },
+    "123240": {
+     "p99": 0.0,
+     "median_sent": 163,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.006134969325153374,
+     "floored": true,
+     "capped": false
+    },
+    "492960": {
+     "p99": 0.0,
+     "median_sent": 407.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.002457002457002457,
+     "floored": true,
+     "capped": false
+    }
+   },
+   "loss_runs": [
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s103"
+   ]
+  },
+  "ep64-decode8-p4096": {
+   "reports": 127767,
+   "p99_deviation": {
+    "mark_fraction": 0.00018,
+    "trim_fraction": 0.0
+   },
+   "capped": false,
+   "congestion_thresholds": [
+    0.00018,
+    0.00036,
+    0.00072
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.0001,
+    0.0002,
+    0.0004
+   ],
+   "runs": [
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s101",
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s102",
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s103"
+   ],
+   "loss_thresholds": {
+    "24648": [
+     0.007352,
+     0.014705,
+     0.029411
+    ],
+    "123240": [
+     0.002808,
+     0.005617,
+     0.011235
+    ],
+    "492960": [
+     0.001101,
+     0.002202,
+     0.004405
+    ]
+   },
+   "loss_calibration": {
+    "24648": {
+     "p99": 0.0,
+     "median_sent": 34.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.029411764705882353,
+     "floored": true,
+     "capped": false
+    },
+    "123240": {
+     "p99": 0.0,
+     "median_sent": 89,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.011235955056179775,
+     "floored": true,
+     "capped": false
+    },
+    "492960": {
+     "p99": 0.0,
+     "median_sent": 227.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.004405286343612335,
+     "floored": true,
+     "capped": false
+    }
+   },
+   "loss_runs": [
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s101",
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s102",
+    "a2a_decode_calibration_4k-ep64-decode8-healthy-graded_per_receiver_mix-s103"
+   ]
   }
  },
  "headline": "ep64-256k-loss1e2_up",

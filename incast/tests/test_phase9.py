@@ -747,12 +747,15 @@ class Payload4k(unittest.TestCase):
 
     @measured_4k()
     def test_refused_until_calibrated(self):
-        # The committed file has the gate's cells at the default payload only.
+        # The committed file without its 4096-byte cells.
+        default_only = {**self.calibration, "per_receiver": {
+            cell: entry for cell, entry in self.calibration["per_receiver"].items()
+            if not cell.endswith(f"-p{profiles.A2A_PAYLOAD_4K}")}}
         with self.assertRaisesRegex(ValueError, r"\['ep64-2m-p4096', 'ep64-256k-p4096', 'ep16-2m-p4096', "
                                                 r"'ep16-256k-p4096'\]"):
-            profiles.a2a_stage_runs("a2a_tail_ack_4k", self.calibration, self.tuning)
+            profiles.a2a_stage_runs("a2a_tail_ack_4k", default_only, self.tuning)
         with self.assertRaisesRegex(ValueError, r"\['ep16-256k-p4096', 'ep32-256k-p4096', .*'ep32-4m-p4096'\]"):
-            profiles.a2a_stage_runs("a2a_sweep_4k", self.calibration, self.tuning)
+            profiles.a2a_stage_runs("a2a_sweep_4k", default_only, self.tuning)
         lacking = calibrated_4k(self.calibration)
         del lacking["per_receiver"]["ep64-1m-p4096"]
         with self.assertRaisesRegex(ValueError, r"\['ep64-1m-p4096'\]"):
