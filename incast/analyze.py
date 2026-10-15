@@ -1786,10 +1786,11 @@ def reaction_markdown(cells: list[dict]) -> str:
 
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration,
-# a2a_calibration_4k and a2a_decode_calibration_4k.
+# a2a_calibration_4k, a2a_decode_calibration_4k and
+# ar_parity_calibration_4k.
 
 A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k",
-                          "a2a_decode_calibration_4k")
+                          "a2a_decode_calibration_4k", "ar_parity_calibration_4k")
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",

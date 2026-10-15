@@ -67,7 +67,8 @@ class Stages(unittest.TestCase):
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
              "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
-             "a2a_decode_4k": 126, "a2a_reaction_4k": 36},
+             "a2a_decode_4k": 126, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 42},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -77,7 +78,8 @@ class Stages(unittest.TestCase):
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
              "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
-             "a2a_decode_4k": 126, "a2a_reaction_4k": 36},
+             "a2a_decode_4k": 126, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 42},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1071,6 +1073,29 @@ class Reaction4k(unittest.TestCase):
                       "| 1.0, 1.0, 1.0 | 2.00, 2.00, 2.00 |", markdown)
         self.assertIn("receiver ahead of reps_hold_auto_tail_ack's sender by 2.0, 2.0, 2.0 us, 4.00, 4.00, 4.00 "
                       "iterations", markdown)
+
+
+class Ring(unittest.TestCase):
+    def test_stages(self):
+        here = Path(profiles.__file__).parent
+        calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
+        # The ring's gap needs no probe: its stages run at once.
+        (probe,) = profiles.a2a_stage_runs("ar_parity_probe_4k", None, None)
+        self.assertEqual(probe["key"], "ar_parity_probe_4k-dp64-ar25m-healthy-uniform_tail-s301")
+        self.assertEqual(len(profiles.a2a_stage_runs("ar_parity_calibration_4k", None, None)), 3)
+        runs = profiles.a2a_stage_runs("ar_parity_4k", calibration, None)
+        # The loss cell and its healthy pair by 7 arms by 3 seeds.
+        self.assertEqual(len(runs), 2 * 7 * 3)
+        self.assertEqual({(r["condition"], r["iterations"], r["compute_ns"], r["k"]) for r in runs},
+                         {("loss1e2_up", 12, 0, 63), ("healthy", 12, 0, 63)})
+        document = profiles.a2a_stage_profile(next(r for r in runs if r["condition"] == "loss1e2_up"), calibration)
+        self.assertEqual(document["workload"], {"kind": "sequential_dp_all_reduce"})
+        self.assertEqual((document["dp_all_reduce_bytes"], document["steps"], document["compute_duration_us"]),
+                         (26_214_400, 12, 0))
+        self.assertEqual(document["network"]["packet_payload_bytes"], 4096)
+        self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("loss1e2_up"))
+        with self.assertRaisesRegex(ValueError, r"\['dp64-ar25m-p4096'\]"):
+            profiles.a2a_stage_runs("ar_parity_4k", None, None)
 
 
 class ComputeGaps(unittest.TestCase):

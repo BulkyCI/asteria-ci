@@ -48,7 +48,10 @@ The run is complete when every iteration has a row from every rank of the
 group, two when workload.combine_bytes is set, since the dispatch and the
 combine all-to-all both carry the iteration's training_step and the span
 runs from the dispatch's first start to the combine's last end. The
-windows are taken for leaf 0, where the probe's faulted link is.
+windows are taken for leaf 0, where the probe's faulted link is. Workload
+kind sequential_dp_all_reduce, one chained all-reduce per step over every
+host, is read the same way from its all_reduce rows, one per rank and step,
+over the profile's steps, into the same "all_to_all" entry.
 
 When RUN_DIR/ns3/spine_losses.csv exists (the sender loss trace, written
 under spray_policy with loss_thresholds and a sender pool weight above 0),
@@ -208,17 +211,18 @@ def nearest_rank(values: list[int], q: float) -> int:
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
 
 
-def all_to_all_timing(path: Path, iterations: int, group: list[int], collectives: int = 1) -> dict:
-    """Per-iteration completion of the all-to-all from collective_events.csv:
-    max end over the ranks minus min start over the ranks. An iteration is
-    done once every rank of the group has written collectives all_to_all
-    rows for it."""
+def all_to_all_timing(path: Path, iterations: int, group: list[int], collectives: int = 1,
+                      collective_type: str = "all_to_all") -> dict:
+    """Per-iteration completion of the all-to-all (or of collective_type)
+    from collective_events.csv: max end over the ranks minus min start over
+    the ranks. An iteration is done once every rank of the group has written
+    collectives rows of the type for it."""
     spans: dict[int, list[int]] = {}
     ranks: dict[int, dict[int, int]] = {}
     if path.is_file():
         with path.open() as handle:
             for row in csv.DictReader(handle):
-                if row["collective_type"] != "all_to_all":
+                if row["collective_type"] != collective_type:
                     continue
                 step = int(row["training_step"])
                 start, end = int(row["start_time_ns"]), int(row["end_time_ns"])
@@ -494,15 +498,16 @@ def main() -> int:
     ns3 = arguments.run_dir / "ns3"
 
     flows = read_flows(ns3 / "fct.txt")
-    if workload["kind"] == "all_to_all":
+    if workload["kind"] in ("all_to_all", "sequential_dp_all_reduce"):
         receiving_leaves = [0]
         receivers = set(range(hosts_per_leaf))
-        timing = all_to_all_timing(
-            arguments.run_dir / "telemetry" / "collective_events.csv",
-            workload["iterations"],
-            all_to_all_group(workload, hosts, hosts_per_leaf),
-            1 + bool(workload.get("combine_bytes")),
-        )
+        events = arguments.run_dir / "telemetry" / "collective_events.csv"
+        if workload["kind"] == "all_to_all":
+            timing = all_to_all_timing(events, workload["iterations"],
+                                       all_to_all_group(workload, hosts, hosts_per_leaf),
+                                       1 + bool(workload.get("combine_bytes")))
+        else:
+            timing = all_to_all_timing(events, profile["steps"], list(range(hosts)), collective_type="all_reduce")
         summary = {
             "flows_expected": None,
             "flows_completed": len(flows),

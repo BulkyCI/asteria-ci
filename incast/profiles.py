@@ -20,7 +20,8 @@ are the transient-fault stages of transient.py, which read their own
 calibration and tuning files (--transient-calibration, --transient-tuning)
 and the redirect_per_connection setting of --tuning. The a2a_probe stage
 runs the all-to-all workload on the same fabric (see a2a_runs). The a2a_*
-stages after it are Phase 9's (see a2a_stage_runs); they read
+stages after it, and the ar_parity_* stages of the ring, are Phase 9's (see
+a2a_stage_runs); they read
 --a2a-calibration and --a2a-tuning (incast/a2a_calibration.json and
 incast/a2a_tuning.json) when given. Standard library only.
 """
@@ -481,6 +482,12 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           healthy pair, seeds 301-303
 #   a2a_reaction_4k         the A2A_REACTION_ARMS on the A2A_REACTION_CELLS
 #                           and their healthy pairs, seeds 301-303
+#   ar_parity_probe_4k      one healthy uniform_tail run, seed 301, of the
+#                           ring (A2A_RING)
+#   ar_parity_calibration_4k
+#                           a2a_calibration's per_receiver pass on the ring
+#   ar_parity_4k            the A2A_ARMS_4K on the ring at loss 1e-2 up and
+#                           its healthy pair, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -805,10 +812,11 @@ A2A_PAYLOAD_4K = 4096
 # and 4 MiB per pair. EP32 at 4 MiB runs 12 iterations, as EP64 at 2 MiB
 # does: 124 MiB per host per iteration, near EP64 at 2 MiB's 126 MiB.
 A2A_RUN_GROUPS: dict[str, Any] = {**A2A_GROUPS, "ep8": {"leaves": [0]}, "ep32": {"leaves": [0, 1, 2, 3]}}
-A2A_RUN_GROUP_SIZES = {**A2A_GROUP_SIZES, "ep8": 8, "ep32": 32}
-A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB, "decode8": 59_264}
+A2A_RUN_GROUP_SIZES = {**A2A_GROUP_SIZES, "ep8": 8, "ep32": 32, "dp64": 64}
+A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB, "decode8": 59_264,
+                 "ar25m": 25 * MIB}
 A2A_RUN_ITERATIONS = {**A2A_ITERATIONS, ("ep8", "256k"): 40, ("ep32", "256k"): 40, ("ep64", "64k"): 40,
-                      ("ep64", "1m"): 40, ("ep32", "4m"): 12, ("ep64", "decode8"): 58}
+                      ("ep64", "1m"): 40, ("ep32", "4m"): 12, ("ep64", "decode8"): 58, ("dp64", "ar25m"): 12}
 # The decode cell (A2A_DECODE, size decode8): one iteration is a decode layer
 # exchange of EP64 at 8 token copies per pair, a dispatch all-to-all of 59,264
 # B per pair (8 copies of 7,408 B: a 7,168-element FP8 hidden state with its
@@ -822,6 +830,12 @@ A2A_RUN_ITERATIONS = {**A2A_ITERATIONS, ("ep8", "256k"): 40, ("ep32", "256k"): 4
 # expert_compute_ns, written into the workload.
 A2A_DECODE = ("ep64", "decode8")
 A2A_COMBINE = {"decode8": {"combine_bytes": 114_688, "expert_compute_ns": 129_000}}
+# The ring (A2A_RING): workload sequential_dp_all_reduce, one chained ring
+# all-reduce of dp_all_reduce_bytes (the size's bytes, 25 MiB, a gradient
+# bucket) per step over the 64 hosts in rank order, 12 steps, no compute,
+# which the workload requires. Its message to the next rank in each ring step
+# is a fan-out-1 flow, the parity control for the all-to-all's fan-out.
+A2A_RING = ("dp64", "ar25m")
 # A group on one leaf (EP8) sends nothing up a spine: it has no loss trace to
 # calibrate, its hold arms read A2A_LOSS_THRESHOLDS_PLACEHOLDER, and none of
 # its sends crosses the faulted link.
@@ -850,8 +864,9 @@ A2A_PROBE_4K_COMPUTE_NS = {
 # holds) after an estimated 467 us healthy exchange.
 A2A_DECODE_PROBE_STAGE = "a2a_decode_probe_4k"
 A2A_DECODE_PROBE_COMPUTE_NS = {A2A_DECODE: 244_000}
-A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: {**A2A_PROBE_4K_COMPUTE_NS, **A2A_DECODE_PROBE_COMPUTE_NS}}
-A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {A2A_PAYLOAD_4K: ()}
+A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: {**A2A_PROBE_4K_COMPUTE_NS, **A2A_DECODE_PROBE_COMPUTE_NS, A2A_RING: 0}}
+# The ring's gap is 0 by its workload's rule, so nothing measures it.
+A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {A2A_PAYLOAD_4K: (A2A_RING,)}
 # a2a_calibration_4k: a2a_calibration's per_receiver pass (the healthy
 # graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds 101-103, at the
 # simulator's thresholds) on every (group, size) of a2a_probe_4k off one leaf,
@@ -917,16 +932,26 @@ A2A_DECODE_CELLS = tuple(A2A_DECODE + (condition,) for condition in A2A_TAIL_CON
 A2A_REACTION_STAGE = "a2a_reaction_4k"
 A2A_REACTION_CELLS = (("ep64", "256k", "loss1e3_down"), A2A_DECODE + ("loss1e3_down",))
 A2A_REACTION_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail")
+# The ring's stages: ar_parity_probe_4k, one healthy uniform_tail run, seed
+# 301, which reads its healthy step time; ar_parity_calibration_4k,
+# a2a_calibration's per_receiver pass on it; and ar_parity_4k, the
+# A2A_ARMS_4K at loss 1e-2 on leaf 0's uplink to spine 3 with the healthy
+# pair, seeds 301-303.
+A2A_RING_PROBE_STAGE = "ar_parity_probe_4k"
+A2A_RING_CALIBRATION_STAGE = "ar_parity_calibration_4k"
+A2A_RING_STAGE = "ar_parity_4k"
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
-A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROBE_STAGE: A2A_DECODE_PROBE_COMPUTE_NS}
+A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROBE_STAGE: A2A_DECODE_PROBE_COMPUTE_NS,
+                    A2A_RING_PROBE_STAGE: {A2A_RING: 0}}
 A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
-                             A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,)}
+                             A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,), A2A_RING_CALIBRATION_STAGE: (A2A_RING,)}
 A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
-                                   A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE)}
+                                   A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
+                                   A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1180,6 +1205,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_DOWNLINK_STAGE: (A2A_DOWNLINK_CELLS, A2A_DOWNLINK_ARMS),
         A2A_DECODE_STAGE: (A2A_DECODE_CELLS, A2A_ARMS_4K),
         A2A_REACTION_STAGE: (A2A_REACTION_CELLS, A2A_REACTION_ARMS),
+        A2A_RING_STAGE: ((A2A_RING + ("loss1e2_up",),), A2A_ARMS_4K),
     }[stage]
 
 
@@ -1342,8 +1368,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
 
 
 def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -> dict[str, Any]:
-    """The t_ stages' fabric and transport under the all-to-all workload;
-    the calibration stages run without this phase's calibration."""
+    """The t_ stages' fabric and transport under the all-to-all workload, or
+    the ring's; the calibration stages run without this phase's
+    calibration."""
     if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration", *A2A_CALIBRATION_STAGES_4K):
         calibration = None
     group, size = run["group"], run["size"]
@@ -1354,14 +1381,18 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
     if "payload_bytes" in run:
         document["network"]["packet_payload_bytes"] = run["payload_bytes"]
     document["steps"] = run["iterations"]
-    document["workload"] = {
-        "kind": "all_to_all",
-        "group": A2A_RUN_GROUPS[group],
-        "message_bytes": run["message_bytes"],
-        "iterations": run["iterations"],
-        "compute_ns": run["compute_ns"],
-        **{key: run[key] for key in ("combine_bytes", "expert_compute_ns") if key in run},
-    }
+    if (group, size) == A2A_RING:
+        document["workload"] = {"kind": "sequential_dp_all_reduce"}
+        document["dp_all_reduce_bytes"] = run["message_bytes"]
+    else:
+        document["workload"] = {
+            "kind": "all_to_all",
+            "group": A2A_RUN_GROUPS[group],
+            "message_bytes": run["message_bytes"],
+            "iterations": run["iterations"],
+            "compute_ns": run["compute_ns"],
+            **{key: run[key] for key in ("combine_bytes", "expert_compute_ns") if key in run},
+        }
     document["network"]["link_failures"] = a2a_flap(run["flap"]) if "flap" in run else a2a_fault(run["condition"])
     return document
 

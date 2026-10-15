@@ -69,6 +69,15 @@ class Timing(unittest.TestCase):
         self.assertEqual(timing["iteration_completion_ns"], {"1": 420})
         self.assertTrue(self.timing(rows, 2)["complete"])
 
+    def test_all_reduce_rows(self):
+        rows = [(0, "all_reduce", 1, 100, 400), (1, "all_reduce", 1, 120, 450), (0, "all_to_all", 1, 0, 9999)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "collective_events.csv"
+            path.write_text(HEADER + "".join(f"{r},,{t},{i},{i},8,{s},{e}\n" for r, t, i, s, e in rows))
+            timing = summarize.all_to_all_timing(path, 1, [0, 1], collective_type="all_reduce")
+        self.assertTrue(timing["complete"])
+        self.assertEqual(timing["iteration_completion_ns"], {"1": 350})
+
     def test_missing_rank_is_incomplete(self):
         timing = self.timing([(0, "all_to_all", 1, 0, 10), (1, "all_to_all", 1, 0, 10), (0, "all_to_all", 2, 20, 30)], 2)
         self.assertFalse(timing["complete"])
