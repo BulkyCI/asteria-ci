@@ -67,7 +67,7 @@ class Stages(unittest.TestCase):
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
              "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
-             "a2a_decode_4k": 126},
+             "a2a_decode_4k": 126, "a2a_reaction_4k": 36},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -77,7 +77,7 @@ class Stages(unittest.TestCase):
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
              "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
-             "a2a_decode_4k": 126},
+             "a2a_decode_4k": 126, "a2a_reaction_4k": 36},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1013,6 +1013,64 @@ class Decode(unittest.TestCase):
         self.assertEqual((cell["n_s_pair"], cell["n_s_flow"]), (5.5, 0.6875))
         self.assertAlmostEqual(cell["m_pair"], 0.055)
         self.assertAlmostEqual(cell["host_evidence"], 3.08)
+
+
+class Reaction4k(unittest.TestCase):
+    @measured_4k()
+    def test_runs(self):
+        here = Path(profiles.__file__).parent
+        calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
+        runs = profiles.a2a_stage_runs("a2a_reaction_4k", calibration, None)
+        # 2 cells and their healthy pairs by 3 arms by 3 seeds.
+        self.assertEqual(len(runs), (2 + 2) * 3 * 3)
+        self.assertEqual({(r["size"], r["condition"]) for r in runs},
+                         {(s, c) for s in ("256k", "decode8") for c in ("loss1e3_down", "healthy")})
+        self.assertEqual({r["arm"] for r in runs},
+                         {"reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail"})
+        self.assertEqual({r.get("combine_bytes") for r in runs if r["size"] == "decode8"}, {114_688})
+
+    def test_analyzer(self):
+        onset = analyze.DEGRADE_AT_NS
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for arm, hold in (("reps_hold_auto_tail_ack", 3000), ("reps_hold_auto_tail_ack_rx", 2000)):
+                for seed in (301, 302, 303):
+                    for condition in ("healthy", "loss1e3_down"):
+                        r = run(arm, "ep64", "256k", condition, seed, "a2a_reaction_4k")
+                        runs.append(r)
+                        d = root / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        completion = 500 if condition == "healthy" else 600
+                        (d / "summary.json").write_text(json.dumps(
+                            {"all_to_all": {"complete": True, "iteration_completion_ns": {"1": completion}}}))
+                        if condition == "healthy":
+                            continue
+                        # Leaf 0's host 0 toward leaf 1 counts a loss each interval
+                        # and holds at hold; host 9's own leaf is not read.
+                        (d / "ns3" / "spine_losses.csv").write_text(
+                            "time_ns,rank,destination_leaf,spine,sent,lost,grade\n" + "".join(
+                                f"{onset + t},0,1,3,10,1,{0 if t >= hold else 3}\n" for t in (1000, 2000, 3000))
+                            + f"{onset + 1000},9,1,3,10,5,0\n")
+                        if arm.endswith("_rx"):
+                            (d / "ns3" / "receiver_holds.csv").write_text(
+                                "time_ns,rank,sender_leaf,spine,arrivals,lost,hold\n"
+                                f"{onset + 1000},9,0,3,10,2,leaf\n{onset + 1000},0,1,3,10,7,leaf\n")
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_reaction(analyze.a2a_rows([listing], root, "a2a_reaction_4k"), root)
+        rx, sender = cell["arms"]["reps_hold_auto_tail_ack_rx"], cell["arms"]["reps_hold_auto_tail_ack"]
+        self.assertEqual((rx["sender_hold_ns"], rx["sender_lost_before"]), ([2000] * 3, [2] * 3))
+        self.assertEqual((rx["receiver_hold_ns"], rx["receiver_lost_before"]), ([1000] * 3, [2] * 3))
+        self.assertEqual((rx["lead_ns"], rx["lead_iterations"]), ([1000] * 3, [2.0] * 3))
+        self.assertEqual((sender["receiver_hold_ns"], sender["lead_ns"]), ([None] * 3, [None] * 3))
+        self.assertEqual(sender["sender_hold_ns_mean"], 3000)
+        self.assertEqual((cell["receiver_lead_ns"], cell["receiver_lead_iterations"]), ([2000] * 3, [4.0] * 3))
+        markdown = analyze.reaction_markdown([cell])
+        self.assertIn("| reps_hold_auto_tail_ack_rx | 0.1 | 2.0, 2.0, 2.0 | 2, 2, 2 | 1.0, 1.0, 1.0 | 2, 2, 2 "
+                      "| 1.0, 1.0, 1.0 | 2.00, 2.00, 2.00 |", markdown)
+        self.assertIn("receiver ahead of reps_hold_auto_tail_ack's sender by 2.0, 2.0, 2.0 us, 4.00, 4.00, 4.00 "
+                      "iterations", markdown)
 
 
 class ComputeGaps(unittest.TestCase):

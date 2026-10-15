@@ -25,6 +25,8 @@
                                                      loss evidence and the hold arms' recovered fraction per cell
     analyze.py a2a_downlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      a2a_candidates with both ends' holds and tail counts per spine
+    analyze.py a2a_reaction --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     each end's first hold, the losses before it and the lead
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -181,6 +183,26 @@ and per faulted run:
 
 Per cell, receiver_versus_sender is the seed-rule verdict of
 reps_hold_auto_tail_ack_rx against reps_hold_auto_tail_ack on cost.
+
+a2a_reaction reads one stage's runs alone (--stage, a2a_reaction_4k by
+default) and gives per faulted run, over the trace rows reaction_ns and
+receiver_reaction_ns read on spine 3:
+
+* sender_hold_ns and receiver_hold_ns: from the onset to the end of the
+  first interval after it that holds the spine, grade 0 in
+  ns3/spine_losses.csv and hold not none in ns3/receiver_holds.csv (None
+  without the trace or a hold);
+* sender_lost_before and receiver_lost_before: the lost column summed over
+  those rows up to and including that interval;
+* lead_ns: sender_hold_ns minus receiver_hold_ns, how much sooner the
+  receiver held than the run's own sender; and lead_iterations, lead_ns
+  over the paired healthy run's mean iteration completion (one all-to-all
+  at the training sizes; one layer exchange, dispatch, expert compute and
+  combine, on the decode cell).
+
+Per cell, receiver_lead_ns and receiver_lead_iterations set the receiver
+arm's receiver_hold_ns against the sender arm's sender_hold_ns on each
+seed.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -1053,13 +1075,7 @@ def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPI
     path = directory / "ns3" / "receiver_holds.csv"
     if not path.exists():
         return {"receiver_reaction_ns": None, "receiver_basis": None}
-    hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
-    if condition == "structural":
-        keep, basis = (lambda row: True), "every row"
-    elif condition.endswith("_up"):
-        keep, basis = (lambda row: int(row["sender_leaf"]) == 0), "sender_leaf 0"
-    else:
-        keep, basis = (lambda row: int(row["rank"]) // hosts == 1), "receivers on leaf 1"
+    keep, basis = receiver_share_rows(condition)
     onset = fault_onset_ns(condition)
     ends = []
     with path.open() as handle:
@@ -1661,6 +1677,113 @@ def downlink_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The reaction stage: how soon each end holds the faulted spine.
+
+A2A_REACTION_MEASURES = ("sender_hold_ns", "sender_lost_before", "receiver_hold_ns", "receiver_lost_before",
+                         "lead_ns", "lead_iterations")
+
+
+def receiver_share_rows(condition: str):
+    """The receiver hold trace's rows of the faulted link, and their basis
+    (see receiver_reaction_ns in the module docstring)."""
+    if condition == "structural":
+        return (lambda row: True), "every row"
+    if condition.endswith("_up"):
+        return (lambda row: int(row["sender_leaf"]) == 0), "sender_leaf 0"
+    return (lambda row: int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE == 1), "receivers on leaf 1"
+
+
+def first_hold(directory: Path, condition: str, receiver: bool, spine: int = DEGRADED_SPINE) -> tuple:
+    """The end's hold time from the onset and the losses its rows counted
+    up to it (see the module docstring); (None, None) without a hold."""
+    path = directory / "ns3" / ("receiver_holds.csv" if receiver else "spine_losses.csv")
+    if not path.exists():
+        return None, None
+    onset = fault_onset_ns(condition)
+    lost: dict[int, int] = defaultdict(int)
+    first = None
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        keep, _ = (receiver_share_rows(condition) if receiver
+                   else faulted_share_rows(condition, reader.fieldnames or ()))
+        for row in reader:
+            if int(row["spine"]) != spine or not keep(row):
+                continue
+            end = int(row["time_ns"])
+            lost[end] += int(row["lost"])
+            held = row["hold"] != "none" if receiver else row["grade"] == "0"
+            if held and end > onset and (first is None or end < first):
+                first = end
+    if first is None:
+        return None, None
+    return first - onset, sum(count for end, count in lost.items() if end <= first)
+
+
+def a2a_reaction(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_cost_cells with the A2A_REACTION_MEASURES per seed and their means,
+    and each cell's receiver lead over the sender arm (see the module
+    docstring)."""
+    healthy = {r["key"]: r for r in rows if r["condition"] == "healthy"}
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = out_root / row["key"]
+        sender = first_hold(directory, row["condition"], False)
+        receiver = first_hold(directory, row["condition"], True)
+        pair = healthy.get(row["healthy_key"])
+        iteration = None if pair is None or pair["iterations_ns"] is None else statistics.fmean(pair["iterations_ns"])
+        lead = None if None in (sender[0], receiver[0]) else sender[0] - receiver[0]
+        measured[row["key"]] = {"sender_hold_ns": sender[0], "sender_lost_before": sender[1],
+                                "receiver_hold_ns": receiver[0], "receiver_lost_before": receiver[1],
+                                "lead_ns": lead, "iteration_ns": iteration,
+                                "lead_iterations": None if None in (lead, iteration) else lead / iteration}
+    cells = a2a_cost_cells(rows)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in A2A_REACTION_MEASURES:
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+                entry[f"{name}_mean"] = _mean(entry[name])
+        rx, sender = cell["arms"].get(A2A_DOWNLINK_RECEIVER), cell["arms"].get(A2A_DOWNLINK_SENDER)
+        cell["receiver_lead_ns"], cell["receiver_lead_iterations"] = [], []
+        if rx is not None and sender is not None and rx["seeds"] == sender["seeds"]:
+            for rx_key, sender_key in zip(rx["keys"], sender["keys"]):
+                ahead, behind = measured[rx_key]["receiver_hold_ns"], measured[sender_key]["sender_hold_ns"]
+                iteration = measured[sender_key]["iteration_ns"]
+                lead = None if None in (ahead, behind) else behind - ahead
+                cell["receiver_lead_ns"].append(lead)
+                cell["receiver_lead_iterations"].append(None if None in (lead, iteration) else lead / iteration)
+    return cells
+
+
+def reaction_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, and each cell's receiver lead over the sender
+    arm."""
+    def seeds(values, form):
+        return ", ".join("-" if v is None else format(v, form) for v in values) or "-"
+
+    def us(values):
+        return seeds([None if v is None else v / 1000 for v in values], ".1f")
+
+    lines = [
+        "| group | size | condition | arm | cost mean us | sender hold us (seeds) | sender lost before "
+        "| receiver hold us (seeds) | receiver lost before | lead us (seeds) | lead iterations (seeds) |",
+        "|---" * 11 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} | {_us(entry['cost_ns_mean'])} "
+                f"| {us(entry['sender_hold_ns'])} | {seeds(entry['sender_lost_before'], 'd')} "
+                f"| {us(entry['receiver_hold_ns'])} | {seeds(entry['receiver_lost_before'], 'd')} "
+                f"| {us(entry['lead_ns'])} | {seeds(entry['lead_iterations'], '.2f')} |"
+            )
+    lines.append("")
+    for cell in cells:
+        lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {A2A_DOWNLINK_RECEIVER}'s receiver "
+                     f"ahead of {A2A_DOWNLINK_SENDER}'s sender by {us(cell['receiver_lead_ns'])} us, "
+                     f"{seeds(cell['receiver_lead_iterations'], '.2f')} iterations")
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration,
 # a2a_calibration_4k and a2a_decode_calibration_4k.
@@ -1853,11 +1976,13 @@ def main() -> int:
     i.add_argument("--other-root", type=Path, required=True)
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink"):
+                 "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
+                 "a2a_reaction"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
-                                             "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink")
+                                             "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
+                                             "a2a_reaction")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -1868,9 +1993,9 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink"):
+        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
-                      "a2a_downlink": "a2a_downlink_4k"}
+                      "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
@@ -1912,6 +2037,12 @@ def main() -> int:
         cells = a2a_candidates(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(candidates_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_reaction":
+        cells = a2a_reaction(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(reaction_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_downlink":

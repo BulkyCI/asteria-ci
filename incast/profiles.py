@@ -479,6 +479,8 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           decode cell
 #   a2a_decode_4k           the A2A_ARMS_4K on the A2A_DECODE_CELLS and their
 #                           healthy pair, seeds 301-303
+#   a2a_reaction_4k         the A2A_REACTION_ARMS on the A2A_REACTION_CELLS
+#                           and their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -908,6 +910,13 @@ A2A_DOWNLINK_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "r
 A2A_DECODE_CALIBRATION_STAGE = "a2a_decode_calibration_4k"
 A2A_DECODE_STAGE = "a2a_decode_4k"
 A2A_DECODE_CELLS = tuple(A2A_DECODE + (condition,) for condition in A2A_TAIL_CONDITIONS)
+# a2a_reaction_4k: how soon each end holds a lossy downlink, loss 1e-3 on
+# spine 3 to leaf 1, on EP64 at 256 KiB and on the decode cell, each with its
+# healthy pair, seeds 301-303, under the sender's hold, the same with the
+# receiver's (reps_hold_auto_tail_ack_rx) and reps_tail.
+A2A_REACTION_STAGE = "a2a_reaction_4k"
+A2A_REACTION_CELLS = (("ep64", "256k", "loss1e3_down"), A2A_DECODE + ("loss1e3_down",))
+A2A_REACTION_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail")
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -917,7 +926,7 @@ A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
 A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
-                                   A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE)}
+                                   A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1170,6 +1179,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_SWEEP_STAGE: (A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER), A2A_ARMS_4K),
         A2A_DOWNLINK_STAGE: (A2A_DOWNLINK_CELLS, A2A_DOWNLINK_ARMS),
         A2A_DECODE_STAGE: (A2A_DECODE_CELLS, A2A_ARMS_4K),
+        A2A_REACTION_STAGE: (A2A_REACTION_CELLS, A2A_REACTION_ARMS),
     }[stage]
 
 
