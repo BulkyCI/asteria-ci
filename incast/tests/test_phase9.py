@@ -247,6 +247,7 @@ class Pinned(unittest.TestCase):
         "a2a_tail": (288, "1423a97492ff2063138f9d8d7e6940612d0ea70a3f6f13b786175c38e13dee26"),
         "a2a_ackloss": (72, "4b07e07ca7ddbda6e89ff7582467dc78775041c61b1376e91249366cfba0072b"),
         "a2a_candidates_ack": (288, "b56bc643a6790b42f5784d2bd4d1626bcceee7b21dc515488776fea7e128c8cb"),
+        "a2a_tail_ack": (480, "b4b584454fab1186f027e048ee0ec894358c7328a7bf4cba63602631f185c591"),
     }
 
     def test_runs_and_profiles_unchanged(self):
