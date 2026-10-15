@@ -11,6 +11,7 @@
     analyze.py select --runs RUNS.json --out-root DIR [--stage t_tuning] tuning selection
     analyze.py cost --runs RUNS.json --out-root DIR --reference ARM [--stage S]  transient cost table
     analyze.py versus A B --runs RUNS.json --out-root DIR               seed-noise verdict per cell
+    analyze.py identity --out-root DIR --other-root DIR [--runs RUNS.json]   same key, same timing and events
     analyze.py a2a_gate --runs RUNS.json... --out-root DIR [--json]     Phase 9 oracle-headroom gate, a row per cell
     analyze.py a2a_gate_reps --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      reps_oracle against reps, a row per cell
@@ -416,6 +417,40 @@ def versus(runs_file: Path, out_root: Path, arm_a: str, arm_b: str) -> list[dict
                 ),
             }
         )
+    return rows
+
+
+def run_identity(directory: Path, other: Path) -> list[str]:
+    """What differs between two runs' summary.json: the all-to-all
+    iteration starts and completions, and each transport event's count."""
+    differences = []
+    a, b = (json.loads((d / "summary.json").read_text()) for d in (directory, other))
+    for name in ("iteration_start_ns", "iteration_completion_ns"):
+        if (a.get("all_to_all") or {}).get(name) != (b.get("all_to_all") or {}).get(name):
+            differences.append(name)
+    events_a, events_b = ({k: v["count"] for k, v in x.get("transport", {}).items()} for x in (a, b))
+    for event in sorted(set(events_a) | set(events_b)):
+        if events_a.get(event) != events_b.get(event):
+            differences.append(f"{event} {events_a.get(event)} -> {events_b.get(event)}")
+    return differences
+
+
+def identity(out_root: Path, other_root: Path, runs_file: Path | None = None) -> list[dict]:
+    """Per run key with a summary under both result roots (every key of
+    runs_file when given): "identical" when run_identity finds nothing,
+    "different" with what differs, "missing" when either root lacks it."""
+    def keys(root):
+        return {path.parent.name for path in root.glob("*/summary.json")}
+
+    wanted = (sorted(r["key"] for r in json.loads(runs_file.read_text())) if runs_file
+              else sorted(keys(out_root) & keys(other_root)))
+    rows = []
+    for key in wanted:
+        if not ((out_root / key / "summary.json").exists() and (other_root / key / "summary.json").exists()):
+            rows.append({"key": key, "status": "missing", "differences": []})
+            continue
+        differences = run_identity(out_root / key, other_root / key)
+        rows.append({"key": key, "status": "different" if differences else "identical", "differences": differences})
     return rows
 
 
@@ -1643,6 +1678,10 @@ def main() -> int:
     v.add_argument("arm_b")
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
+    i = sub.add_parser("identity")
+    i.add_argument("--out-root", type=Path, required=True)
+    i.add_argument("--other-root", type=Path, required=True)
+    i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep"):
         x = sub.add_parser(name)
@@ -1733,6 +1772,10 @@ def main() -> int:
         return 0
     if arguments.command == "versus":
         print(json.dumps(versus(arguments.runs, arguments.out_root, arguments.arm_a, arguments.arm_b), indent=1))
+        return 0
+    if arguments.command == "identity":
+        for row in identity(arguments.out_root, arguments.other_root, arguments.runs):
+            print(f"{row['key']}: {row['status']}" + "".join(f"; {d}" for d in row["differences"]))
         return 0
     if arguments.command == "select":
         if arguments.stage and arguments.stage.startswith("t_"):

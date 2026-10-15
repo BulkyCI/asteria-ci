@@ -267,6 +267,33 @@ class Pinned(unittest.TestCase):
             self.assertEqual((len(runs), hashlib.sha256(text.encode()).hexdigest()), pinned, stage)
 
 
+class Identity(unittest.TestCase):
+    def test_per_key(self):
+        def write(root, key, starts, rto, extra=None):
+            (root / key).mkdir(parents=True)
+            transport = {"rto_fired:control": {"count": rto, "bytes": 0}, **(extra or {})}
+            timing = {"iteration_start_ns": {"1": starts[0], "2": starts[1]},
+                      "iteration_completion_ns": {"1": 10, "2": 10}}
+            (root / key / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+
+        with tempfile.TemporaryDirectory() as directory:
+            a, b = Path(directory) / "a", Path(directory) / "b"
+            write(a, "same", (0, 20), 3)
+            write(b, "same", (0, 20), 3)
+            write(a, "late", (0, 20), 3)
+            write(b, "late", (0, 21), 4, {"receiver_tail_missing:control": {"count": 1, "bytes": 0}})
+            write(a, "only_a", (0, 20), 3)
+            rows = {r["key"]: r for r in analyze.identity(a, b)}
+            self.assertEqual(set(rows), {"same", "late"})
+            self.assertEqual(rows["same"]["status"], "identical")
+            self.assertEqual(rows["late"]["differences"],
+                             ["iteration_start_ns", "receiver_tail_missing:control None -> 1", "rto_fired:control 3 -> 4"])
+            listing = Path(directory) / "runs.json"
+            listing.write_text(json.dumps([{"key": "same"}, {"key": "only_a"}]))
+            self.assertEqual([(r["key"], r["status"]) for r in analyze.identity(a, b, listing)],
+                             [("only_a", "missing"), ("same", "identical")])
+
+
 class Losses(unittest.TestCase):
     def test_totals_and_detection(self):
         rows = [
