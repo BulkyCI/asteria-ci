@@ -1,6 +1,7 @@
 """Phase 9: the a2a_* run lists and profiles, the sender loss trace, the
 all-to-all cost pairing and the oracle-headroom gate."""
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -196,6 +197,37 @@ class Stages(unittest.TestCase):
         self.assertEqual(balancing["loss_thresholds"], profiles.A2A_LOSS_THRESHOLDS_PLACEHOLDER)
         self.assertEqual(balancing["sender_pool_weight"], 0.75)
         self.assertEqual(balancing["loss_interval_ns"], 2 * profiles.BASE_RTT_NS)
+
+
+class Pinned(unittest.TestCase):
+    """The stages already run keep their runs and profiles: with the
+    committed calibration and tuning files, each stage's run count and the
+    SHA-256 of its (run, profile) list as sorted-key JSON."""
+
+    STAGES = {
+        "a2a_oracle_calibration": (12, "31f5990e685ae5f60638c1eaf52ad5f69c6596c63a7c5f5eb768b49f77cb16c5"),
+        "a2a_gate": (192, "3c357e69fa16e34a9fc55a62f963139e96a7a23b1d1f959956e616fd1612cbe0"),
+        "a2a_calibration": (24, "675d8c23fc6a6f8a67b757db8562622c600845540cc78f967986001515754628"),
+        "a2a_tuning": (192, "925db500b66a10101bdbdb42648082fab13142c00ab46c2c98745f09e167cfc5"),
+        "a2a_tuning_mix": (90, "74f7d49039a9af6db751907c32dd1b22857a09e2faff3a0402b31fda93e950e8"),
+        "a2a_comparison": (483, "c474e142572f80deec35a34d684bd888f10b8f37ccbd15749f60b762e18759a4"),
+        "a2a_gate_reps": (192, "24aa26836d4b8b9d84ee1f891fa3b5491fc66a2e24ec5a40d8b9796b148a6e7c"),
+        "a2a_candidates": (576, "7a61e5928a9a6e4783158628bc9da3a0dd14c0a05b4a02f564af65b945a77c8a"),
+        "a2a_receiver": (288, "8766cfad51e73e4ec67c4f56e1a9847bbda29b66360d33b75d81ea16f50a01d5"),
+        "a2a_rs3": (24, "08327ca646ad41a5c726d432c8914523f8842bea24b80996bf7d3a37c890bc7d"),
+        "a2a_tail": (288, "1423a97492ff2063138f9d8d7e6940612d0ea70a3f6f13b786175c38e13dee26"),
+        "a2a_ackloss": (72, "4b07e07ca7ddbda6e89ff7582467dc78775041c61b1376e91249366cfba0072b"),
+        "a2a_candidates_ack": (288, "b56bc643a6790b42f5784d2bd4d1626bcceee7b21dc515488776fea7e128c8cb"),
+    }
+
+    def test_runs_and_profiles_unchanged(self):
+        here = Path(profiles.__file__).parent
+        calibration = json.loads((here / "a2a_calibration.json").read_text())
+        tuning = json.loads((here / "a2a_tuning.json").read_text())
+        for stage, pinned in self.STAGES.items():
+            runs = profiles.a2a_stage_runs(stage, calibration, tuning)
+            text = json.dumps([[r, profiles.a2a_stage_profile(r, calibration)] for r in runs], sort_keys=True)
+            self.assertEqual((len(runs), hashlib.sha256(text.encode()).hexdigest()), pinned, stage)
 
 
 class Losses(unittest.TestCase):
