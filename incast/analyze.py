@@ -18,7 +18,7 @@
                                                      cost and reaction per arm and cell
     analyze.py a2a_cycles --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      cost, detection and re-admission per on- and off-period, per arm
-    analyze.py a2a_sweep_probe --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+    analyze.py a2a_compute_gaps --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      median healthy iteration and compute gap per run
     analyze.py a2a_sweep --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      loss evidence and the hold arms' recovered fraction per cell
@@ -28,7 +28,8 @@
 
 Phase 9 (all-to-all runs, those with a group): cost pairs each faulted run
 with the healthy run of the same arm and setting, group, size, iteration
-count and seed, from any stage of the runs files given (the comparison reuses the gate's uniform
+count, packet payload (payload_bytes, absent at the generator's default)
+and seed, from any stage of the runs files given (the comparison reuses the gate's uniform
 and oracle runs). Primary cost is the mean iteration completion minus the
 pair's, tail cost the same on the p99 with linear interpolation; recovered
 fraction is 1 - cost / cost(uniform) per seed on the same (group, size,
@@ -41,10 +42,11 @@ verdict "data_helps" when reps_oracle beats reps on primary cost by the
 seed rule ("seed_rule_not_met" otherwise, None while either arm lacks three
 seeds with a known cost).
 
-a2a_candidates gives every arm of the runs given (all stages unless --stage;
-the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail, a2a_ackloss,
-a2a_candidates_ack, a2a_tail_ack and a2a_sweep each so) per cell its per-seed and mean primary and tail cost, and these
-measures per faulted run:
+a2a_candidates gives every arm of the runs given (all stages unless
+--stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
+a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k and
+a2a_sweep_4k each so) per cell its per-seed and mean primary and tail cost,
+and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
   the end of the first sender loss interval ending after it in which spine
@@ -113,15 +115,16 @@ reaction_ns; None without a trace).
 Per arm the table gives each period's per-seed values and their means over
 the seeds that have one.
 
-a2a_sweep_probe reads the healthy runs of a2a_sweep_probe (--stage) and
-gives each its median iteration completion, summary.json's nearest-rank
-p50 as the a2a_probe stage read it, and the compute gap the sweep takes
-from it: two thirds of the median, rounded to a whole microsecond, so that
-the hosts are busy 60 percent of the period. Both are None while the run is
-incomplete.
+a2a_compute_gaps reads the healthy runs of a probe stage (--stage,
+a2a_probe_4k by default) and gives each its median iteration completion,
+summary.json's nearest-rank p50 as the a2a_probe stage read it, and the
+compute gap the later stages at its payload take from it: two thirds of the
+median, rounded to a whole microsecond, so that the hosts are busy 60
+percent of the period. Both are None while the run is incomplete.
 
-a2a_sweep reads a2a_sweep's runs alone (--stage) and gives each (group,
-size, condition) cell:
+a2a_sweep reads one stage's runs alone (--stage, a2a_sweep_4k by default;
+a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
+cell:
 
 * the expected loss evidence on spine 3 of a host of leaf 0, under even
   spraying with the pair's message per iteration as one flow of 4096-byte
@@ -695,7 +698,7 @@ def a2a_costs(rows: list[dict]) -> list[dict]:
     when the healthy run is missing or incomplete and infinite when the
     faulted run is incomplete."""
     def pair(row):
-        return (_label(row), row["group"], row["size"], row.get("iterations"), row["seed"])
+        return (_label(row), row["group"], row["size"], row.get("iterations"), row.get("payload_bytes"), row["seed"])
 
     healthy: dict[tuple, dict] = {}
     for row in rows:
@@ -722,18 +725,22 @@ def a2a_costs(rows: list[dict]) -> list[dict]:
 
 
 def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str = "uniform") -> list[dict]:
-    """Per (group, size, condition) cell, per arm: per-seed primary and tail
-    cost and recovered fraction against uniform on the same cell and seed,
-    their means, and the seed-rule verdicts against the reference arm. Arms
-    are named as in cost_cells: bare when the cell runs one setting of it."""
+    """Per (group, size, condition) cell, and per payload where runs set one
+    (the cell's payload_bytes), per arm: per-seed primary and tail cost and
+    recovered fraction against uniform on the same cell and seed, their
+    means, and the seed-rule verdicts against the reference arm. Arms are
+    named as in cost_cells: bare when the cell runs one setting of it."""
     faulted = a2a_costs(rows)
+
+    def cell_of(row):
+        return row["group"], row["size"], row["condition"], row.get("payload_bytes") or 0
+
     settings: dict[tuple, set[str]] = defaultdict(set)
     for row in faulted:
-        settings[(row["group"], row["size"], row["condition"], row["arm"])].add(
-            json.dumps(row["setting"], sort_keys=True))
+        settings[cell_of(row) + (row["arm"],)].add(json.dumps(row["setting"], sort_keys=True))
     cells: dict[tuple, dict[str, dict[int, dict]]] = defaultdict(lambda: defaultdict(dict))
     for row in faulted:
-        cell = (row["group"], row["size"], row["condition"])
+        cell = cell_of(row)
         label = row["arm"] if len(settings[cell + (row["arm"],)]) == 1 else _label(row)
         cells[cell][label][row["seed"]] = row
 
@@ -741,7 +748,7 @@ def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str 
         return None if not values or None in values else sum(values) / len(values)
 
     out = []
-    for (group, size, condition), arms in sorted(cells.items()):
+    for (group, size, condition, payload), arms in sorted(cells.items()):
         uniform_costs = {seed: r["cost_ns"] for seed, r in arms.get(uniform, {}).items()}
         table = {}
         for label, by_seed in sorted(arms.items()):
@@ -771,7 +778,7 @@ def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str 
                     entry["recovered"], base["recovered"], label, reference, higher_is_better=True
                 )
         out.append({"group": group, "size": size, "condition": condition,
-                    "reference": reference, "arms": table})
+                    **({"payload_bytes": payload} if payload else {}), "reference": reference, "arms": table})
     return out
 
 
@@ -1255,15 +1262,15 @@ def cycles_markdown(cells: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# The compute gap of a (group, size) from its healthy probe run.
+# The compute gap of a (group, size) at a payload from its healthy probe run.
 
 A2A_COMPUTE_FRACTION = 2 / 3
 
 
-def a2a_sweep_probe(runs_files, out_root: Path, stage: str) -> list[dict]:
-    """Per run of the stage with a summary: its group, size, the compute
-    gap it ran at, the iterations it completed of those it ran, the median
-    iteration completion and the compute gap it gives (see the module
+def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
+    """Per run of the stage with a summary: its group, size and payload, the
+    compute gap it ran at, the iterations it completed of those it ran, the
+    median iteration completion and the compute gap it gives (see the module
     docstring)."""
     out = []
     for run in _listed_runs(runs_files):
@@ -1274,13 +1281,14 @@ def a2a_sweep_probe(runs_files, out_root: Path, stage: str) -> list[dict]:
         stats = iteration_stats(summary)
         median = stats["iteration_p50_ns"] if (summary.get("all_to_all") or {}).get("complete") else None
         out.append({"key": run["key"], "group": run["group"], "size": run["size"],
+                    "payload_bytes": run.get("payload_bytes"),
                     "probe_compute_ns": run["compute_ns"], "iterations": run["iterations"],
                     "iterations_completed": stats.get("iterations_completed"), "median_iteration_ns": median,
                     "compute_ns": None if median is None else round(median * A2A_COMPUTE_FRACTION / 1000) * 1000})
     return out
 
 
-def sweep_probe_markdown(rows: list[dict]) -> str:
+def compute_gaps_markdown(rows: list[dict]) -> str:
     def value(v) -> str:
         return "-" if v is None else str(v)
 
@@ -1437,9 +1445,9 @@ def sweep_markdown(cells: list[dict]) -> str:
 
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration and
-# a2a_sweep_calibration.
+# a2a_calibration_4k.
 
-A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_sweep_calibration")
+A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k")
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",
@@ -1546,7 +1554,8 @@ def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:
 
 def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     """a2a_calibration.json from the healthy calibration runs that have a
-    summary, merged into existing: per scope and (group, size), the Phase 8
+    summary, merged into existing: per scope and (group, size), named
+    <group>-<size>-p<payload> for runs at a set packet payload, the Phase 8
     congestion (and, but for switch_queue, trim) thresholds of thresholds(),
     and loss_thresholds. The pooled pass's are a map from each candidate
     interval to its list, from its sender loss trace; per_connection takes
@@ -1560,7 +1569,9 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
         directory = out_root / run["key"]
         if (run["stage"] in A2A_CALIBRATION_STAGES and run["condition"] == "healthy"
                 and run["arm"] in A2A_SCOPE_OF_ARM and (directory / "summary.json").exists()):
-            groups[(A2A_SCOPE_OF_ARM[run["arm"]], f"{run['group']}-{run['size']}")].append(directory)
+            payload = run.get("payload_bytes")
+            cell = f"{run['group']}-{run['size']}" + ("" if payload is None else f"-p{payload}")
+            groups[(A2A_SCOPE_OF_ARM[run["arm"]], cell)].append(directory)
     result = {key: (dict(value) if isinstance(value, dict) else value) for key, value in existing.items()}
     traced = {cell: [d for d in dirs if (d / "ns3" / "spine_losses.csv").exists()]
               for (scope, cell), dirs in groups.items() if scope == "per_receiver"}
@@ -1619,11 +1630,11 @@ def main() -> int:
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates", "a2a_cycles", "a2a_sweep_probe", "a2a_sweep"):
+                 "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
-                                             "a2a_cycles", "a2a_sweep_probe", "a2a_sweep") else None)
+                                             "a2a_cycles", "a2a_compute_gaps", "a2a_sweep") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -1633,8 +1644,9 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name in ("a2a_gate_reps", "a2a_sweep_probe", "a2a_sweep"):
-            x.add_argument("--stage", default=name)
+        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep"):
+            stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k"}
+            x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
             x.add_argument("--stage")
@@ -1683,10 +1695,10 @@ def main() -> int:
             arguments.markdown.write_text(sweep_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
-    if arguments.command == "a2a_sweep_probe":
-        rows = a2a_sweep_probe(arguments.runs, arguments.out_root, arguments.stage)
+    if arguments.command == "a2a_compute_gaps":
+        rows = a2a_compute_gaps(arguments.runs, arguments.out_root, arguments.stage)
         if arguments.markdown:
-            arguments.markdown.write_text(sweep_probe_markdown(rows))
+            arguments.markdown.write_text(compute_gaps_markdown(rows))
         print(json.dumps(rows, indent=1))
         return 0
     if arguments.command == "a2a_cycles":

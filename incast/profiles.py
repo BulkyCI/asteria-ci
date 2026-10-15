@@ -453,24 +453,29 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           the gate and their healthy pairs, seeds 301-303
 #   a2a_tail_ack            the A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of
 #                           the gate and their healthy pairs, seeds 301-303
-#   a2a_sweep_probe         one healthy uniform_tail run, seed 301, per
-#                           (group, size) the sweep adds, at its provisional
-#                           compute gap (A2A_SWEEP_PROBE_COMPUTE_NS)
-#   a2a_sweep_calibration   a2a_calibration's per_receiver pass on the
-#                           A2A_SWEEP_CALIBRATION_CELLS; refused until
-#                           A2A_SWEEP_COMPUTE_NS holds the probe's gaps
-#   a2a_sweep               the A2A_SWEEP_ARMS on the A2A_SWEEP_CELLS, the
+#
+# and, at a packet payload of 4096 B (A2A_PAYLOAD_4K), each refused but the
+# probe until A2A_PAYLOAD_COMPUTE_NS holds the probe's gaps, and the last two
+# also until a2a_calibration.json has a per_receiver entry at that payload for
+# every (group, size) they run off one leaf:
+#
+#   a2a_probe_4k            one healthy uniform_tail run, seed 301, per
+#                           (group, size) of A2A_PROBE_4K_COMPUTE_NS, at its
+#                           provisional compute gap
+#   a2a_calibration_4k      a2a_calibration's per_receiver pass on the
+#                           A2A_CALIBRATION_4K_CELLS
+#   a2a_tail_ack_4k         the A2A_ARMS_4K on the 28 cells of the gate and
+#                           their healthy pairs, seeds 301-303
+#   a2a_sweep_4k            the A2A_ARMS_4K on the A2A_SWEEP_CELLS, the
 #                           A2A_SWEEP_ANCHOR and the A2A_SWEEP_HANDOVER cell
-#                           and their healthy pairs, seeds 301-303; refused
-#                           until A2A_SWEEP_COMPUTE_NS holds the probe's gaps
-#                           and a2a_calibration.json a per_receiver entry for
-#                           every (group, size) off one leaf
+#                           and their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
-# ("ep64-2m") to congestion_thresholds, trim_thresholds (not for
-# switch_queue) and loss_thresholds, the last either one list or a map from
-# a loss interval in ns to a list; its "headline" names the tuning cell as
+# ("ep64-2m", or "ep64-2m-p4096" at a 4096-byte payload; a2a_cell_name) to
+# congestion_thresholds, trim_thresholds (not for switch_queue) and
+# loss_thresholds, the last either one list or a map from a loss interval in
+# ns to a list; its "headline" names the tuning cell as
 # <group>-<size>-<condition> ("ep64-256k-loss1e2_up"), and
 # "headline_reason" says why when it departs from the P17 rule. a2a_tuning.json (read when present) maps each tuned arm
 # to its setting (gamma, sender_pool_weight, loss_interval_ns,
@@ -763,28 +768,80 @@ A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack",
 # Every arm that adds transport keys (tail recovery, ack_loss_rtts) to a base
 # arm, and that base arm.
 A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS}
-# a2a_sweep: one gray loss on leaf 0's uplink to spine 3, from the onset to
-# the end of the run, swept over three axes through EP64 at 256 KiB and 1e-2:
-# the group at 256 KiB and 1e-2 (EP8, whose all-to-all stays on leaf 0 and
-# crosses no spine, then EP16, EP32 and EP64, 0, 8, 24 and 56 peers of a leaf
-# 0 host off its leaf), the size at EP64 and 1e-2 (64 KiB, 256 KiB, 1 MiB and
-# 2 MiB per pair), the loss rate at EP64 and 256 KiB (1e-3, 3e-3, 1e-2 and
-# 3e-2), and the four corners of the size by loss plane at EP64
-# (A2A_SWEEP_CELLS). Two cells besides: A2A_SWEEP_ANCHOR, EP32 at 4 MiB and
-# 3e-2, where a flow expects more than three losses on the spine; and
-# A2A_SWEEP_HANDOVER, EP64 at 256 KiB with the same uplink at 16 Gbps and no
-# loss, a link degraded to a few percent of its rate rather than lossy, on
-# EP64 at 256 KiB's healthy pairs. Every cell runs the A2A_SWEEP_ARMS, each
-# with its a2a_tail_ack setting, with healthy pairs, seeds 301-303, at 40
-# iterations, 12 for EP64 at 2 MiB (as the gate) and for EP32 at 4 MiB (124
-# MiB per host per iteration, near EP64 at 2 MiB's 126 MiB). The groups and
-# sizes the sweep adds are in A2A_RUN_GROUPS and A2A_RUN_SIZES, not in
-# A2A_GROUPS and A2A_SIZES, so the earlier stages' cells stay as they are.
-A2A_SWEEP_STAGE = "a2a_sweep"
-A2A_SWEEP_PROBE_STAGE = "a2a_sweep_probe"
+# The stages named *_4k run at a packet payload of A2A_PAYLOAD_4K, the
+# largest RDMA path MTU, where every stage above runs at the generator's
+# default of 1000 B: each of their runs carries payload_bytes, written as
+# network.packet_payload_bytes. Loss thresholds (from the healthy sends per
+# spine per interval) and compute gaps (from the healthy burst, which header
+# overhead per payload byte lengthens) depend on the payload, so a run with a
+# payload reads its calibration from the cells a2a_cell_name names with it
+# (<group>-<size>-p4096) and its compute gap from A2A_PAYLOAD_COMPUTE_NS.
+A2A_PAYLOAD_4K = 4096
+# Every group and size a run names: the gate's (A2A_GROUPS, A2A_SIZES and
+# A2A_ITERATIONS), which the earlier stages run, and those the sweep adds:
+# EP8, the hosts of leaf 0, and EP32, those of leaves 0 to 3; 64 KiB, 1 MiB
+# and 4 MiB per pair. EP32 at 4 MiB runs 12 iterations, as EP64 at 2 MiB
+# does: 124 MiB per host per iteration, near EP64 at 2 MiB's 126 MiB.
 A2A_RUN_GROUPS: dict[str, Any] = {**A2A_GROUPS, "ep8": {"leaves": [0]}, "ep32": {"leaves": [0, 1, 2, 3]}}
 A2A_RUN_GROUP_SIZES = {**A2A_GROUP_SIZES, "ep8": 8, "ep32": 32}
 A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB}
+A2A_RUN_ITERATIONS = {**A2A_ITERATIONS, ("ep8", "256k"): 40, ("ep32", "256k"): 40, ("ep64", "64k"): 40,
+                      ("ep64", "1m"): 40, ("ep32", "4m"): 12}
+# A group on one leaf (EP8) sends nothing up a spine: it has no loss trace to
+# calibrate, its hold arms read A2A_LOSS_THRESHOLDS_PLACEHOLDER, and none of
+# its sends crosses the faulted link.
+A2A_ONE_LEAF_GROUPS = ("ep8",)
+# a2a_probe_4k's provisional compute gap of every (group, size) a 4096-byte
+# stage runs: A2A_COMPUTE_NS's rule, two thirds of 1.176 times the line-rate
+# burst, rounded to a whole microsecond (A2A_COMPUTE_NS itself for the gate's
+# pairs).
+A2A_PROBE_4K_STAGE = "a2a_probe_4k"
+A2A_PROBE_4K_COMPUTE_NS = {
+    **A2A_COMPUTE_NS,
+    ("ep8", "256k"): 29_000,  # burst 1.176 x 36.7 us = 43.2 us
+    ("ep32", "256k"): 127_000,  # 1.176 x 162.5 us = 191.1 us
+    ("ep64", "64k"): 65_000,  # 1.176 x 82.6 us = 97.1 us
+    ("ep64", "1m"): 1_036_000,  # 1.176 x 1.321 ms = 1.554 ms
+    ("ep32", "4m"): 2_039_000,  # 1.176 x 2.601 ms = 3.058 ms
+}
+# The compute gap per payload and (group, size): two thirds of the median
+# iteration completion of the pair's probe run at that payload, rounded to a
+# whole microsecond, as analyze.py a2a_compute_gaps prints it. Until those
+# values replace the provisional ones and the payload's
+# A2A_PAYLOAD_COMPUTE_MEASURED is True, a2a_stage_runs refuses every stage at
+# the payload but its probe.
+A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: dict(A2A_PROBE_4K_COMPUTE_NS)}
+A2A_PAYLOAD_COMPUTE_MEASURED = {A2A_PAYLOAD_4K: False}
+# a2a_calibration_4k: a2a_calibration's per_receiver pass (the healthy
+# graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds 101-103, at the
+# simulator's thresholds) on every (group, size) of a2a_probe_4k off one leaf,
+# so that analyze.py a2a_calibrate adds their 4096-byte cells to
+# a2a_calibration.json by the gate cells' rule.
+A2A_CALIBRATION_4K_STAGE = "a2a_calibration_4k"
+A2A_CALIBRATION_4K_CELLS = tuple(cell for cell in A2A_PROBE_4K_COMPUTE_NS if cell[0] not in A2A_ONE_LEAF_GROUPS)
+# The arms of the 4096-byte stages, each with its A2A_TAIL_ACK_ARMS setting:
+# the loss-hold arms, then the baselines. A further hold arm joins
+# A2A_HOLD_ARMS_4K once A2A_TAIL_ACK_ARMS and A2A_TAIL_ACK_KEYS define it.
+A2A_HOLD_ARMS_4K = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
+A2A_ARMS_4K = A2A_HOLD_ARMS_4K + ("reps_tail", "reps_oracle_tail", "uniform_tail")
+# a2a_tail_ack_4k: a2a_tail_ack's arms at 4096 B, with reps_oracle_tail, so
+# that the gate's reading of reps_oracle against REPS is taken again at this
+# payload, on the 28 cells of the gate and their healthy pairs.
+A2A_TAIL_ACK_4K_STAGE = "a2a_tail_ack_4k"
+# a2a_sweep_4k: one gray loss on leaf 0's uplink to spine 3, from the onset
+# to the end of the run, swept over three axes through EP64 at 256 KiB and
+# 1e-2: the group at 256 KiB and 1e-2 (EP8, whose all-to-all stays on leaf 0
+# and crosses no spine, then EP16, EP32 and EP64, 0, 8, 24 and 56 peers of a
+# leaf 0 host off its leaf), the size at EP64 and 1e-2 (64 KiB, 256 KiB, 1 MiB
+# and 2 MiB per pair), the loss rate at EP64 and 256 KiB (1e-3, 3e-3, 1e-2
+# and 3e-2), and the four corners of the size by loss plane at EP64
+# (A2A_SWEEP_CELLS). Two cells besides: A2A_SWEEP_ANCHOR, EP32 at 4 MiB and
+# 3e-2, where a pair expects more than three losses on the spine per
+# iteration; and A2A_SWEEP_HANDOVER, EP64 at 256 KiB with the same uplink at
+# 16 Gbps and no loss, a link degraded to a few percent of its rate rather
+# than lossy, on EP64 at 256 KiB's healthy pairs. Every cell runs the
+# A2A_ARMS_4K with healthy pairs, seeds 301-303.
+A2A_SWEEP_STAGE = "a2a_sweep_4k"
 A2A_SWEEP_CELLS = (
     ("ep8", "256k", "loss1e2_up"), ("ep16", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
     ("ep64", "256k", "loss1e2_up"), ("ep64", "64k", "loss1e2_up"), ("ep64", "1m", "loss1e2_up"),
@@ -794,47 +851,17 @@ A2A_SWEEP_CELLS = (
 )
 A2A_SWEEP_ANCHOR = ("ep32", "4m", "loss3e2_up")
 A2A_SWEEP_HANDOVER = ("ep64", "256k", "rate16g_up")
-A2A_SWEEP_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
-                  "reps_tail", "reps_oracle_tail", "uniform_tail")
-# Iterations per (group, size) the sweep adds; the others are A2A_ITERATIONS.
-A2A_SWEEP_ITERATIONS = {("ep8", "256k"): 40, ("ep32", "256k"): 40, ("ep64", "64k"): 40, ("ep64", "1m"): 40,
-                        ("ep32", "4m"): 12}
-# The compute gap of a2a_sweep_probe's run of each (group, size) the sweep
-# adds, provisional: A2A_COMPUTE_NS's rule, two thirds of 1.176 times the
-# line-rate burst, rounded to a whole microsecond.
-A2A_SWEEP_PROBE_COMPUTE_NS = {
-    ("ep8", "256k"): 29_000,  # burst 1.176 x 36.7 us = 43.2 us
-    ("ep32", "256k"): 127_000,  # 1.176 x 162.5 us = 191.1 us
-    ("ep64", "64k"): 65_000,  # 1.176 x 82.6 us = 97.1 us
-    ("ep64", "1m"): 1_036_000,  # 1.176 x 1.321 ms = 1.554 ms
-    ("ep32", "4m"): 2_039_000,  # 1.176 x 2.601 ms = 3.058 ms
-}
-# a2a_sweep's compute gap for the same pairs: two thirds of the median
-# iteration completion of the pair's a2a_sweep_probe run, rounded to a whole
-# microsecond, as analyze.py a2a_sweep_probe prints it. Until those values
-# replace the provisional ones below and A2A_SWEEP_COMPUTE_MEASURED is True,
-# a2a_stage_runs refuses a2a_sweep.
-A2A_SWEEP_COMPUTE_NS = dict(A2A_SWEEP_PROBE_COMPUTE_NS)
-A2A_SWEEP_COMPUTE_MEASURED = False
-# A group on one leaf (EP8) sends nothing up a spine, so it has no loss trace
-# to calibrate and needs no per_receiver entry: its hold arms read
-# A2A_LOSS_THRESHOLDS_PLACEHOLDER, and none of its sends crosses the faulted
-# link. a2a_sweep_calibration runs a2a_calibration's per_receiver pass (the
-# healthy graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds
-# 101-103) on each other (group, size) the sweep adds, at its a2a_sweep
-# compute gap and iterations, so that analyze.py a2a_calibrate merges their
-# loss thresholds into a2a_calibration.json by the gate cells' rule.
-A2A_ONE_LEAF_GROUPS = ("ep8",)
-A2A_SWEEP_CALIBRATION_STAGE = "a2a_sweep_calibration"
-A2A_SWEEP_CALIBRATION_CELLS = tuple(cell for cell in A2A_SWEEP_PROBE_COMPUTE_NS if cell[0] not in A2A_ONE_LEAF_GROUPS)
+A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE,
+                                                          A2A_TAIL_ACK_4K_STAGE, A2A_SWEEP_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
-              A2A_SWEEP_PROBE_STAGE, A2A_SWEEP_CALIBRATION_STAGE, A2A_SWEEP_STAGE)
+              *A2A_STAGE_PAYLOAD)
 
 
-def a2a_cell_name(group: str, size: str) -> str:
-    return f"{group}-{size}"
+def a2a_cell_name(group: str, size: str, payload: int | None = None) -> str:
+    """<group>-<size>, and -p<payload> for a run with a packet payload."""
+    return f"{group}-{size}" + ("" if payload is None else f"-p{payload}")
 
 
 def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
@@ -888,10 +915,11 @@ def _a2a_loss_thresholds(entry: dict[str, Any], interval_ns: int) -> list[float]
 
 
 def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] | None,
-                  setting: dict[str, Any] | None) -> dict[str, Any]:
+                  setting: dict[str, Any] | None, payload: int | None = None) -> dict[str, Any]:
     """An arm's load balancing: the t_ stages' graded settings (edge window
     penalty 0, edge_freeze off, estimator_interval_samples 0, gain 0.25)
-    plus this phase's calibrated thresholds and the loss grade."""
+    plus this phase's calibrated thresholds at the run's payload and the
+    loss grade."""
     import transient
 
     if arm in ("uniform",) + A2A_FIXED_ARMS:
@@ -902,7 +930,8 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return {"mode": "spray_uniform", "selector": "reps_spine"}
     if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
         # The setting is the transport keys alone.
-        return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None), **(setting or {})}
+        return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None, payload),
+                **(setting or {})}
     if (arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS
             or arm in A2A_TRANSPORT_ARMS):
         # The setting holds the loss interval, the clean sentinels and the
@@ -914,7 +943,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
                 else A2A_TRICKLE_ARMS.get(arm, A2A_TRANSPORT_ARMS.get(arm, arm)))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
-        entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
+        entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size, payload), {})
         return {
             "mode": "spray_uniform",
             "selector": selector,
@@ -924,15 +953,15 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         }
     if arm in A2A_FLOOR_ARMS:
         # The setting is the base arm's with congestion_grade_floor.
-        values = a2a_balancing(A2A_FLOOR_ARMS[arm], group, size, calibration, setting)
+        values = a2a_balancing(A2A_FLOOR_ARMS[arm], group, size, calibration, setting, payload)
         values.pop("pool_hold_propagates", None)
         return values
     if arm == A2A_SOFT_ORACLE:
-        values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting)
+        values = a2a_balancing(A2A_ORACLE, group, size, calibration, setting, payload)
         values["loss_thresholds"] = list(A2A_SOFT_LOSS_THRESHOLDS)
         return values
     values = transient.balancing(arm, 0, None, setting)
-    entry = (calibration or {}).get(A2A_SCOPES[arm], {}).get(a2a_cell_name(group, size), {})
+    entry = (calibration or {}).get(A2A_SCOPES[arm], {}).get(a2a_cell_name(group, size, payload), {})
     for key in ("congestion_thresholds",) + (() if arm == A2A_ORACLE else ("trim_thresholds",)):
         if key in entry:
             values[key] = entry[key]
@@ -1084,6 +1113,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                    tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Every run of a Phase 9 stage."""
     out: list[dict[str, Any]] = []
+    payload = A2A_STAGE_PAYLOAD.get(stage)
+    compute = A2A_COMPUTE_NS if payload is None else A2A_PAYLOAD_COMPUTE_NS[payload]
 
     def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None,
             compute_ns=None):
@@ -1099,15 +1130,16 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "size": size,
                 "message_bytes": A2A_RUN_SIZES[size],
                 "condition": condition,
-                "compute_ns": compute_ns or A2A_COMPUTE_NS[(group, size)],
-                "iterations": iterations or A2A_ITERATIONS[(group, size)],
+                "compute_ns": compute_ns or compute[(group, size)],
+                "iterations": iterations or A2A_RUN_ITERATIONS[(group, size)],
                 "seed": seed,
                 **({} if flap is None else {"flap": flap}),
+                **({} if payload is None else {"payload_bytes": payload}),
             }
         )
 
     def calibrated(scope, group, size):
-        return a2a_cell_name(group, size) in (calibration or {}).get(scope, {})
+        return a2a_cell_name(group, size, payload) in (calibration or {}).get(scope, {})
 
     if stage == "a2a_oracle_calibration":
         for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["calibration"]):
@@ -1165,34 +1197,30 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
-    elif stage == A2A_SWEEP_PROBE_STAGE:
+    elif stage == A2A_PROBE_4K_STAGE:
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
-        for (group, size), compute_ns in A2A_SWEEP_PROBE_COMPUTE_NS.items():
-            add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
-                iterations=A2A_SWEEP_ITERATIONS[(group, size)], compute_ns=compute_ns)
-    elif stage in (A2A_SWEEP_CALIBRATION_STAGE, A2A_SWEEP_STAGE):
-        if not A2A_SWEEP_COMPUTE_MEASURED:
-            raise ValueError(f"{stage}'s compute gaps are provisional: enter the a2a_sweep_probe "
-                             "values in A2A_SWEEP_COMPUTE_NS and set A2A_SWEEP_COMPUTE_MEASURED")
-        compute = {**A2A_COMPUTE_NS, **A2A_SWEEP_COMPUTE_NS}
-        iterations = {**A2A_ITERATIONS, **A2A_SWEEP_ITERATIONS}
-        if stage == A2A_SWEEP_CALIBRATION_STAGE:
-            for (group, size), seed in itertools.product(A2A_SWEEP_CALIBRATION_CELLS, A2A_SEEDS["calibration"]):
-                add("graded_per_receiver_mix", group, size, "healthy", seed, A2A_CALIBRATION_POOLED,
-                    iterations=iterations[(group, size)], compute_ns=compute[(group, size)])
+        for (group, size), compute_ns in A2A_PROBE_4K_COMPUTE_NS.items():
+            add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting, compute_ns=compute_ns)
+    elif stage in A2A_STAGE_PAYLOAD:
+        if not A2A_PAYLOAD_COMPUTE_MEASURED[payload]:
+            raise ValueError(f"{stage}'s compute gaps are provisional: enter the probe's values at {payload} B "
+                             "in A2A_PAYLOAD_COMPUTE_NS and set A2A_PAYLOAD_COMPUTE_MEASURED")
+        if stage == A2A_CALIBRATION_4K_STAGE:
+            for (group, size), seed in itertools.product(A2A_CALIBRATION_4K_CELLS, A2A_SEEDS["calibration"]):
+                add("graded_per_receiver_mix", group, size, "healthy", seed, A2A_CALIBRATION_POOLED)
             return out
-        cells = A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER)
+        cells = (tuple(a2a_gate_cells()) if stage == A2A_TAIL_ACK_4K_STAGE
+                 else A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER))
         pairs = tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
-        uncalibrated = [a2a_cell_name(group, size) for group, size, _ in pairs
+        uncalibrated = [a2a_cell_name(group, size, payload) for group, size, _ in pairs
                         if group not in A2A_ONE_LEAF_GROUPS and not calibrated("per_receiver", group, size)]
         if uncalibrated:
-            raise ValueError(f"a2a_sweep's hold arms have no calibrated loss thresholds on {uncalibrated}: "
-                             "merge a2a_sweep_calibration into a2a_calibration.json")
-        settings = a2a_tail_ack_settings(tuning, A2A_SWEEP_ARMS)
+            raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
+                             "merge a2a_calibration_4k into a2a_calibration.json")
+        settings = a2a_tail_ack_settings(tuning, A2A_ARMS_4K)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
             for group, size, condition in cells + pairs:
-                add(arm, group, size, condition, seed, setting, iterations=iterations[(group, size)],
-                    compute_ns=compute[(group, size)])
+                add(arm, group, size, condition, seed, setting)
     elif stage == A2A_RS3_STAGE:
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
             for group, size in A2A_RS3_CELLS:
@@ -1224,13 +1252,15 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
 def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -> dict[str, Any]:
     """The t_ stages' fabric and transport under the all-to-all workload;
     the calibration stages run without this phase's calibration."""
-    if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration", A2A_SWEEP_CALIBRATION_STAGE):
+    if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration", A2A_CALIBRATION_4K_STAGE):
         calibration = None
     group, size = run["group"], run["size"]
     document = profile(
         run["key"], 64, "healthy",
-        a2a_balancing(run["arm"], group, size, calibration, run["setting"]),
+        a2a_balancing(run["arm"], group, size, calibration, run["setting"], run.get("payload_bytes")),
     )
+    if "payload_bytes" in run:
+        document["network"]["packet_payload_bytes"] = run["payload_bytes"]
     document["steps"] = run["iterations"]
     document["workload"] = {
         "kind": "all_to_all",
