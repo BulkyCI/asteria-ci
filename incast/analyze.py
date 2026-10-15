@@ -1411,10 +1411,9 @@ def compute_gaps_markdown(rows: list[dict]) -> str:
 # on spine 3, and the hold arms' recovered fraction against the oracle's.
 
 A2A_SWEEP_POOLED = "reps_hold_auto_tail_ack"
-# The hold arms read against the pooled one: per destination leaf, per flow
-# and per destination host; a further hold arm of the 4096-byte stages
-# (profiles.py A2A_HOLD_ARMS_4K) joins them here.
-A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack", "reps_hold_pair_tail_ack")
+# The hold arms read against the pooled one, per destination leaf and per
+# flow (profiles.py A2A_HOLD_ARMS_4K).
+A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
 A2A_SWEEP_ORACLE = "reps_oracle_tail"
 A2A_SWEEP_REPS = "reps_tail"
 A2A_SWEEP_UNIFORM = "uniform_tail"

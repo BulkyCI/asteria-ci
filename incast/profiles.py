@@ -770,7 +770,7 @@ A2A_ACK_ARMS = {**A2A_ACKLOSS_ARMS, **A2A_CANDIDATES_ACK_ARMS}
 # of that send is moved off the declared send's path, so the baselines carry
 # it too and every arm's repairs follow the same rule. a2a_tail_ack runs
 # A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of the gate and their healthy
-# pairs; mrc_hold_auto_tail_ack runs in no stage yet.
+# pairs; reps_hold_pair_tail_ack runs in no stage (A2A_HOLD_ARMS_4K).
 A2A_TAIL_ACK_STAGE = "a2a_tail_ack"
 A2A_TAIL_ACK_ARMS = {
     "reps_hold_auto_tail_ack": "reps_hold_auto", "reps_hold_leaf_tail_ack": "reps_hold_auto",
@@ -893,10 +893,11 @@ A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {A2A_PAYL
 A2A_CALIBRATION_4K_STAGE = "a2a_calibration_4k"
 A2A_CALIBRATION_4K_CELLS = tuple(cell for cell in A2A_PROBE_4K_COMPUTE_NS if cell[0] not in A2A_ONE_LEAF_GROUPS)
 # The arms of the 4096-byte stages, each with its A2A_TAIL_ACK_ARMS setting:
-# the loss-hold arms, then the baselines. A further hold arm joins
-# A2A_HOLD_ARMS_4K once A2A_TAIL_ACK_ARMS and A2A_TAIL_ACK_KEYS define it.
-A2A_HOLD_ARMS_4K = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
-                    "reps_hold_pair_tail_ack")
+# the loss-hold arms, then the baselines. reps_hold_pair_tail_ack is not
+# among them: under path_state connection a sender has one connection per
+# destination host, so reps_flow_hold_tail_ack's hold per flow is already a
+# hold per destination host and spine that outlasts each message.
+A2A_HOLD_ARMS_4K = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
 A2A_ARMS_4K = A2A_HOLD_ARMS_4K + ("reps_tail", "reps_oracle_tail", "uniform_tail")
 # a2a_tail_ack_4k: a2a_tail_ack's arms at 4096 B, with reps_oracle_tail, so
 # that the gate's reading of reps_oracle against REPS is taken again at this
