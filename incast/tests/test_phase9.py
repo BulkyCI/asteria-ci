@@ -66,7 +66,7 @@ class Stages(unittest.TestCase):
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432,
-             "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
+             "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
         )
@@ -77,7 +77,7 @@ class Stages(unittest.TestCase):
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432,
-             "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
+             "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
         )
@@ -905,11 +905,12 @@ class Downlink(unittest.TestCase):
     @measured_4k()
     def test_runs_and_settings(self):
         runs = profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)
-        # 4 cells and 2 healthy pairs by 5 arms by 3 seeds.
-        self.assertEqual(len(runs), (4 + 2) * 5 * 3)
+        # 6 cells and 2 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(runs), (6 + 2) * 5 * 3)
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
                          {(g, "256k", c) for g in ("ep64", "ep16")
-                          for c in ("blackhole_down", "halfrate_down", "healthy")})
+                          for c in ("blackhole_down", "halfrate_down", "healthy")}
+                         | {("ep64", "256k", c) for c in ("loss1e3_down", "loss1e2_down")})
         self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx",
                                                     "reps_tail", "mrc_hold_auto_tail_ack", "reps_oracle_tail"})
         self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
@@ -920,6 +921,10 @@ class Downlink(unittest.TestCase):
                          {**by_arm["reps_hold_auto_tail_ack"]["load_balancing"], "receiver_hold": True,
                           "receiver_hold_clean": 1024, "receiver_tail_missing": True})
         self.assertEqual(by_arm["reps_tail"]["link_failures"], profiles.a2a_fault("blackhole_down"))
+        # The gray downlink loses whole frames.
+        lossy = next(r for r in runs if r["key"] == "a2a_downlink_4k-ep64-256k-loss1e2_down-reps_tail-s301")
+        self.assertEqual(profiles.a2a_stage_profile(lossy, self.calibration)["network"]["link_failures"],
+                         [{**profiles.a2a_fault("loss1e2_down")[0], "loss_unit": "byte"}])
 
     def test_refused_per_pair(self):
         def measured_but(pair):
@@ -933,7 +938,7 @@ class Downlink(unittest.TestCase):
         with measured_but(("ep16", "2m")):
             with self.assertRaisesRegex(ValueError, r"\['ep16-2m'\] are provisional"):
                 profiles.a2a_stage_runs("a2a_tail_ack_4k", self.calibration, self.tuning)
-            self.assertEqual(len(profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)), 90)
+            self.assertEqual(len(profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)), 120)
             self.assertEqual(len(profiles.a2a_stage_runs("a2a_sweep_4k", self.calibration, self.tuning)), 432)
 
     def test_analyzer(self):

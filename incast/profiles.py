@@ -928,13 +928,15 @@ A2A_SWEEP_ANCHOR = ("ep32", "4m", "loss3e2_up")
 A2A_SWEEP_HANDOVER = ("ep64", "256k", "rate16g_up")
 # a2a_downlink_4k: the downlink from spine 3 to leaf 1, the down cells' link,
 # silent (blackhole_down) or at half rate (halfrate_down) from the onset, on
-# EP64 and EP16 at 256 KiB, each with its healthy pair, seeds 301-303. The
-# arms: the sender's hold, the same with the receiver's
+# EP64 and EP16 at 256 KiB, and gray at loss 1e-3 and 1e-2 (loss1e3_down,
+# loss1e2_down) on EP64 at 256 KiB, each with its healthy pair, seeds
+# 301-303. The arms: the sender's hold, the same with the receiver's
 # (reps_hold_auto_tail_ack_rx), reps_tail, mrc_hold_auto_tail_ack and
 # reps_oracle_tail.
 A2A_DOWNLINK_STAGE = "a2a_downlink_4k"
 A2A_DOWNLINK_CELLS = tuple((group, "256k", condition) for group in ("ep64", "ep16")
-                           for condition in ("blackhole_down", "halfrate_down"))
+                           for condition in ("blackhole_down", "halfrate_down")) + tuple(
+    ("ep64", "256k", condition) for condition in ("loss1e3_down", "loss1e2_down"))
 A2A_DOWNLINK_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail", "mrc_hold_auto_tail_ack",
                      "reps_oracle_tail")
 # The decode cell's stages: a2a_decode_calibration_4k, a2a_calibration's
