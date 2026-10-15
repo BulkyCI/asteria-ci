@@ -883,9 +883,25 @@ A2A_PROBE_4K_COMPUTE_NS = {
 # holds) after an estimated 467 us healthy exchange.
 A2A_DECODE_PROBE_STAGE = "a2a_decode_probe_4k"
 A2A_DECODE_PROBE_COMPUTE_NS = {A2A_DECODE: 244_000}
-A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: {**A2A_PROBE_4K_COMPUTE_NS, **A2A_DECODE_PROBE_COMPUTE_NS, A2A_RING: 0}}
+# The gaps measured at 4096 B on the settled fixture: a2a_probe_4k (run
+# 38792714034) and a2a_decode_probe_4k (run 38792719213), every run complete,
+# as analyze.py a2a_compute_gaps prints them.
+A2A_MEASURED_4K_COMPUTE_NS = {
+    ("ep64", "2m"): 1_816_000,  # median iteration 2,723.9 us
+    ("ep64", "256k"): 236_000,  # 353.4 us
+    ("ep16", "2m"): 439_000,  # 658.0 us
+    ("ep16", "256k"): 62_000,  # 93.5 us
+    ("ep8", "256k"): 28_000,  # 41.7 us
+    ("ep32", "256k"): 120_000,  # 180.2 us
+    ("ep64", "64k"): 66_000,  # 99.4 us
+    ("ep64", "1m"): 913_000,  # 1,369.2 us
+    ("ep32", "4m"): 1_787_000,  # 2,680.0 us
+    A2A_DECODE: 330_000,  # 711 us period after a 381.9 us median layer exchange
+}
+A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: {**A2A_MEASURED_4K_COMPUTE_NS, A2A_RING: 0}}
 # The ring's gap is 0 by its workload's rule, so nothing measures it.
-A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {A2A_PAYLOAD_4K: (A2A_RING,)}
+A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {
+    A2A_PAYLOAD_4K: (*A2A_MEASURED_4K_COMPUTE_NS, A2A_RING)}
 # a2a_calibration_4k: a2a_calibration's per_receiver pass (the healthy
 # graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds 101-103, at the
 # simulator's thresholds) on every (group, size) of a2a_probe_4k off one leaf,

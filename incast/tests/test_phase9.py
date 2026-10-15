@@ -739,9 +739,11 @@ class Payload4k(unittest.TestCase):
             self.assertNotIn("packet_payload_bytes", profiles.a2a_stage_profile(r, self.calibration)["network"])
 
     def test_refused_until_measured(self):
-        for stage in ("a2a_calibration_4k", "a2a_tail_ack_4k", "a2a_sweep_4k"):
-            with self.assertRaisesRegex(ValueError, "provisional"):
-                profiles.a2a_stage_runs(stage, calibrated_4k(self.calibration), self.tuning)
+        unmeasured = {profiles.A2A_PAYLOAD_4K: (profiles.A2A_RING,)}
+        with mock.patch.dict(profiles.A2A_PAYLOAD_COMPUTE_MEASURED, unmeasured):
+            for stage in ("a2a_calibration_4k", "a2a_tail_ack_4k", "a2a_sweep_4k"):
+                with self.assertRaisesRegex(ValueError, "provisional"):
+                    profiles.a2a_stage_runs(stage, calibrated_4k(self.calibration), self.tuning)
 
     @measured_4k()
     def test_refused_until_calibrated(self):
@@ -770,8 +772,9 @@ class Payload4k(unittest.TestCase):
                     if r["arm"] == "graded_per_receiver_mix" and (r["group"], r["size"], r["seed"]) == ("ep64", "256k", 101))
         mine = next(r for r in runs if (r["group"], r["size"], r["seed"]) == ("ep64", "256k", 101))
         self.assertEqual(mine["key"], "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101")
-        self.assertEqual({**mine, "key": None, "stage": None, "fixture": None},
-                         {**gate, "key": None, "stage": None, "fixture": None})
+        self.assertEqual({**mine, "key": None, "stage": None, "fixture": None, "compute_ns": None},
+                         {**gate, "key": None, "stage": None, "fixture": None, "compute_ns": None})
+        self.assertEqual(mine["compute_ns"], profiles.A2A_PAYLOAD_COMPUTE_NS[4096][("ep64", "256k")])
         # Both run at the simulator's thresholds, whatever the calibration.
         profile = profiles.a2a_stage_profile(mine, calibrated_4k(self.calibration))
         self.assertEqual(profile["network"]["load_balancing"],
@@ -795,8 +798,9 @@ class Payload4k(unittest.TestCase):
         for r in runs:
             other = theirs.get(r["key"].replace("a2a_tail_ack_4k-", "a2a_tail_ack-", 1))
             if other is not None:
-                self.assertEqual({**r, "key": None, "stage": None, "fixture": None},
-                                 {**other, "key": None, "stage": None, "fixture": None})
+                self.assertEqual({**r, "key": None, "stage": None, "fixture": None, "compute_ns": None},
+                                 {**other, "key": None, "stage": None, "fixture": None, "compute_ns": None})
+                self.assertEqual(r["compute_ns"], profiles.A2A_PAYLOAD_COMPUTE_NS[4096][(r["group"], r["size"])])
         self.assertEqual(sum(r["arm"] == "reps_oracle_tail" for r in runs), (28 + 4) * 3)
         hold = next(r for r in runs if r["key"] == "a2a_tail_ack_4k-ep64-256k-loss1e2_up-reps_hold_auto_tail_ack-s301")
         balancing = profiles.a2a_stage_profile(hold, calibration)["network"]["load_balancing"]
@@ -836,7 +840,7 @@ class Payload4k(unittest.TestCase):
         timing = {(r["group"], r["size"]): (r["iterations"], r["compute_ns"]) for r in runs}
         self.assertEqual(timing, {pair: (profiles.A2A_RUN_ITERATIONS[pair], profiles.A2A_PAYLOAD_COMPUTE_NS[4096][pair])
                                   for pair in timing})
-        self.assertEqual(timing[("ep32", "4m")], (12, 2_039_000))
+        self.assertEqual(timing[("ep32", "4m")], (12, 1_787_000))
         settings = profiles.a2a_tail_ack_settings(self.tuning, profiles.A2A_ARMS_4K)
         for r in runs:
             self.assertEqual(r["setting"], settings[r["arm"]])
