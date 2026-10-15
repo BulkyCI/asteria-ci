@@ -776,6 +776,101 @@ class SweepProbe(unittest.TestCase):
         self.assertIn("| ep32 | 4m | 7 of 12 | - | - |", markdown)
 
 
+class SweepCells(unittest.TestCase):
+    COSTS = {
+        ("ep64", "256k", "loss1e2_up"): {
+            "uniform_tail": [400, 420, 440], "reps_tail": [300, 310, 320], "reps_oracle_tail": [100, 110, 120],
+            "reps_hold_auto_tail_ack": [150, 160, 170], "reps_hold_leaf_tail_ack": [200, 210, 220],
+            "reps_flow_hold_tail_ack": [250, 260, 300]},
+        ("ep64", "256k", "rate16g_up"): {"uniform_tail": [40, 50, 60]},
+        ("ep8", "256k", "loss1e2_up"): {"uniform_tail": [-1, 0, 1], "reps_hold_auto_tail_ack": [5, 6, 7]},
+    }
+    SHAPE = {"ep64": 63, "ep8": 7}
+
+    def cells(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+
+            def write(arm, group, size, condition, seed, cost):
+                r = {**run(arm, group, size, condition, seed, "a2a_sweep"), "k": self.SHAPE[group],
+                     "message_bytes": 256 * 1024, "iterations": 2}
+                runs.append(r)
+                (root / r["key"] / "ns3").mkdir(parents=True)
+                timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + cost, "2": 1000 + cost}}
+                (root / r["key"] / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+                if condition == "healthy" or group == "ep8" or arm not in analyze.A2A_SWEEP_HOLDS + (
+                        analyze.A2A_SWEEP_POOLED,):
+                    return
+                # Counted: leaf 0's host 0 toward leaf 1 on spine 3, 8 losses
+                # (16 without a destination leaf, every destination); not
+                # counted: another spine, another leaf's host, leaf 0 itself.
+                if arm == "reps_flow_hold_tail_ack":
+                    trace = "time_ns,rank,spine,sent,lost,grade\n5,0,3,99,16,3\n5,9,3,99,3,3\n5,0,2,99,4,3\n"
+                else:
+                    trace = ("time_ns,rank,destination_leaf,spine,sent,lost,grade\n5,0,1,3,99,8,0\n"
+                             "5,1,0,3,99,5,3\n5,9,2,3,99,7,0\n5,2,3,2,99,4,3\n")
+                (root / r["key"] / "ns3" / "spine_losses.csv").write_text(trace)
+
+            for (group, size, condition), arms in self.COSTS.items():
+                for arm, costs in arms.items():
+                    for seed, cost in zip((301, 302, 303), costs):
+                        write(arm, group, size, condition, seed, cost)
+                        if not any(r["key"] == f"a2a_sweep-{group}-{size}-healthy-{arm}-s{seed}" for r in runs):
+                            write(arm, group, size, "healthy", seed, 0)
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            return {(c["group"], c["size"], c["condition"]): c
+                    for c in analyze.a2a_sweep(analyze.a2a_rows([listing], root, "a2a_sweep"), root)}
+
+    def test_cells(self):
+        cells = self.cells()
+        cell = cells[("ep64", "256k", "loss1e2_up")]
+        self.assertEqual((cell["n_s"], cell["p"]), (8.0, 0.01))
+        self.assertAlmostEqual(cell["m"], 0.08)
+        self.assertAlmostEqual(cell["host_evidence"], 4.48)
+        arms = cell["arms"]
+        self.assertEqual((arms["reps_flow_hold_tail_ack"]["cost_ns_mean"], arms["reps_flow_hold_tail_ack"]["cost_ns_range"]),
+                         (270, 50))
+
+        def recovered(arm):
+            return sum(1 - c / u for c, u in zip(self.COSTS[("ep64", "256k", "loss1e2_up")][arm], [400, 420, 440])) / 3
+
+        self.assertAlmostEqual(arms["reps_hold_leaf_tail_ack"]["recovered_mean"], 0.5)
+        self.assertEqual(cell["oracle_versus_reps"], "reps_oracle_tail beats reps_tail")
+        for arm in ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack"):
+            self.assertAlmostEqual(cell["ceiling"][arm], recovered(arm) / recovered("reps_oracle_tail"))
+        leaf, flow = cell["gaps"]["reps_hold_leaf_tail_ack"], cell["gaps"]["reps_flow_hold_tail_ack"]
+        self.assertAlmostEqual(leaf["recovered_gap"], recovered("reps_hold_auto_tail_ack") - 0.5)
+        self.assertEqual((leaf["cost_gap_ns"], leaf["verdict"]),
+                         (50, "reps_hold_auto_tail_ack beats reps_hold_leaf_tail_ack"))
+        self.assertEqual((flow["cost_gap_ns"], flow["verdict"]),
+                         (110, "reps_hold_auto_tail_ack beats reps_flow_hold_tail_ack"))
+        # 8 losses per run over 8 hosts and 2 iterations; 16 without a
+        # destination leaf; no trace under the baselines.
+        self.assertEqual(arms["reps_hold_auto_tail_ack"]["spine_losses_per_host_iteration"], 0.5)
+        self.assertEqual(arms["reps_flow_hold_tail_ack"]["spine_losses_per_host_iteration"], 1.0)
+        self.assertIsNone(arms["uniform_tail"]["spine_losses_per_host_iteration"])
+        self.assertIsNone(cell["control"])
+        handover = cells[("ep64", "256k", "rate16g_up")]
+        self.assertEqual((handover["n_s"], handover["p"], handover["m"], handover["host_evidence"]), (8.0, None, None, None))
+        self.assertEqual(handover["ceiling"], dict.fromkeys(handover["ceiling"]))
+        self.assertIsNone(handover["oracle_versus_reps"])
+        control = cells[("ep8", "256k", "loss1e2_up")]
+        self.assertEqual(control["host_evidence"], 0)
+        self.assertEqual(control["control"], {
+            "within_range_of_zero": {"reps_hold_auto_tail_ack": False, "uniform_tail": True},
+            "seed_rule": ["uniform_tail beats reps_hold_auto_tail_ack"]})
+        self.assertIsNone(control["arms"]["uniform_tail"]["recovered_mean"])
+        markdown = analyze.sweep_markdown(list(cells.values()))
+        self.assertIn("| ep64 | 256k | loss1e2_up | 8 | 0.01 | 0.08 | 4.48 | 0.50 / 0.50 / 1.00 "
+                      "| reps_oracle_tail beats reps_tail |", markdown)
+        self.assertIn("| ep64 | 256k | loss1e2_up | reps_flow_hold_tail_ack | 0.3 | 0.1 | 0.358 |", markdown)
+        self.assertIn("Control ep8 256k loss1e2_up: mean cost within its seed range of zero: "
+                      "reps_hold_auto_tail_ack False, uniform_tail True; seed-rule verdicts other than noise: "
+                      "uniform_tail beats reps_hold_auto_tail_ack", markdown)
+
+
 class Rs3(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent

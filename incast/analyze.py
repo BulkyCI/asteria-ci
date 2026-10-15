@@ -20,6 +20,8 @@
                                                      cost, detection and re-admission per on- and off-period, per arm
     analyze.py a2a_sweep_probe --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      median healthy iteration and compute gap per run
+    analyze.py a2a_sweep --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     loss evidence and the hold arms' recovered fraction per cell
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -117,6 +119,34 @@ p50 as the a2a_probe stage read it, and the compute gap the sweep takes
 from it: two thirds of the median, rounded to a whole microsecond, so that
 the hosts are busy 60 percent of the period. Both are None while the run is
 incomplete.
+
+a2a_sweep reads a2a_sweep's runs alone (--stage) and gives each (group,
+size, condition) cell:
+
+* the expected loss evidence on spine 3 of a host of leaf 0, under even
+  spraying with the pair's message per iteration as one flow of 4096-byte
+  sends: n_s = message bytes / 4096 / 8 sends per flow on the spine, the
+  loss rate p, m = n_s p losses per flow, and host_evidence, m times the
+  group's hosts off leaf 0 (p, m and host_evidence None under a condition
+  with no loss rate);
+* per arm, the per-seed and mean cost, the seed range (largest minus
+  smallest cost), the per-seed and mean recovered fraction against
+  uniform_tail, and spine_losses_per_host_iteration: the losses the sender
+  loss trace counts on spine 3 over the rows reaction_ns reads, per host of
+  leaf 0 and per iteration of the run, mean over the seeds (None without a
+  trace);
+* oracle_versus_reps: the seed-rule verdict of reps_oracle_tail against
+  reps_tail on cost; R is read only where the oracle beats it;
+* ceiling: per hold arm, R = its mean recovered fraction over
+  reps_oracle_tail's (None unless the oracle's is positive);
+* gaps: per hold arm other than reps_hold_auto_tail_ack (the leaf scope
+  and the per-flow hold), reps_hold_auto_tail_ack's mean recovered fraction
+  minus the arm's, the arm's mean cost minus reps_hold_auto_tail_ack's, and
+  the seed-rule verdict of the two on cost;
+* control, on a group of one leaf (EP8, whose sends cross no spine): per
+  arm whether the mean cost is within its seed range of zero (its absolute
+  value at most the range), and every seed-rule verdict between two arms
+  that is not seed noise. None on every other cell.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -1261,6 +1291,150 @@ def sweep_probe_markdown(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The sweep: per cell, the loss evidence a host of leaf 0 expects and sees
+# on spine 3, and the hold arms' recovered fraction against the oracle's.
+
+A2A_SWEEP_POOLED = "reps_hold_auto_tail_ack"
+# The hold arms read against the pooled one: per destination leaf, per flow.
+A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
+A2A_SWEEP_ORACLE = "reps_oracle_tail"
+A2A_SWEEP_REPS = "reps_tail"
+A2A_SWEEP_UNIFORM = "uniform_tail"
+A2A_SWEEP_LOSS_RATES = {"loss1e3_up": 1e-3, "loss3e3_up": 3e-3, "loss1e2_up": 1e-2, "loss3e2_up": 3e-2}
+A2A_SWEEP_SEND_BYTES = 4096
+
+
+def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> int | None:
+    """The losses the sender loss trace counts on the spine over
+    faulted_share_rows' rows; None without a trace."""
+    path = directory / "ns3" / "spine_losses.csv"
+    if not path.exists():
+        return None
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        keep, _ = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
+        return sum(int(row["lost"]) for row in reader if int(row["spine"]) == spine and keep(row))
+
+
+def _cost_range(entry: dict) -> float | None:
+    costs = entry["cost_ns"]
+    return None if not costs or None in costs else max(costs) - min(costs)
+
+
+def _versus(arms: dict, a: str, b: str) -> str | None:
+    """The seed-rule verdict of arm a against arm b on cost, on the same
+    seeds; None when either is missing."""
+    if a not in arms or b not in arms or arms[a]["seeds"] != arms[b]["seeds"]:
+        return None
+    return verdict(arms[a]["cost_ns"], arms[b]["cost_ns"], a, b)
+
+
+def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_cost_cells against uniform_tail, with each cell's expected
+    evidence, the realized losses, R, the gaps and the control (see the
+    module docstring)."""
+    lost = {}
+    for row in rows:
+        if row["condition"] != "healthy":
+            count = spine_lost(out_root / row["key"], row["condition"])
+            lost[row["key"]] = (None if count is None
+                                else count / A2A_HOSTS_PER_LEAF_OF_TRACE / row["iterations"])
+    shapes = {(r["group"], r["size"]): r for r in rows}
+    out = []
+    for cell in a2a_cost_cells(rows, uniform=A2A_SWEEP_UNIFORM):
+        shape = shapes[(cell["group"], cell["size"])]
+        arms = cell["arms"]
+        off_leaf = shape["k"] + 1 - A2A_HOSTS_PER_LEAF_OF_TRACE
+        n_s = shape["message_bytes"] / A2A_SWEEP_SEND_BYTES / SPINES
+        p = A2A_SWEEP_LOSS_RATES.get(cell["condition"])
+        for entry in arms.values():
+            entry["cost_ns_range"] = _cost_range(entry)
+            realized = [lost[k] for k in entry["keys"]]
+            entry["spine_losses_per_host_iteration"] = (None if None in realized
+                                                        else sum(realized) / len(realized))
+        oracle = (arms.get(A2A_SWEEP_ORACLE) or {}).get("recovered_mean")
+        ceiling = {}
+        for arm in (A2A_SWEEP_POOLED,) + A2A_SWEEP_HOLDS:
+            recovered = (arms.get(arm) or {}).get("recovered_mean")
+            ceiling[arm] = recovered / oracle if recovered is not None and oracle is not None and oracle > 0 else None
+        pooled = arms.get(A2A_SWEEP_POOLED) or {}
+        gaps = {}
+        for arm in A2A_SWEEP_HOLDS:
+            other = arms.get(arm) or {}
+            gaps[arm] = {
+                "recovered_gap": (None if pooled.get("recovered_mean") is None or other.get("recovered_mean") is None
+                                  else pooled["recovered_mean"] - other["recovered_mean"]),
+                "cost_gap_ns": (None if pooled.get("cost_ns_mean") is None or other.get("cost_ns_mean") is None
+                                else other["cost_ns_mean"] - pooled["cost_ns_mean"]),
+                "verdict": _versus(arms, A2A_SWEEP_POOLED, arm),
+            }
+        control = None
+        if off_leaf == 0:
+            labels = sorted(arms)
+            control = {
+                "within_range_of_zero": {
+                    label: (None if arms[label]["cost_ns_mean"] is None or arms[label]["cost_ns_range"] is None
+                            else abs(arms[label]["cost_ns_mean"]) <= arms[label]["cost_ns_range"])
+                    for label in labels},
+                "seed_rule": [v for i, a in enumerate(labels) for b in labels[i + 1:]
+                              if (v := _versus(arms, a, b)) not in (None, "within seed noise")],
+            }
+        out.append({
+            "group": cell["group"], "size": cell["size"], "condition": cell["condition"],
+            "n_s": n_s, "p": p, "m": None if p is None else n_s * p,
+            "host_evidence": None if p is None else n_s * p * off_leaf,
+            "arms": arms, "oracle_versus_reps": _versus(arms, A2A_SWEEP_ORACLE, A2A_SWEEP_REPS),
+            "ceiling": ceiling, "gaps": gaps, "control": control,
+        })
+    return out
+
+
+def _number(value, form: str = "g") -> str:
+    return "-" if value is None else format(value, form)
+
+
+def sweep_markdown(cells: list[dict]) -> str:
+    """A row per cell (evidence, R and the gaps), a row per cell and arm
+    (cost and recovered fraction), and the control cells."""
+    holds = (A2A_SWEEP_POOLED,) + A2A_SWEEP_HOLDS
+
+    def gap(entry):
+        return (f"{_number(entry['recovered_gap'], '.3f')}, {_us(entry['cost_gap_ns'])}, "
+                f"{entry['verdict'] or 'unreadable'}")
+
+    lines = [
+        "| group | size | condition | n_s | p | m | host evidence | spine 3 losses per host iteration "
+        f"({' / '.join(holds)}) | {A2A_SWEEP_ORACLE} vs {A2A_SWEEP_REPS} | R ({' / '.join(holds)}) "
+        + "".join(f"| {A2A_SWEEP_POOLED} - {arm}: recovered, cost us, verdict " for arm in A2A_SWEEP_HOLDS) + "|",
+        "|---|---|---|---|---|---|---|---|---|---|" + "---|" * len(A2A_SWEEP_HOLDS),
+    ]
+    for cell in cells:
+        realized = " / ".join(_number((cell["arms"].get(arm) or {}).get("spine_losses_per_host_iteration"), ".2f")
+                              for arm in holds)
+        ratios = " / ".join(_number(cell["ceiling"][arm], ".3f") for arm in holds)
+        lines.append(
+            f"| {cell['group']} | {cell['size']} | {cell['condition']} | {_number(cell['n_s'])} | {_number(cell['p'])} "
+            f"| {_number(cell['m'])} | {_number(cell['host_evidence'])} | {realized} "
+            f"| {cell['oracle_versus_reps'] or 'unreadable'} | {ratios} "
+            + "".join(f"| {gap(cell['gaps'][arm])} " for arm in A2A_SWEEP_HOLDS) + "|"
+        )
+    lines += ["", "| group | size | condition | arm | cost mean us | seed range us | recovered mean |",
+              "|---|---|---|---|---|---|---|"]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            lines.append(f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                         f"| {_us(entry['cost_ns_mean'])} | {_us(entry['cost_ns_range'])} "
+                         f"| {_number(entry['recovered_mean'], '.3f')} |")
+    for cell in cells:
+        if cell["control"] is None:
+            continue
+        lines += ["", f"Control {cell['group']} {cell['size']} {cell['condition']}: mean cost within its seed range "
+                  "of zero: " + ", ".join(f"{label} {within}" for label, within in
+                                          cell["control"]["within_range_of_zero"].items())
+                  + "; seed-rule verdicts other than noise: " + ("; ".join(cell["control"]["seed_rule"]) or "none")]
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration and
 # a2a_sweep_calibration.
@@ -1445,11 +1619,11 @@ def main() -> int:
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates", "a2a_cycles", "a2a_sweep_probe"):
+                 "a2a_candidates", "a2a_cycles", "a2a_sweep_probe", "a2a_sweep"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
-                                             "a2a_cycles", "a2a_sweep_probe") else None)
+                                             "a2a_cycles", "a2a_sweep_probe", "a2a_sweep") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -1459,7 +1633,7 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name in ("a2a_gate_reps", "a2a_sweep_probe"):
+        if name in ("a2a_gate_reps", "a2a_sweep_probe", "a2a_sweep"):
             x.add_argument("--stage", default=name)
             x.add_argument("--markdown", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
@@ -1501,6 +1675,12 @@ def main() -> int:
         cells = a2a_candidates(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(candidates_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_sweep":
+        cells = a2a_sweep(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(sweep_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep_probe":
