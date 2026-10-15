@@ -455,8 +455,8 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_tail_ack            the A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of
 #                           the gate and their healthy pairs, seeds 301-303
 #
-# and, at a packet payload of 4096 B (A2A_PAYLOAD_4K), each refused but the
-# probe until A2A_PAYLOAD_COMPUTE_NS holds the probe's gaps for its pairs,
+# and, on the settled fixture (A2A_FIXTURE_4K), each refused but the probe
+# until A2A_PAYLOAD_COMPUTE_NS holds the probe's gaps for its pairs,
 # and the faulted stages also until a2a_calibration.json has a per_receiver
 # entry at that payload for every (group, size) they run off one leaf:
 #
@@ -491,7 +491,7 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
-# ("ep64-2m", or "ep64-2m-p4096" at a 4096-byte payload; a2a_cell_name) to
+# ("ep64-2m", or "ep64-2m-p4096" on the settled fixture; a2a_cell_name) to
 # congestion_thresholds, trim_thresholds (not for switch_queue) and
 # loss_thresholds, the last either one list or a map from a loss interval in
 # ns to a list; its "headline" names the tuning cell as
@@ -797,15 +797,33 @@ A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack",
 # Every arm that adds transport keys (tail recovery, ack_loss_rtts) to a base
 # arm, and that base arm.
 A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS}
-# The stages named *_4k run at a packet payload of A2A_PAYLOAD_4K, the
-# largest RDMA path MTU, where every stage above runs at the generator's
-# default of 1000 B: each of their runs carries payload_bytes, written as
-# network.packet_payload_bytes. Loss thresholds (from the healthy sends per
-# spine per interval) and compute gaps (from the healthy burst, which header
-# overhead per payload byte lengthens) depend on the payload, so a run with a
-# payload reads its calibration from the cells a2a_cell_name names with it
+# The settled fixture. The stages named *_4k and the ring's run on it, where
+# every stage above runs on the generator's defaults; a stage takes it from
+# A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
+# keys the run cannot take (a2a_fixture), which a2a_stage_profile writes:
+#   payload_bytes   network.packet_payload_bytes: 4096 B, the largest RDMA
+#                   path MTU
+#   path_state      network.load_balancing.path_state: connection, every path
+#                   selector's state (REPS's cache, a loss hold's exploration,
+#                   reps_flow_hold's own hold) kept per destination host and
+#                   priority across messages; spray_uniform only, so not for
+#                   the spray_policy calibration arm
+#   window_state    network.congestion_control.window_state: connection, one
+#                   NSCC window per destination host, opened once and kept
+#                   across messages
+#   dataset_splits  workload.dataset_splits: 1, each pair's message sent as
+#                   one flow per collective; all_to_all only, so the ring keeps
+#                   its workload's 4 chunks
+#   loss_unit       link_failures[].loss_unit: byte on every gray failure with
+#                   an error_rate, a packet of s bytes lost with
+#                   1 - (1 - r)^s and a full data frame at the condition's rate
+# Loss thresholds (from the healthy sends per spine per interval) and compute
+# gaps (from the healthy burst) depend on it, so a run on it reads its
+# calibration from the cells a2a_cell_name names with its payload
 # (<group>-<size>-p4096) and its compute gap from A2A_PAYLOAD_COMPUTE_NS.
-A2A_PAYLOAD_4K = 4096
+A2A_FIXTURE_4K: dict[str, Any] = {"payload_bytes": 4096, "path_state": "connection", "window_state": "connection",
+                                  "dataset_splits": 1, "loss_unit": "byte"}
+A2A_PAYLOAD_4K = A2A_FIXTURE_4K["payload_bytes"]
 # Every group and size a run names: the gate's (A2A_GROUPS, A2A_SIZES and
 # A2A_ITERATIONS), which the earlier stages run, and those the sweep adds:
 # EP8, the hosts of leaf 0, and EP32, those of leaves 0 to 3; 64 KiB, 1 MiB
@@ -947,7 +965,7 @@ A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROB
                     A2A_RING_PROBE_STAGE: {A2A_RING: 0}}
 A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
                              A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,), A2A_RING_CALIBRATION_STAGE: (A2A_RING,)}
-A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K
+A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
                                    A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
@@ -955,12 +973,44 @@ A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
-              *A2A_STAGE_PAYLOAD)
+              *A2A_STAGE_FIXTURE)
 
 
 def a2a_cell_name(group: str, size: str, payload: int | None = None) -> str:
     """<group>-<size>, and -p<payload> for a run with a packet payload."""
     return f"{group}-{size}" + ("" if payload is None else f"-p{payload}")
+
+
+def a2a_fixture(stage: str, arm: str, group: str, size: str) -> dict[str, Any] | None:
+    """The stage's fixture (A2A_STAGE_FIXTURE) as a run of the arm on the
+    group and size takes it: no path_state for a spray_policy arm, no
+    dataset_splits for the ring; None for a stage on the defaults."""
+    fixture = A2A_STAGE_FIXTURE.get(stage)
+    if fixture is None:
+        return None
+    left_out = {"path_state"} if arm in A2A_SCOPES else set()
+    if (group, size) == A2A_RING:
+        left_out.add("dataset_splits")
+    return {key: value for key, value in fixture.items() if key not in left_out}
+
+
+def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
+    """Write a run's fixture (a2a_fixture) into its profile."""
+    network = document["network"]
+    if "payload_bytes" in fixture:
+        network["packet_payload_bytes"] = fixture["payload_bytes"]
+    if "path_state" in fixture:
+        network["load_balancing"] = {**network["load_balancing"], "path_state": fixture["path_state"]}
+    if "window_state" in fixture:
+        network["congestion_control"] = {**network["congestion_control"], "window_state": fixture["window_state"]}
+    if "dataset_splits" in fixture:
+        document["workload"]["dataset_splits"] = fixture["dataset_splits"]
+    if "loss_unit" in fixture:
+        network["link_failures"] = [
+            {**failure, "loss_unit": fixture["loss_unit"]} if failure["model"] == "gray" and "error_rate" in failure
+            else failure
+            for failure in network["link_failures"]
+        ]
 
 
 def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
@@ -1224,7 +1274,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                    tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Every run of a Phase 9 stage."""
     out: list[dict[str, Any]] = []
-    payload = A2A_STAGE_PAYLOAD.get(stage)
+    payload = (A2A_STAGE_FIXTURE.get(stage) or {}).get("payload_bytes")
     compute = A2A_COMPUTE_NS if payload is None else A2A_PAYLOAD_COMPUTE_NS[payload]
 
     def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None,
@@ -1245,7 +1295,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "iterations": iterations or A2A_RUN_ITERATIONS[(group, size)],
                 "seed": seed,
                 **({} if flap is None else {"flap": flap}),
-                **({} if payload is None else {"payload_bytes": payload}),
+                **({} if stage not in A2A_STAGE_FIXTURE else {"fixture": a2a_fixture(stage, arm, group, size)}),
                 **A2A_COMBINE.get(size, {}),
             }
         )
@@ -1326,7 +1376,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         require_measured(pairs)
         for (group, size), seed in itertools.product(pairs, A2A_SEEDS["calibration"]):
             add("graded_per_receiver_mix", group, size, "healthy", seed, A2A_CALIBRATION_POOLED)
-    elif stage in A2A_STAGE_PAYLOAD:
+    elif stage in A2A_STAGE_FIXTURE:
         cells, arms = a2a_faulted_4k(stage)
         pairs = tuple(dict.fromkeys((group, size) for group, size, _ in cells))
         require_measured(pairs)
@@ -1376,10 +1426,9 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
     group, size = run["group"], run["size"]
     document = profile(
         run["key"], 64, "healthy",
-        a2a_balancing(run["arm"], group, size, calibration, run["setting"], run.get("payload_bytes")),
+        a2a_balancing(run["arm"], group, size, calibration, run["setting"],
+                      run.get("fixture", {}).get("payload_bytes")),
     )
-    if "payload_bytes" in run:
-        document["network"]["packet_payload_bytes"] = run["payload_bytes"]
     document["steps"] = run["iterations"]
     if (group, size) == A2A_RING:
         document["workload"] = {"kind": "sequential_dp_all_reduce"}
@@ -1394,6 +1443,7 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
             **{key: run[key] for key in ("combine_bytes", "expert_compute_ns") if key in run},
         }
     document["network"]["link_failures"] = a2a_flap(run["flap"]) if "flap" in run else a2a_fault(run["condition"])
+    a2a_settle(document, run.get("fixture", {}))
     return document
 
 

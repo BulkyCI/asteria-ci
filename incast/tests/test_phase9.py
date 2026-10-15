@@ -51,7 +51,7 @@ def calibrated_4k(calibration):
 @measured_4k()
 class Stages(unittest.TestCase):
     def runs(self, stage, calibration, tuning):
-        if stage in profiles.A2A_STAGE_PAYLOAD:
+        if stage in profiles.A2A_STAGE_FIXTURE:
             calibration = calibrated_4k(calibration)
         return profiles.a2a_stage_runs(stage, calibration, tuning)
 
@@ -373,7 +373,7 @@ class Pairing(unittest.TestCase):
     def test_payloads_pair_apart(self):
         rows = []
         for payload, healthy, faulted in ((None, 100, 150), (4096, 200, 260)):
-            extra = {} if payload is None else {"payload_bytes": payload}
+            extra = {} if payload is None else {"fixture": {**profiles.A2A_FIXTURE_4K, "payload_bytes": payload}}
             stage = "a2a_tail_ack" if payload is None else "a2a_tail_ack_4k"
             rows.append({**run("uniform_tail", "ep64", "2m", "healthy", 301, stage), **extra,
                          "iterations_ns": [healthy, healthy]})
@@ -381,8 +381,8 @@ class Pairing(unittest.TestCase):
                          "iterations_ns": [faulted, faulted]})
         self.assertEqual(sorted(r["cost_ns"] for r in analyze.a2a_costs(rows)), [50, 60])
         cells = analyze.a2a_cost_cells(rows, uniform="uniform_tail")
-        self.assertEqual([(c.get("payload_bytes"), c["arms"]["uniform_tail"]["cost_ns"]) for c in cells],
-                         [(None, [50]), (4096, [60])])
+        self.assertEqual([((c.get("fixture") or {}).get("payload_bytes"), c["arms"]["uniform_tail"]["cost_ns"])
+                          for c in cells], [(None, [50]), (4096, [60])])
 
     def test_duplicate_pair_is_refused(self):
         rows = [
@@ -719,22 +719,23 @@ class Payload4k(unittest.TestCase):
                          [("ep64", "2m", 12, 2_070_000), ("ep64", "256k", 40, 259_000), ("ep16", "2m", 40, 493_000),
                           ("ep16", "256k", 40, 62_000), ("ep8", "256k", 40, 29_000), ("ep32", "256k", 40, 127_000),
                           ("ep64", "64k", 40, 65_000), ("ep64", "1m", 40, 1_036_000), ("ep32", "4m", 12, 2_039_000)])
-        self.assertEqual({(r["arm"], r["condition"], r["seed"], r["payload_bytes"]) for r in runs},
-                         {("uniform_tail", "healthy", 301, 4096)})
+        self.assertEqual({(r["arm"], r["condition"], r["seed"]) for r in runs}, {("uniform_tail", "healthy", 301)})
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * 9)
         self.assertEqual(runs[4]["key"], "a2a_probe_4k-ep8-256k-healthy-uniform_tail-s301")
         documents = {(r["group"], r["size"]): profiles.a2a_stage_profile(r, self.calibration) for r in runs}
         self.assertEqual({d["network"]["packet_payload_bytes"] for d in documents.values()}, {4096})
         self.assertEqual(documents[("ep8", "256k")]["workload"]["group"], {"leaves": [0]})
         self.assertEqual(documents[("ep32", "4m")]["workload"],
                          {"kind": "all_to_all", "group": {"leaves": [0, 1, 2, 3]}, "message_bytes": 4 * 1024 * 1024,
-                          "iterations": 12, "compute_ns": 2_039_000})
+                          "iterations": 12, "compute_ns": 2_039_000, "dataset_splits": 1})
         self.assertEqual(documents[("ep32", "4m")]["steps"], 12)
         self.assertEqual(documents[("ep64", "64k")]["network"]["load_balancing"],
-                         {"mode": "spray_uniform", "path_seq": True, "tail_recovery": True, "tail_loss_rtts": 4})
+                         {"mode": "spray_uniform", "path_seq": True, "tail_recovery": True, "tail_loss_rtts": 4,
+                          "path_state": "connection"})
         self.assertEqual({r["k"] for r in runs if r["group"] == "ep32"}, {31})
         # The stages at the default payload write none.
         for r in profiles.a2a_stage_runs("a2a_tail_ack", self.calibration, self.tuning)[:32]:
-            self.assertNotIn("payload_bytes", r)
+            self.assertNotIn("fixture", r)
             self.assertNotIn("packet_payload_bytes", profiles.a2a_stage_profile(r, self.calibration)["network"])
 
     def test_refused_until_measured(self):
@@ -769,8 +770,8 @@ class Payload4k(unittest.TestCase):
                     if r["arm"] == "graded_per_receiver_mix" and (r["group"], r["size"], r["seed"]) == ("ep64", "256k", 101))
         mine = next(r for r in runs if (r["group"], r["size"], r["seed"]) == ("ep64", "256k", 101))
         self.assertEqual(mine["key"], "a2a_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101")
-        self.assertEqual({**mine, "key": None, "stage": None, "payload_bytes": None},
-                         {**gate, "key": None, "stage": None, "payload_bytes": None})
+        self.assertEqual({**mine, "key": None, "stage": None, "fixture": None},
+                         {**gate, "key": None, "stage": None, "fixture": None})
         # Both run at the simulator's thresholds, whatever the calibration.
         profile = profiles.a2a_stage_profile(mine, calibrated_4k(self.calibration))
         self.assertEqual(profile["network"]["load_balancing"],
@@ -788,14 +789,14 @@ class Payload4k(unittest.TestCase):
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"},
                          set(profiles.a2a_gate_cells()))
-        self.assertEqual({r["payload_bytes"] for r in runs}, {4096})
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
         theirs = {r["key"]: r for r in profiles.a2a_stage_runs("a2a_tail_ack", self.calibration, self.tuning)}
         self.assertFalse({r["key"] for r in runs} & set(theirs))
         for r in runs:
             other = theirs.get(r["key"].replace("a2a_tail_ack_4k-", "a2a_tail_ack-", 1))
             if other is not None:
-                self.assertEqual({**r, "key": None, "stage": None, "payload_bytes": None},
-                                 {**other, "key": None, "stage": None, "payload_bytes": None})
+                self.assertEqual({**r, "key": None, "stage": None, "fixture": None},
+                                 {**other, "key": None, "stage": None, "fixture": None})
         self.assertEqual(sum(r["arm"] == "reps_oracle_tail" for r in runs), (28 + 4) * 3)
         hold = next(r for r in runs if r["key"] == "a2a_tail_ack_4k-ep64-256k-loss1e2_up-reps_hold_auto_tail_ack-s301")
         balancing = profiles.a2a_stage_profile(hold, calibration)["network"]["load_balancing"]
@@ -815,7 +816,7 @@ class Payload4k(unittest.TestCase):
         self.assertEqual(len(runs), (14 + 1 + 1 + 8) * 7 * 3)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
         self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
-        self.assertEqual({r["payload_bytes"] for r in runs}, {4096})
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
         self.assertEqual(len({r["key"] for r in runs}), len(runs))
         faulted = {(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"}
         self.assertEqual(faulted, {
@@ -851,6 +852,46 @@ class Payload4k(unittest.TestCase):
                 self.assertEqual(balancing["loss_thresholds"], profiles.A2A_LOSS_THRESHOLDS_PLACEHOLDER)
 
 
+class Fixture(unittest.TestCase):
+    @measured_4k()
+    def test_every_settled_stage_takes_it(self):
+        here = Path(profiles.__file__).parent
+        calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
+        tuning = json.loads((here / "a2a_tuning.json").read_text())
+        faults = set()
+        for stage in profiles.A2A_STAGE_FIXTURE:
+            for r in profiles.a2a_stage_runs(stage, calibration, tuning):
+                network = (document := profiles.a2a_stage_profile(r, calibration))["network"]
+                uniform = network["load_balancing"]["mode"] == "spray_uniform"
+                all_to_all = document["workload"]["kind"] == "all_to_all"
+                self.assertEqual(r["fixture"], {key: value for key, value in profiles.A2A_FIXTURE_4K.items()
+                                                if (key != "path_state" or uniform)
+                                                and (key != "dataset_splits" or all_to_all)})
+                self.assertEqual(network["packet_payload_bytes"], 4096)
+                self.assertEqual(network["congestion_control"], {"mode": "nscc", "window_state": "connection"})
+                self.assertEqual(network["load_balancing"].get("path_state"), "connection" if uniform else None)
+                self.assertEqual(document["workload"].get("dataset_splits"), 1 if all_to_all else None)
+                for failure in network["link_failures"]:
+                    gray_loss = failure["model"] == "gray" and "error_rate" in failure
+                    self.assertEqual(failure.get("loss_unit"), "byte" if gray_loss else None)
+                    faults.add((r["condition"], gray_loss))
+        # Loss up and down takes the byte unit; blackhole, half rate,
+        # rate16g and the flap keep their models.
+        self.assertTrue({("loss1e3_up", True), ("loss1e2_down", True), ("loss3e2_up", True),
+                         ("blackhole_up", False), ("halfrate_up", False), ("structural", False),
+                         ("rate16g_up", False), ("blackhole_down", False)} <= faults)
+
+    def test_earlier_stages_take_none(self):
+        for stage in ("a2a_gate", "a2a_tail_ack"):
+            for r in profiles.a2a_stage_runs(stage, CALIBRATION, TUNING)[:40]:
+                document = profiles.a2a_stage_profile(r, CALIBRATION)
+                self.assertNotIn("fixture", r)
+                self.assertNotIn("packet_payload_bytes", document["network"])
+                self.assertEqual(document["network"]["congestion_control"], {"mode": "nscc"})
+                self.assertNotIn("path_state", document["network"]["load_balancing"])
+                self.assertNotIn("dataset_splits", document["workload"])
+
+
 class Downlink(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent
@@ -867,7 +908,7 @@ class Downlink(unittest.TestCase):
                           for c in ("blackhole_down", "halfrate_down", "healthy")})
         self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx",
                                                     "reps_tail", "mrc_hold_auto_tail_ack", "reps_oracle_tail"})
-        self.assertEqual({r["payload_bytes"] for r in runs}, {4096})
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
         cell = ("ep64", "256k", "blackhole_down", 301)
         by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]
                   for r in runs if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
@@ -901,7 +942,8 @@ class Downlink(unittest.TestCase):
             for arm, values in costs.items():
                 for seed, cost in zip((301, 302, 303), values):
                     for condition, extra in (("healthy", 0), ("blackhole_down", cost)):
-                        r = {**run(arm, "ep64", "256k", condition, seed, "a2a_downlink_4k"), "payload_bytes": 4096}
+                        r = {**run(arm, "ep64", "256k", condition, seed, "a2a_downlink_4k"),
+                             "fixture": profiles.A2A_FIXTURE_4K}
                         runs.append(r)
                         d = root / r["key"]
                         (d / "ns3").mkdir(parents=True)
@@ -929,7 +971,7 @@ class Downlink(unittest.TestCase):
             listing = root / "runs.json"
             listing.write_text(json.dumps(runs))
             (cell,) = analyze.a2a_downlink(analyze.a2a_rows([listing], root, "a2a_downlink_4k"), root)
-        self.assertEqual(cell["payload_bytes"], 4096)
+        self.assertEqual(cell["fixture"], profiles.A2A_FIXTURE_4K)
         self.assertEqual(cell["receiver_versus_sender"], "reps_hold_auto_tail_ack_rx beats reps_hold_auto_tail_ack")
         rx, sender = cell["arms"]["reps_hold_auto_tail_ack_rx"], cell["arms"]["reps_hold_auto_tail_ack"]
         self.assertEqual(rx["versus_reference_cost"], "reps_hold_auto_tail_ack_rx beats reps_tail")
@@ -960,11 +1002,12 @@ class Decode(unittest.TestCase):
         (probe,) = profiles.a2a_stage_runs("a2a_decode_probe_4k", None, None)
         self.assertEqual(probe["key"], "a2a_decode_probe_4k-ep64-decode8-healthy-uniform_tail-s301")
         self.assertEqual((probe["message_bytes"], probe["combine_bytes"], probe["expert_compute_ns"],
-                          probe["iterations"], probe["compute_ns"], probe["payload_bytes"]),
+                          probe["iterations"], probe["compute_ns"], probe["fixture"]["payload_bytes"]),
                          (59_264, 114_688, 129_000, 58, 244_000, 4096))
         workload = profiles.a2a_stage_profile(probe, None)["workload"]
         self.assertEqual(workload, {"kind": "all_to_all", "group": "all", "message_bytes": 59_264, "iterations": 58,
-                                    "compute_ns": 244_000, "combine_bytes": 114_688, "expert_compute_ns": 129_000})
+                                    "compute_ns": 244_000, "combine_bytes": 114_688, "expert_compute_ns": 129_000,
+                                    "dataset_splits": 1})
         # The training cells' runs carry neither key.
         for r in profiles.a2a_stage_runs("a2a_probe_4k", None, None):
             self.assertNotIn("combine_bytes", profiles.a2a_stage_profile(r, None)["workload"])
@@ -998,8 +1041,8 @@ class Decode(unittest.TestCase):
 
     @measured_4k()
     def test_expected_evidence(self):
-        # Per pair per layer, dispatch 4 flows of 4 packets and combine 4 of
-        # 7: 44 packets, 5.5 on each spine.
+        # Per pair per layer, one dispatch flow of 15 packets and one combine
+        # flow of 28: 43 packets, 5.375 on each spine.
         runs = [r for r in profiles.a2a_stage_runs("a2a_decode_4k", self.calibration, self.tuning)
                 if r["arm"] == "uniform_tail" and r["seed"] == 301 and r["condition"] in ("healthy", "loss1e2_up")]
         with tempfile.TemporaryDirectory() as directory:
@@ -1012,9 +1055,9 @@ class Decode(unittest.TestCase):
             listing = root / "runs.json"
             listing.write_text(json.dumps(runs))
             (cell,) = analyze.a2a_sweep(analyze.a2a_rows([listing], root, "a2a_decode_4k"), root)
-        self.assertEqual((cell["n_s_pair"], cell["n_s_flow"]), (5.5, 0.6875))
-        self.assertAlmostEqual(cell["m_pair"], 0.055)
-        self.assertAlmostEqual(cell["host_evidence"], 3.08)
+        self.assertEqual((cell["flows_per_pair"], cell["n_s_pair"], cell["n_s_flow"]), (2, 5.375, 2.6875))
+        self.assertAlmostEqual(cell["m_pair"], 0.05375)
+        self.assertAlmostEqual(cell["host_evidence"], 3.01)
 
 
 class Reaction4k(unittest.TestCase):
@@ -1093,7 +1136,10 @@ class Ring(unittest.TestCase):
         self.assertEqual((document["dp_all_reduce_bytes"], document["steps"], document["compute_duration_us"]),
                          (26_214_400, 12, 0))
         self.assertEqual(document["network"]["packet_payload_bytes"], 4096)
-        self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("loss1e2_up"))
+        self.assertEqual(document["network"]["link_failures"],
+                         [{**profiles.a2a_fault("loss1e2_up")[0], "loss_unit": "byte"}])
+        # The ring keeps its workload's chunking.
+        self.assertNotIn("dataset_splits", runs[0]["fixture"])
         with self.assertRaisesRegex(ValueError, r"\['dp64-ar25m-p4096'\]"):
             profiles.a2a_stage_runs("ar_parity_4k", None, None)
 
@@ -1113,8 +1159,9 @@ class ComputeGaps(unittest.TestCase):
             listing = root / "runs.json"
             listing.write_text(json.dumps(runs + [run("uniform", "ep64", "2m", "healthy", 301)]))
             rows = analyze.a2a_compute_gaps([listing], root, "a2a_probe_4k")
-        self.assertEqual([(r["size"], r["payload_bytes"], r["median_iteration_ns"], r["compute_ns"]) for r in rows],
-                         [("256k", 4096, 388_400, profiles.A2A_COMPUTE_NS[("ep64", "256k")]), ("4m", 4096, None, None)])
+        self.assertEqual([(r["size"], r["fixture"], r["median_iteration_ns"], r["compute_ns"]) for r in rows],
+                         [("256k", profiles.A2A_FIXTURE_4K, 388_400, profiles.A2A_COMPUTE_NS[("ep64", "256k")]),
+                          ("4m", profiles.A2A_FIXTURE_4K, None, None)])
         self.assertEqual((rows[0]["probe_compute_ns"], rows[0]["iterations_completed"], rows[0]["iterations"]),
                          (127_000, 40, 40))
         markdown = analyze.compute_gaps_markdown(rows)
@@ -1156,7 +1203,7 @@ class SweepCells(unittest.TestCase):
             def write(arm, group, size, condition, seed, cost):
                 r = {**run(arm, group, size, condition, seed, "a2a_sweep_4k"), "k": self.SHAPE[group],
                      "message_bytes": 256 * 1024, "iterations": 2,
-                     **({} if group == "ep8" else {"payload_bytes": 4096})}
+                     **({} if group == "ep8" else {"fixture": profiles.A2A_FIXTURE_4K})}
                 runs.append(r)
                 (root / r["key"] / "ns3").mkdir(parents=True)
                 timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + cost, "2": 1000 + cost}}
@@ -1192,9 +1239,10 @@ class SweepCells(unittest.TestCase):
     def test_cells(self):
         cells = self.cells()
         cell = cells[("ep64", "256k", "loss1e2_up")]
-        # Four flows of 64 KiB per pair: 16 packets of 4096 B, 2 per spine.
-        self.assertEqual((cell["payload_bytes"], cell["n_s_flow"], cell["n_s_pair"], cell["p"]), (4096, 2.0, 8.0, 0.01))
-        self.assertAlmostEqual(cell["m_flow"], 0.02)
+        # One flow of 256 KiB per pair: 64 packets of 4096 B, 8 per spine.
+        self.assertEqual((cell["payload_bytes"], cell["flows_per_pair"], cell["n_s_flow"], cell["n_s_pair"], cell["p"]),
+                         (4096, 1, 8.0, 8.0, 0.01))
+        self.assertAlmostEqual(cell["m_flow"], 0.08)
         self.assertAlmostEqual(cell["m_pair"], 0.08)
         self.assertAlmostEqual(cell["host_evidence"], 4.48)
         arms = cell["arms"]
@@ -1231,15 +1279,17 @@ class SweepCells(unittest.TestCase):
         self.assertEqual(handover["ceiling"], dict.fromkeys(handover["ceiling"]))
         self.assertIsNone(handover["oracle_versus_reps"])
         control = cells[("ep8", "256k", "loss1e2_up")]
-        # At 1000 B: 66 packets per 64 KiB flow.
-        self.assertEqual((control["payload_bytes"], control["n_s_flow"], control["n_s_pair"]), (1000, 8.25, 33.0))
+        # On the defaults, 1000 B and 4 flows: 66 packets per 64 KiB flow.
+        self.assertEqual(
+            (control["payload_bytes"], control["flows_per_pair"], control["n_s_flow"], control["n_s_pair"]),
+            (1000, 4, 8.25, 33.0))
         self.assertEqual(control["host_evidence"], 0)
         self.assertEqual(control["control"], {
             "within_range_of_zero": {"reps_hold_auto_tail_ack": False, "uniform_tail": True},
             "seed_rule": ["uniform_tail beats reps_hold_auto_tail_ack"]})
         self.assertIsNone(control["arms"]["uniform_tail"]["recovered_mean"])
         markdown = analyze.sweep_markdown(list(cells.values()))
-        self.assertIn("| ep64 | 256k | loss1e2_up | 4096 | 2 / 8 | 0.01 | 0.02 / 0.08 | 4.48 "
+        self.assertIn("| ep64 | 256k | loss1e2_up | 4096 | 8 / 8 | 0.01 | 0.08 / 0.08 | 4.48 "
                       "| 0.50 / 0.50 / 1.00 / 1.50 | reps_oracle_tail beats reps_tail |", markdown)
         self.assertIn("| ep64 | 256k | loss1e2_up | reps_flow_hold_tail_ack | 0.3 | 0.1 | 0.358 |", markdown)
         self.assertIn("Control ep8 256k loss1e2_up: mean cost within its seed range of zero: "
@@ -1762,7 +1812,7 @@ class A2aCalibrate(unittest.TestCase):
         here = Path(profiles.__file__).parent
         committed = json.loads((here / "a2a_calibration.json").read_text())
         runs = [({**run("graded_per_receiver_mix", group, size, "healthy", 101, "a2a_calibration_4k"),
-                  "payload_bytes": 4096}, self.reports(0.03, 0.02), self.losses(50))
+                  "fixture": profiles.A2A_FIXTURE_4K}, self.reports(0.03, 0.02), self.losses(50))
                 for group, size in profiles.A2A_CALIBRATION_4K_CELLS]
         result = self.calibrate(runs, existing=json.loads(json.dumps(committed)))
         self.assertEqual({k: v for k, v in result.items() if k != "per_receiver"},

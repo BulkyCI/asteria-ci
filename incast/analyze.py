@@ -33,8 +33,8 @@
 
 Phase 9 (all-to-all runs, those with a group): cost pairs each faulted run
 with the healthy run of the same arm and setting, group, size, iteration
-count, packet payload (payload_bytes, absent at the generator's default)
-and seed, from any stage of the runs files given (the comparison reuses the gate's uniform
+count, fixture (the run's fixture entry, absent on the generator's
+defaults) and seed, from any stage of the runs files given (the comparison reuses the gate's uniform
 and oracle runs). Primary cost is the mean iteration completion minus the
 pair's, tail cost the same on the p99 with linear interpolation; recovered
 fraction is 1 - cost / cost(uniform) per seed on the same (group, size,
@@ -137,11 +137,12 @@ a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
 cell:
 
 * the expected loss evidence on spine 3 of a host of leaf 0 under even
-  spraying, from the runs' packet payload (payload_bytes, 1000 B when unset)
-  and the system layer's split of each pair's message per iteration into
-  four flows of a quarter of it (and of its combine message, with
-  combine_bytes): n_s_pair, the pair's packets per iteration over the 8
-  spines, and n_s_flow, its mean over the pair's flows; the loss rate p; m_flow and m_pair,
+  spraying, from the runs' fixture: its payload_bytes (1000 B, the
+  generator's, when unset) and its dataset_splits, the flows each pair's
+  message per collective is sent as (4, the system layer's, when unset),
+  for the message and, with combine_bytes, the combine message:
+  n_s_pair, the pair's packets per iteration over the 8 spines, and
+  n_s_flow, its mean over the pair's flows; the loss rate p; m_flow and m_pair,
   their losses n_s p; and host_evidence, m_pair times the group's hosts off
   leaf 0, the losses a host expects on the spine per iteration (p, the m
   and host_evidence None under a condition with no uplink loss rate);
@@ -778,6 +779,13 @@ def a2a_rows(runs_files, out_root: Path, stage: str | None = None) -> list[dict]
     return rows
 
 
+def _fixture_key(row: dict) -> str:
+    """A run's fixture entry as sorted-key JSON, "" on the generator's
+    defaults."""
+    fixture = row.get("fixture")
+    return "" if fixture is None else json.dumps(fixture, sort_keys=True)
+
+
 def a2a_costs(rows: list[dict]) -> list[dict]:
     """Every faulted all-to-all row with its primary cost (mean iteration
     completion minus the paired healthy run's) and tail cost (the same on the
@@ -786,7 +794,7 @@ def a2a_costs(rows: list[dict]) -> list[dict]:
     when the healthy run is missing or incomplete and infinite when the
     faulted run is incomplete."""
     def pair(row):
-        return (_label(row), row["group"], row["size"], row.get("iterations"), row.get("payload_bytes"), row["seed"])
+        return (_label(row), row["group"], row["size"], row.get("iterations"), _fixture_key(row), row["seed"])
 
     healthy: dict[tuple, dict] = {}
     for row in rows:
@@ -813,15 +821,15 @@ def a2a_costs(rows: list[dict]) -> list[dict]:
 
 
 def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str = "uniform") -> list[dict]:
-    """Per (group, size, condition) cell, and per payload where runs set one
-    (the cell's payload_bytes), per arm: per-seed primary and tail cost and
+    """Per (group, size, condition) cell, and per fixture where runs set one
+    (the cell's fixture), per arm: per-seed primary and tail cost and
     recovered fraction against uniform on the same cell and seed, their
     means, and the seed-rule verdicts against the reference arm. Arms are
     named as in cost_cells: bare when the cell runs one setting of it."""
     faulted = a2a_costs(rows)
 
     def cell_of(row):
-        return row["group"], row["size"], row["condition"], row.get("payload_bytes") or 0
+        return row["group"], row["size"], row["condition"], _fixture_key(row)
 
     settings: dict[tuple, set[str]] = defaultdict(set)
     for row in faulted:
@@ -836,7 +844,7 @@ def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str 
         return None if not values or None in values else sum(values) / len(values)
 
     out = []
-    for (group, size, condition, payload), arms in sorted(cells.items()):
+    for (group, size, condition, fixture), arms in sorted(cells.items()):
         uniform_costs = {seed: r["cost_ns"] for seed, r in arms.get(uniform, {}).items()}
         table = {}
         for label, by_seed in sorted(arms.items()):
@@ -866,7 +874,7 @@ def a2a_cost_cells(rows: list[dict], reference: str | None = None, uniform: str 
                     entry["recovered"], base["recovered"], label, reference, higher_is_better=True
                 )
         out.append({"group": group, "size": size, "condition": condition,
-                    **({"payload_bytes": payload} if payload else {}), "reference": reference, "arms": table})
+                    **({"fixture": json.loads(fixture)} if fixture else {}), "reference": reference, "arms": table})
     return out
 
 
@@ -1352,7 +1360,7 @@ def cycles_markdown(cells: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# The compute gap of a (group, size) at a payload from its healthy probe run.
+# The compute gap of a (group, size) on a fixture from its healthy probe run.
 
 A2A_COMPUTE_FRACTION = 2 / 3
 # A decode layer exchange's period, dispatch to next dispatch.
@@ -1368,7 +1376,7 @@ def compute_gap(median_ns: float, layer: bool) -> int:
 
 
 def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
-    """Per run of the stage with a summary: its group, size and payload, the
+    """Per run of the stage with a summary: its group, size and fixture, the
     compute gap it ran at, the iterations it completed of those it ran, the
     median iteration completion and the compute gap it gives (see the module
     docstring)."""
@@ -1381,7 +1389,7 @@ def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
         stats = iteration_stats(summary)
         median = stats["iteration_p50_ns"] if (summary.get("all_to_all") or {}).get("complete") else None
         out.append({"key": run["key"], "group": run["group"], "size": run["size"],
-                    "payload_bytes": run.get("payload_bytes"),
+                    "fixture": run.get("fixture"),
                     "probe_compute_ns": run["compute_ns"], "iterations": run["iterations"],
                     "iterations_completed": stats.get("iterations_completed"), "median_iteration_ns": median,
                     "compute_ns": None if median is None else compute_gap(median, "combine_bytes" in run)})
@@ -1411,11 +1419,10 @@ A2A_SWEEP_ORACLE = "reps_oracle_tail"
 A2A_SWEEP_REPS = "reps_tail"
 A2A_SWEEP_UNIFORM = "uniform_tail"
 A2A_SWEEP_LOSS_RATES = {"loss1e3_up": 1e-3, "loss3e3_up": 3e-3, "loss1e2_up": 1e-2, "loss3e2_up": 3e-2}
-# The generator's packet payload when a run sets none, and the flows each
-# pair's message per iteration is sent as (the system layer's dataset
-# splits).
+# The generator's packet payload and the system layer's dataset splits when
+# a run's fixture sets none.
 A2A_DEFAULT_PAYLOAD_BYTES = 1000
-A2A_FLOWS_PER_PAIR = 4
+A2A_DEFAULT_DATASET_SPLITS = 4
 
 
 def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> int | None:
@@ -1453,16 +1460,18 @@ def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
             count = spine_lost(out_root / row["key"], row["condition"])
             lost[row["key"]] = (None if count is None
                                 else count / A2A_HOSTS_PER_LEAF_OF_TRACE / row["iterations"])
-    shapes = {(r["group"], r["size"], r.get("payload_bytes")): r for r in rows}
+    shapes = {(r["group"], r["size"], _fixture_key(r)): r for r in rows}
     out = []
     for cell in a2a_cost_cells(rows, uniform=A2A_SWEEP_UNIFORM):
-        shape = shapes[(cell["group"], cell["size"], cell.get("payload_bytes"))]
+        shape = shapes[(cell["group"], cell["size"], _fixture_key(cell))]
         arms = cell["arms"]
         off_leaf = shape["k"] + 1 - A2A_HOSTS_PER_LEAF_OF_TRACE
-        payload = shape.get("payload_bytes") or A2A_DEFAULT_PAYLOAD_BYTES
+        fixture = shape.get("fixture") or {}
+        payload = fixture.get("payload_bytes", A2A_DEFAULT_PAYLOAD_BYTES)
+        flows = fixture.get("dataset_splits", A2A_DEFAULT_DATASET_SPLITS)
         messages = [shape["message_bytes"]] + ([shape["combine_bytes"]] if "combine_bytes" in shape else [])
-        n_s_pair = sum(A2A_FLOWS_PER_PAIR * math.ceil(m / A2A_FLOWS_PER_PAIR / payload) for m in messages) / SPINES
-        n_s_flow = n_s_pair / (A2A_FLOWS_PER_PAIR * len(messages))
+        n_s_pair = sum(flows * math.ceil(m / flows / payload) for m in messages) / SPINES
+        n_s_flow = n_s_pair / (flows * len(messages))
         p = A2A_SWEEP_LOSS_RATES.get(cell["condition"])
         for entry in arms.values():
             entry["cost_ns_range"] = _cost_range(entry)
@@ -1498,7 +1507,8 @@ def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
             }
         out.append({
             "group": cell["group"], "size": cell["size"], "condition": cell["condition"],
-            "payload_bytes": payload, "n_s_flow": n_s_flow, "n_s_pair": n_s_pair, "p": p,
+            "payload_bytes": payload, "flows_per_pair": flows * len(messages), "n_s_flow": n_s_flow,
+            "n_s_pair": n_s_pair, "p": p,
             "m_flow": None if p is None else n_s_flow * p, "m_pair": None if p is None else n_s_pair * p,
             "host_evidence": None if p is None else n_s_pair * p * off_leaf,
             "arms": arms, "oracle_versus_reps": _versus(arms, A2A_SWEEP_ORACLE, A2A_SWEEP_REPS),
@@ -1898,7 +1908,7 @@ def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:
 def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     """a2a_calibration.json from the healthy calibration runs that have a
     summary, merged into existing: per scope and (group, size), named
-    <group>-<size>-p<payload> for runs at a set packet payload, the Phase 8
+    <group>-<size>-p<payload> for runs on a fixture with a packet payload, the Phase 8
     congestion (and, but for switch_queue, trim) thresholds of thresholds(),
     and loss_thresholds. The pooled pass's are a map from each candidate
     interval to its list, from its sender loss trace; per_connection takes
@@ -1912,7 +1922,7 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
         directory = out_root / run["key"]
         if (run["stage"] in A2A_CALIBRATION_STAGES and run["condition"] == "healthy"
                 and run["arm"] in A2A_SCOPE_OF_ARM and (directory / "summary.json").exists()):
-            payload = run.get("payload_bytes")
+            payload = (run.get("fixture") or {}).get("payload_bytes")
             cell = f"{run['group']}-{run['size']}" + ("" if payload is None else f"-p{payload}")
             groups[(A2A_SCOPE_OF_ARM[run["arm"]], cell)].append(directory)
     result = {key: (dict(value) if isinstance(value, dict) else value) for key, value in existing.items()}
