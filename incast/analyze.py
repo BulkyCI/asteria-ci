@@ -52,12 +52,14 @@ and these measures per faulted run:
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
   the end of the first sender loss interval ending after it in which spine
   3's share of the sends falls below 1/16, from ns3/spine_losses.csv. With
-  a destination_leaf column (leaf and auto scopes) the sends read are those
-  that cross a spine toward the faulted link: for an _up fault the sends of
+  a destination_leaf column (leaf and auto scopes), or a destination column
+  (pair scope, the destination host's node id, read as its leaf), the sends
+  read are those that cross a spine toward the faulted link: for an _up
+  fault the sends of
   the hosts of leaf 0 toward every other leaf; for a _down fault every
   sender's sends toward leaf 1, those of the hosts of leaf 1 excluded; for
   structural every host's sends toward another leaf (share_basis
-  "remote"). Without that column (host scope) the sends are those of the
+  "remote"). Without either column (host scope) the sends are those of the
   hosts of leaf 0 for an _up fault, of the hosts off leaf 1 for a _down
   fault and of every host for structural, toward any destination
   (share_basis "all"). Intervals are the run's loss_interval_ns. None when the run
@@ -913,21 +915,28 @@ def fault_onset_ns(condition: str) -> int:
     return 0 if condition == "structural" else DEGRADE_AT_NS
 
 
-def faulted_share_rows(condition: str, leaf_column: bool):
+def faulted_share_rows(condition: str, columns):
     """The trace rows that read the faulted link's spine share, and the
-    basis: "remote" with a destination_leaf column (sends toward a leaf
-    other than the sender's), "all" without one (every destination)."""
+    basis: "remote" when the trace's columns name a row's destination leaf
+    (sends toward a leaf other than the sender's), "all" otherwise (every
+    destination). The destination leaf is the destination_leaf column (hold
+    scopes leaf and auto), or the leaf of the destination column's host
+    node id (hold scope pair; hosts are the first node ids, in leaf
+    order)."""
     hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
 
     def leaf(row):
         return int(row["rank"]) // hosts
 
-    if leaf_column:
+    if "destination_leaf" in columns or "destination" in columns:
+        def to(row):
+            return int(row["destination_leaf"]) if "destination_leaf" in row else int(row["destination"]) // hosts
+
         if condition == "structural":
-            return (lambda row: int(row["destination_leaf"]) != leaf(row)), "remote"
+            return (lambda row: to(row) != leaf(row)), "remote"
         if condition.endswith("_up"):
-            return (lambda row: leaf(row) == 0 and int(row["destination_leaf"]) != 0), "remote"
-        return (lambda row: int(row["destination_leaf"]) == 1 and leaf(row) != 1), "remote"
+            return (lambda row: leaf(row) == 0 and to(row) != 0), "remote"
+        return (lambda row: to(row) == 1 and leaf(row) != 1), "remote"
     if condition == "structural":
         return (lambda row: True), "all"
     if condition.endswith("_up"):
@@ -945,7 +954,7 @@ def share_series(directory: Path, condition: str, interval_ns: int, spine: int =
     faulted: dict[int, int] = defaultdict(int)
     with path.open() as handle:
         reader = csv.DictReader(handle)
-        keep, basis = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
+        keep, basis = faulted_share_rows(condition, reader.fieldnames or ())
         for row in reader:
             if not keep(row):
                 continue
@@ -1341,10 +1350,10 @@ def compute_gaps_markdown(rows: list[dict]) -> str:
 # on spine 3, and the hold arms' recovered fraction against the oracle's.
 
 A2A_SWEEP_POOLED = "reps_hold_auto_tail_ack"
-# The hold arms read against the pooled one: per destination leaf, per flow;
-# a further hold arm of the 4096-byte stages (profiles.py A2A_HOLD_ARMS_4K)
-# joins them here.
-A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
+# The hold arms read against the pooled one: per destination leaf, per flow
+# and per destination host; a further hold arm of the 4096-byte stages
+# (profiles.py A2A_HOLD_ARMS_4K) joins them here.
+A2A_SWEEP_HOLDS = ("reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack", "reps_hold_pair_tail_ack")
 A2A_SWEEP_ORACLE = "reps_oracle_tail"
 A2A_SWEEP_REPS = "reps_tail"
 A2A_SWEEP_UNIFORM = "uniform_tail"
@@ -1364,7 +1373,7 @@ def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> 
         return None
     with path.open() as handle:
         reader = csv.DictReader(handle)
-        keep, _ = faulted_share_rows(condition, "destination_leaf" in (reader.fieldnames or ()))
+        keep, _ = faulted_share_rows(condition, reader.fieldnames or ())
         return sum(int(row["lost"]) for row in reader if int(row["spine"]) == spine and keep(row))
 
 

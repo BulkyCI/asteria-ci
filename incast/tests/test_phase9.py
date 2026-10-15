@@ -64,7 +64,7 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432},
+             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -72,7 +72,7 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432},
+             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -744,7 +744,7 @@ class Payload4k(unittest.TestCase):
         del lacking["per_receiver"]["ep64-1m-p4096"]
         with self.assertRaisesRegex(ValueError, r"\['ep64-1m-p4096'\]"):
             profiles.a2a_stage_runs("a2a_sweep_4k", lacking, self.tuning)
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tail_ack_4k", lacking, self.tuning)), 576)
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_tail_ack_4k", lacking, self.tuning)), 672)
 
     @measured_4k()
     def test_calibration_runs(self):
@@ -772,9 +772,9 @@ class Payload4k(unittest.TestCase):
         calibration = calibrated_4k(self.calibration)
         calibration["per_receiver"]["ep64-256k-p4096"] = {"loss_thresholds": {"24648": [0.0075, 0.015, 0.03]}}
         runs = profiles.a2a_stage_runs("a2a_tail_ack_4k", calibration, self.tuning)
-        # a2a_tail_ack's 5 arms and reps_oracle_tail on the 28 gate cells and
-        # 4 healthy pairs, by 3 seeds.
-        self.assertEqual(len(runs), (28 + 4) * 6 * 3)
+        # a2a_tail_ack's 5 arms, reps_hold_pair_tail_ack and reps_oracle_tail
+        # on the 28 gate cells and 4 healthy pairs, by 3 seeds.
+        self.assertEqual(len(runs), (28 + 4) * 7 * 3)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"},
                          set(profiles.a2a_gate_cells()))
@@ -790,6 +790,9 @@ class Payload4k(unittest.TestCase):
         hold = next(r for r in runs if r["key"] == "a2a_tail_ack_4k-ep64-256k-loss1e2_up-reps_hold_auto_tail_ack-s301")
         balancing = profiles.a2a_stage_profile(hold, calibration)["network"]["load_balancing"]
         self.assertEqual(balancing["loss_thresholds"], [0.0075, 0.015, 0.03])
+        pair = next(r for r in runs if r["key"] == hold["key"].replace("auto", "pair"))
+        self.assertEqual(profiles.a2a_stage_profile(pair, calibration)["network"]["load_balancing"],
+                         {**balancing, "hold_scope": "pair"})
         default = profiles.a2a_stage_profile(theirs[hold["key"].replace("_4k", "", 1)], calibration)
         self.assertEqual(default["network"]["load_balancing"]["loss_thresholds"],
                          self.calibration["per_receiver"]["ep64-256k"]["loss_thresholds"]["24648"])
@@ -798,8 +801,8 @@ class Payload4k(unittest.TestCase):
     def test_sweep(self):
         runs = profiles.a2a_stage_runs("a2a_sweep_4k", calibrated_4k(self.calibration), self.tuning)
         # 14 cells, the anchor and the handover cell, and 8 healthy pairs,
-        # by 6 arms by 3 seeds.
-        self.assertEqual(len(runs), (14 + 1 + 1 + 8) * 6 * 3)
+        # by 7 arms by 3 seeds.
+        self.assertEqual(len(runs), (14 + 1 + 1 + 8) * 7 * 3)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
         self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
         self.assertEqual({r["payload_bytes"] for r in runs}, {4096})
@@ -867,7 +870,7 @@ class SweepCells(unittest.TestCase):
         ("ep64", "256k", "loss1e2_up"): {
             "uniform_tail": [400, 420, 440], "reps_tail": [300, 310, 320], "reps_oracle_tail": [100, 110, 120],
             "reps_hold_auto_tail_ack": [150, 160, 170], "reps_hold_leaf_tail_ack": [200, 210, 220],
-            "reps_flow_hold_tail_ack": [250, 260, 300]},
+            "reps_flow_hold_tail_ack": [250, 260, 300], "reps_hold_pair_tail_ack": [140, 160, 180]},
         ("ep64", "256k", "rate16g_up"): {"uniform_tail": [40, 50, 60]},
         ("ep8", "256k", "loss1e2_up"): {"uniform_tail": [-1, 0, 1], "reps_hold_auto_tail_ack": [5, 6, 7]},
     }
@@ -895,6 +898,10 @@ class SweepCells(unittest.TestCase):
                 # counted: another spine, another leaf's host, leaf 0 itself.
                 if arm == "reps_flow_hold_tail_ack":
                     trace = "time_ns,rank,spine,sent,lost,grade\n5,0,3,99,16,3\n5,9,3,99,3,3\n5,0,2,99,4,3\n"
+                elif arm == "reps_hold_pair_tail_ack":
+                    # Toward host 9 on leaf 1: counted; toward host 5 on leaf 0: not.
+                    trace = ("time_ns,rank,destination,spine,sent,lost,grade\n5,0,9,3,99,24,0\n"
+                             "5,0,5,3,99,5,3\n5,9,17,3,99,7,0\n")
                 else:
                     trace = ("time_ns,rank,destination_leaf,spine,sent,lost,grade\n5,0,1,3,99,8,0\n"
                              "5,1,0,3,99,5,3\n5,9,2,3,99,7,0\n5,2,3,2,99,4,3\n")
@@ -930,16 +937,21 @@ class SweepCells(unittest.TestCase):
         self.assertEqual(cell["oracle_versus_reps"], "reps_oracle_tail beats reps_tail")
         for arm in ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack"):
             self.assertAlmostEqual(cell["ceiling"][arm], recovered(arm) / recovered("reps_oracle_tail"))
-        leaf, flow = cell["gaps"]["reps_hold_leaf_tail_ack"], cell["gaps"]["reps_flow_hold_tail_ack"]
+        leaf, flow, pair = (cell["gaps"][arm] for arm in analyze.A2A_SWEEP_HOLDS)
         self.assertAlmostEqual(leaf["recovered_gap"], recovered("reps_hold_auto_tail_ack") - 0.5)
         self.assertEqual((leaf["cost_gap_ns"], leaf["verdict"]),
                          (50, "reps_hold_auto_tail_ack beats reps_hold_leaf_tail_ack"))
         self.assertEqual((flow["cost_gap_ns"], flow["verdict"]),
                          (110, "reps_hold_auto_tail_ack beats reps_flow_hold_tail_ack"))
+        # The pair arm costs the same on the mean, with a wider seed range.
+        self.assertEqual((pair["cost_gap_ns"], pair["verdict"]), (0, "within seed noise"))
+        self.assertAlmostEqual(pair["recovered_gap"],
+                               recovered("reps_hold_auto_tail_ack") - recovered("reps_hold_pair_tail_ack"))
         # 8 losses per run over 8 hosts and 2 iterations; 16 without a
         # destination leaf; no trace under the baselines.
         self.assertEqual(arms["reps_hold_auto_tail_ack"]["spine_losses_per_host_iteration"], 0.5)
         self.assertEqual(arms["reps_flow_hold_tail_ack"]["spine_losses_per_host_iteration"], 1.0)
+        self.assertEqual(arms["reps_hold_pair_tail_ack"]["spine_losses_per_host_iteration"], 1.5)
         self.assertIsNone(arms["uniform_tail"]["spine_losses_per_host_iteration"])
         self.assertIsNone(cell["control"])
         handover = cells[("ep64", "256k", "rate16g_up")]
@@ -956,8 +968,8 @@ class SweepCells(unittest.TestCase):
             "seed_rule": ["uniform_tail beats reps_hold_auto_tail_ack"]})
         self.assertIsNone(control["arms"]["uniform_tail"]["recovered_mean"])
         markdown = analyze.sweep_markdown(list(cells.values()))
-        self.assertIn("| ep64 | 256k | loss1e2_up | 4096 | 2 / 8 | 0.01 | 0.02 / 0.08 | 4.48 | 0.50 / 0.50 / 1.00 "
-                      "| reps_oracle_tail beats reps_tail |", markdown)
+        self.assertIn("| ep64 | 256k | loss1e2_up | 4096 | 2 / 8 | 0.01 | 0.02 / 0.08 | 4.48 "
+                      "| 0.50 / 0.50 / 1.00 / 1.50 | reps_oracle_tail beats reps_tail |", markdown)
         self.assertIn("| ep64 | 256k | loss1e2_up | reps_flow_hold_tail_ack | 0.3 | 0.1 | 0.358 |", markdown)
         self.assertIn("Control ep8 256k loss1e2_up: mean cost within its seed range of zero: "
                       "reps_hold_auto_tail_ack False, uniform_tail True; seed-rule verdicts other than noise: "
@@ -1249,7 +1261,7 @@ class Reaction(unittest.TestCase):
         pairs = [(0, 0), (0, 1), (0, 2), (9, 0), (9, 1), (17, 1)]
 
         def kept(condition, leaf_column):
-            keep, basis = analyze.faulted_share_rows(condition, leaf_column)
+            keep, basis = analyze.faulted_share_rows(condition, ("destination_leaf",) if leaf_column else ())
             return [pair for pair in pairs
                     if keep({"rank": str(pair[0]), "destination_leaf": str(pair[1])})], basis
 
@@ -1259,6 +1271,13 @@ class Reaction(unittest.TestCase):
         self.assertEqual(kept("loss1e2_up", False), ([(0, 0), (0, 1), (0, 2)], "all"))
         self.assertEqual(kept("loss1e2_down", False), ([(0, 0), (0, 1), (0, 2), (17, 1)], "all"))
         self.assertEqual(kept("structural", False), (pairs, "all"))
+        # Under hold_scope pair the destination host's node id gives the leaf:
+        # the same rows, a destination host on each destination leaf.
+        for condition in ("loss1e2_up", "loss1e2_down", "structural"):
+            keep, basis = analyze.faulted_share_rows(condition, ("time_ns", "rank", "destination", "spine"))
+            self.assertEqual(([pair for pair in pairs
+                               if keep({"rank": str(pair[0]), "destination": str(8 * pair[1] + 5)})], basis),
+                             kept(condition, True))
 
     def test_window_share(self):
         # Interval 1, window 3: the share over the intervals ending in (e - 3, e].
@@ -1485,7 +1504,7 @@ class A2aCalibrate(unittest.TestCase):
         self.assertEqual(result["per_receiver"]["ep64-1m-p4096"]["loss_thresholds"]["24648"], [0.005, 0.01, 0.02])
         with measured_4k():
             sweep = profiles.a2a_stage_runs("a2a_sweep_4k", result, None)
-            self.assertEqual(len(profiles.a2a_stage_runs("a2a_tail_ack_4k", result, None)), 576)
+            self.assertEqual(len(profiles.a2a_stage_runs("a2a_tail_ack_4k", result, None)), 672)
         hold = next(r for r in sweep if (r["group"], r["size"], r["arm"]) == ("ep64", "1m", "reps_hold_auto_tail_ack"))
         balancing = profiles.a2a_stage_profile(hold, result)["network"]["load_balancing"]
         self.assertEqual(balancing["loss_thresholds"], [0.005, 0.01, 0.02])

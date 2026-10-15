@@ -733,9 +733,11 @@ A2A_ACK_ARMS = {**A2A_ACKLOSS_ARMS, **A2A_CANDIDATES_ACK_ARMS}
 # transport: A2A_TAIL with tail_loss_rtts A2A_TAIL_LOSS_RTTS, as
 # reps_hold_auto_tail4 does. The loss-hold arms add A2A_ACKLOSS to their base
 # arm's a2a_candidates setting: reps_hold_auto, reps_flow_hold and
-# mrc_hold_auto, and reps_hold_leaf_tail_ack, reps_hold_auto's setting with
-# hold_scope leaf (a hold per destination leaf and spine, never widened to
-# every destination). The baselines add the transport alone to reps_spine
+# mrc_hold_auto, and reps_hold_leaf_tail_ack and reps_hold_pair_tail_ack,
+# reps_hold_auto's setting with hold_scope leaf (a hold per destination leaf
+# and spine, never widened to every destination) or pair (a hold per
+# destination host and spine, shared by the queue pairs to that host, so it
+# outlasts each message's queue pair). The baselines add the transport alone to reps_spine
 # (reps_tail), reps_oracle (reps_oracle_tail) and the uniform draw
 # (uniform_tail), so reps_tail and uniform_tail are a2a_tail's arms of those
 # names with tail_loss_rtts set. tail_loss_rtts only delays the path
@@ -748,7 +750,8 @@ A2A_ACK_ARMS = {**A2A_ACKLOSS_ARMS, **A2A_CANDIDATES_ACK_ARMS}
 A2A_TAIL_ACK_STAGE = "a2a_tail_ack"
 A2A_TAIL_ACK_ARMS = {
     "reps_hold_auto_tail_ack": "reps_hold_auto", "reps_hold_leaf_tail_ack": "reps_hold_auto",
-    "reps_flow_hold_tail_ack": "reps_flow_hold", "mrc_hold_auto_tail_ack": "mrc_hold_auto",
+    "reps_hold_pair_tail_ack": "reps_hold_auto", "reps_flow_hold_tail_ack": "reps_flow_hold",
+    "mrc_hold_auto_tail_ack": "mrc_hold_auto",
     "reps_tail": A2A_REPS_SPINE, "reps_oracle_tail": A2A_REPS_ORACLE, "uniform_tail": "uniform",
 }
 # The keys an A2A_TAIL_ACK_ARMS arm adds to A2A_TAIL.
@@ -757,6 +760,7 @@ A2A_TAIL_ACK_HOLD = {**A2A_TAIL_ACK_TRANSPORT, **A2A_ACKLOSS}
 A2A_TAIL_ACK_KEYS = {
     "reps_hold_auto_tail_ack": A2A_TAIL_ACK_HOLD,
     "reps_hold_leaf_tail_ack": {**A2A_TAIL_ACK_HOLD, "hold_scope": "leaf"},
+    "reps_hold_pair_tail_ack": {**A2A_TAIL_ACK_HOLD, "hold_scope": "pair"},
     "reps_flow_hold_tail_ack": A2A_TAIL_ACK_HOLD,
     "mrc_hold_auto_tail_ack": A2A_TAIL_ACK_HOLD,
     "reps_tail": A2A_TAIL_ACK_TRANSPORT,
@@ -822,7 +826,8 @@ A2A_CALIBRATION_4K_CELLS = tuple(cell for cell in A2A_PROBE_4K_COMPUTE_NS if cel
 # The arms of the 4096-byte stages, each with its A2A_TAIL_ACK_ARMS setting:
 # the loss-hold arms, then the baselines. A further hold arm joins
 # A2A_HOLD_ARMS_4K once A2A_TAIL_ACK_ARMS and A2A_TAIL_ACK_KEYS define it.
-A2A_HOLD_ARMS_4K = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack")
+A2A_HOLD_ARMS_4K = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                    "reps_hold_pair_tail_ack")
 A2A_ARMS_4K = A2A_HOLD_ARMS_4K + ("reps_tail", "reps_oracle_tail", "uniform_tail")
 # a2a_tail_ack_4k: a2a_tail_ack's arms at 4096 B, with reps_oracle_tail, so
 # that the gate's reading of reps_oracle against REPS is taken again at this
