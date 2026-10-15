@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k)
         required: true
         type: string
       record_filter:
@@ -321,6 +321,11 @@ jobs:
             cat "results/${stage}_cells.md" >> "$GITHUB_STEP_SUMMARY"
           fi
         done
+        if [[ ",${STAGES// /}," == *,a2a_downlink_4k,* ]]; then
+          python3 incast/analyze.py a2a_downlink --runs results/runs.json --out-root results \
+            --stage a2a_downlink_4k --markdown results/a2a_downlink_4k.md > results/a2a_downlink_4k.json
+          cat results/a2a_downlink_4k.md >> "$GITHUB_STEP_SUMMARY"
+        fi
         if [[ ",${STAGES// /}," == *,a2a_probe_4k,* ]]; then
           python3 incast/analyze.py a2a_compute_gaps --runs results/runs.json --out-root results \
             --stage a2a_probe_4k --markdown results/a2a_probe_4k.md > results/a2a_probe_4k.json

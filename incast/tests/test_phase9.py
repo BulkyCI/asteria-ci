@@ -31,8 +31,9 @@ TUNING = {
 
 
 def measured_4k():
-    """The 4096-byte compute gaps taken as measured."""
-    return mock.patch.dict(profiles.A2A_PAYLOAD_COMPUTE_MEASURED, {profiles.A2A_PAYLOAD_4K: True})
+    """Every 4096-byte compute gap taken as measured."""
+    return mock.patch.dict(profiles.A2A_PAYLOAD_COMPUTE_MEASURED,
+                           {profiles.A2A_PAYLOAD_4K: tuple(profiles.A2A_PAYLOAD_COMPUTE_NS[profiles.A2A_PAYLOAD_4K])})
 
 
 def calibrated_4k(calibration):
@@ -64,7 +65,8 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504},
+             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
+             "a2a_downlink_4k": 90},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -72,7 +74,8 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504},
+             "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
+             "a2a_downlink_4k": 90},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -102,8 +105,11 @@ class Stages(unittest.TestCase):
                          [{"model": "gray", "error_rate": 3e-2, **onset, "leaf": 0, "direction": "up"}])
         self.assertEqual(profiles.a2a_fault("rate16g_up"),
                          [{"model": "gray", "rate": "16Gbps", **onset, "leaf": 0, "direction": "up"}])
+        down = {**onset, "leaf": 1, "direction": "down"}
+        self.assertEqual(profiles.a2a_fault("blackhole_down"), [{"model": "silent", **down}])
+        self.assertEqual(profiles.a2a_fault("halfrate_down"), [{"model": "gray", "rate": "200Gbps", **down}])
         with self.assertRaises(ValueError):
-            profiles.a2a_fault("rate16g_down")
+            profiles.a2a_fault("delay_up")
 
     def test_profiles(self):
         runs = {r["key"]: r for r in profiles.a2a_stage_runs("a2a_gate", CALIBRATION, None)}
@@ -839,6 +845,105 @@ class Payload4k(unittest.TestCase):
             balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
             if r["group"] == "ep8" and "loss_thresholds" in balancing:
                 self.assertEqual(balancing["loss_thresholds"], profiles.A2A_LOSS_THRESHOLDS_PLACEHOLDER)
+
+
+class Downlink(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
+
+    @measured_4k()
+    def test_runs_and_settings(self):
+        runs = profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)
+        # 4 cells and 2 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(runs), (4 + 2) * 5 * 3)
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
+                         {(g, "256k", c) for g in ("ep64", "ep16")
+                          for c in ("blackhole_down", "halfrate_down", "healthy")})
+        self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx",
+                                                    "reps_tail", "mrc_hold_auto_tail_ack", "reps_oracle_tail"})
+        self.assertEqual({r["payload_bytes"] for r in runs}, {4096})
+        cell = ("ep64", "256k", "blackhole_down", 301)
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]
+                  for r in runs if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
+        self.assertEqual(by_arm["reps_hold_auto_tail_ack_rx"]["load_balancing"],
+                         {**by_arm["reps_hold_auto_tail_ack"]["load_balancing"], "receiver_hold": True,
+                          "receiver_hold_clean": 1024, "receiver_tail_missing": True})
+        self.assertEqual(by_arm["reps_tail"]["link_failures"], profiles.a2a_fault("blackhole_down"))
+
+    def test_refused_per_pair(self):
+        def measured_but(pair):
+            pairs = tuple(p for p in profiles.A2A_PAYLOAD_COMPUTE_NS[4096] if p != pair)
+            return mock.patch.dict(profiles.A2A_PAYLOAD_COMPUTE_MEASURED, {4096: pairs})
+
+        with measured_but(("ep16", "256k")):
+            with self.assertRaisesRegex(ValueError, r"\['ep16-256k'\] are provisional"):
+                profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)
+        # A stage that does not run the pair is not held back by it.
+        with measured_but(("ep16", "2m")):
+            with self.assertRaisesRegex(ValueError, r"\['ep16-2m'\] are provisional"):
+                profiles.a2a_stage_runs("a2a_tail_ack_4k", self.calibration, self.tuning)
+            self.assertEqual(len(profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)), 90)
+            self.assertEqual(len(profiles.a2a_stage_runs("a2a_sweep_4k", self.calibration, self.tuning)), 504)
+
+    def test_analyzer(self):
+        onset = analyze.DEGRADE_AT_NS
+        costs = {"reps_hold_auto_tail_ack": [300, 310, 320], "reps_hold_auto_tail_ack_rx": [100, 110, 120],
+                 "reps_tail": [400, 420, 440]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for arm, values in costs.items():
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("blackhole_down", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, "a2a_downlink_4k"), "payload_bytes": 4096}
+                        runs.append(r)
+                        d = root / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        transport = {}
+                        if arm.endswith("_rx") and condition != "healthy":
+                            transport = {name: {"count": count, "bytes": 0} for name, count in (
+                                ("receiver_tail_missing:control", 10), ("receiver_tail_missing_spine3:control", 9),
+                                ("receiver_tail_missing_spine5:control", 1), ("receiver_tail_missing_late:control", 1),
+                                ("receiver_tail_missing_late_spine5:control", 1))}
+                            # Host 9 on leaf 1 holds spine 3 for leaf 0 twice; host 10
+                            # holds spine 5 once, a false hold.
+                            (d / "ns3" / "receiver_holds.csv").write_text(
+                                "time_ns,rank,sender_leaf,spine,arrivals,lost,hold\n"
+                                + "".join(f"{onset + 1000 * i},9,0,3,10,{lost},{hold}\n" for i, (lost, hold) in
+                                          enumerate([(0, "none"), (2, "leaf"), (1, "leaf"), (0, "none"), (1, "leaf")]))
+                                + f"{onset + 1000},10,0,5,10,1,leaf\n")
+                        if arm != "reps_tail" and condition != "healthy":
+                            (d / "ns3" / "spine_losses.csv").write_text(
+                                "time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                                f"{onset + 1000},0,1,3,10,0,3\n{onset + 2000},0,1,3,10,4,0\n"
+                                f"{onset + 3000},0,1,3,0,0,0\n{onset + 3000},0,1,2,10,0,0\n")
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_downlink(analyze.a2a_rows([listing], root, "a2a_downlink_4k"), root)
+        self.assertEqual(cell["payload_bytes"], 4096)
+        self.assertEqual(cell["receiver_versus_sender"], "reps_hold_auto_tail_ack_rx beats reps_hold_auto_tail_ack")
+        rx, sender = cell["arms"]["reps_hold_auto_tail_ack_rx"], cell["arms"]["reps_hold_auto_tail_ack"]
+        self.assertEqual(rx["versus_reference_cost"], "reps_hold_auto_tail_ack_rx beats reps_tail")
+        self.assertEqual(rx["receiver_tail_missing_by_spine"], [{3: 9, 5: 1}] * 3)
+        self.assertEqual(rx["receiver_tail_missing_late_by_spine"], [{5: 1}] * 3)
+        self.assertEqual(rx["receiver_holds"], [{"holds": {3: 2, 5: 1}, "lost": {3: 4, 5: 1}}] * 3)
+        self.assertEqual(rx["false_receiver_holds"], {"holds": [1, 1, 1], "lost": [1, 1, 1]})
+        self.assertEqual(rx["receiver_reaction_ns"], [1000] * 3)
+        self.assertEqual(sender["sender_holds"], [{"holds": {2: 1, 3: 1}, "lost": {2: 0, 3: 4}}] * 3)
+        self.assertEqual(sender["false_sender_holds"], {"holds": [1, 1, 1], "lost": [0, 0, 0]})
+        self.assertEqual(sender["receiver_holds"], [None] * 3)
+        self.assertEqual(sender["false_receiver_holds"], {"holds": [None] * 3, "lost": [None] * 3})
+        self.assertEqual(cell["arms"]["reps_tail"]["receiver_tail_missing_by_spine"], [{}] * 3)
+        markdown = analyze.downlink_markdown([cell])
+        self.assertIn("| reps_hold_auto_tail_ack_rx | 0.1 (3) | reps_hold_auto_tail_ack_rx beats reps_tail ", markdown)
+        self.assertIn("| 3:27, 5:3 | 5:3 | 3:6, 5:3 | 3:12, 5:3 | 2:3, 3:3 | 2:0, 3:12 | 3, 3 | 3, 0 |", markdown)
+        self.assertIn("ep64 256k blackhole_down: reps_hold_auto_tail_ack_rx against reps_hold_auto_tail_ack: "
+                      "reps_hold_auto_tail_ack_rx beats reps_hold_auto_tail_ack", markdown)
 
 
 class ComputeGaps(unittest.TestCase):

@@ -23,6 +23,8 @@
                                                      median healthy iteration and compute gap per run
     analyze.py a2a_sweep --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      loss evidence and the hold arms' recovered fraction per cell
+    analyze.py a2a_downlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     a2a_candidates with both ends' holds and tail counts per spine
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -155,6 +157,26 @@ cell:
   arm whether the mean cost is within its seed range of zero (its absolute
   value at most the range), and every seed-rule verdict between two arms
   that is not seed noise. None on every other cell.
+
+a2a_downlink reads one stage's runs alone (--stage, a2a_downlink_4k by
+default) and gives a2a_candidates' table, with verdicts against reps_tail,
+and per faulted run:
+
+* receiver_tail_missing_by_spine and receiver_tail_missing_late_by_spine:
+  the sends the receivers' hold counted missing from a tail repair
+  request, and those of them that arrived after all, per requested spine,
+  from summary.json's transport rows <event>_spine<k>:control;
+* receiver_holds and sender_holds: per spine, the hold intervals of
+  ns3/receiver_holds.csv (hold not none) and ns3/spine_losses.csv (grade
+  0), and the trace's lost column summed (None without the trace); a hold
+  interval is a maximal run of one series' consecutive rows that hold, a
+  series being a row's columns but its time, counts, grade and hold, read
+  in the order the trace writes them;
+* false_receiver_holds and false_sender_holds: the hold intervals and the
+  lost count on spines other than 3, which no fault of the stage touches.
+
+Per cell, receiver_versus_sender is the seed-rule verdict of
+reps_hold_auto_tail_ack_rx against reps_hold_auto_tail_ack on cost.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -1105,9 +1127,10 @@ def early_cost(directory: Path, healthy: Path | None, condition: str) -> float |
     return sum(timing[i][1] - reference[i][1] for i in window)
 
 
-def a2a_candidates(rows: list[dict], out_root: Path) -> list[dict]:
-    """a2a_cost_cells with every arm's reaction_ns and early_cost_ns per seed
-    and their means over the seeds that have one."""
+def a2a_candidates(rows: list[dict], out_root: Path, reference: str | None = None) -> list[dict]:
+    """a2a_cost_cells (verdicts against reference when given) with every
+    arm's reaction_ns and early_cost_ns per seed and their means over the
+    seeds that have one."""
     measured = {}
     for row in a2a_costs(rows):
         interval = (row.get("setting") or {}).get("loss_interval_ns", A2A_DEFAULT_LOSS_INTERVAL_NS)
@@ -1117,7 +1140,7 @@ def a2a_candidates(rows: list[dict], out_root: Path) -> list[dict]:
                                 **receiver_reaction(directory, row["condition"]),
                                 **rto_counts(directory),
                                 "early_cost_ns": early_cost(directory, healthy, row["condition"])}
-    cells = a2a_cost_cells(rows)
+    cells = a2a_cost_cells(rows, reference)
     for cell in cells:
         for entry in cell["arms"].values():
             entry["rto_per_iteration"] = [measured[k]["rto_per_iteration"] for k in entry["keys"]]
@@ -1501,6 +1524,128 @@ def sweep_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The downlink stage: both ends' holds and the receiver's tail counts per
+# spine, beside a2a_candidates' measures.
+
+A2A_DOWNLINK_SENDER = "reps_hold_auto_tail_ack"
+A2A_DOWNLINK_RECEIVER = "reps_hold_auto_tail_ack_rx"
+A2A_DOWNLINK_REFERENCE = "reps_tail"
+A2A_RECEIVER_TAIL_EVENTS = ("receiver_tail_missing", "receiver_tail_missing_late")
+
+
+def receiver_tail_counts(directory: Path) -> dict:
+    """receiver_tail_missing_by_spine and receiver_tail_missing_late_by_spine
+    (see the module docstring); empty when the run counted none."""
+    transport = json.loads((directory / "summary.json").read_text()).get("transport", {})
+    counts: dict[str, dict[int, int]] = {event: {} for event in A2A_RECEIVER_TAIL_EVENTS}
+    for name, value in transport.items():
+        event, _, plane = name.rpartition(":")
+        base, separator, spine = event.rpartition("_spine")
+        if plane == "control" and separator and base in counts and spine.isdigit():
+            counts[base][int(spine)] = value["count"]
+    return {f"{event}_by_spine": dict(sorted(by_spine.items())) for event, by_spine in counts.items()}
+
+
+def spine_holds(path: Path, held) -> dict | None:
+    """Per spine of a hold trace, its hold intervals (rows for which held
+    is true) and its lost column summed (see the module docstring); None
+    without the file."""
+    if not path.exists():
+        return None
+    holds: dict[int, int] = defaultdict(int)
+    lost: dict[int, int] = defaultdict(int)
+    holding: dict[tuple, bool] = {}
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        series = [column for column in reader.fieldnames or ()
+                  if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
+        for row in reader:
+            spine = int(row["spine"])
+            lost[spine] += int(row["lost"])
+            key = tuple(row[c] for c in series)
+            now = held(row)
+            if now and not holding.get(key):
+                holds[spine] += 1
+            holding[key] = now
+    return {"holds": dict(sorted(holds.items())), "lost": dict(sorted(lost.items()))}
+
+
+def _off_spine(traced: dict | None, name: str, spine: int = DEGRADED_SPINE) -> int | None:
+    return None if traced is None else sum(v for k, v in traced[name].items() if k != spine)
+
+
+def a2a_downlink(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_candidates against reps_tail with the downlink measures (see the
+    module docstring)."""
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = out_root / row["key"]
+        measured[row["key"]] = {
+            **receiver_tail_counts(directory),
+            "receiver_holds": spine_holds(directory / "ns3" / "receiver_holds.csv", lambda r: r["hold"] != "none"),
+            "sender_holds": spine_holds(directory / "ns3" / "spine_losses.csv", lambda r: r["grade"] == "0"),
+        }
+    cells = a2a_candidates(rows, out_root, A2A_DOWNLINK_REFERENCE)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in ("receiver_tail_missing_by_spine", "receiver_tail_missing_late_by_spine",
+                         "receiver_holds", "sender_holds"):
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+            for side in ("receiver_holds", "sender_holds"):
+                entry[f"false_{side}"] = {name: [_off_spine(measured[k][side], name) for k in entry["keys"]]
+                                          for name in ("holds", "lost")}
+        cell["receiver_versus_sender"] = _versus(cell["arms"], A2A_DOWNLINK_RECEIVER, A2A_DOWNLINK_SENDER)
+    return cells
+
+
+def _per_spine(dicts) -> str:
+    """Per-spine counts summed over the seeds that have them, as
+    spine:count; "-" when none has."""
+    known = [d for d in dicts if d is not None]
+    if not known:
+        return "-"
+    total: dict[int, int] = defaultdict(int)
+    for d in known:
+        for spine, count in d.items():
+            total[spine] += count
+    return ", ".join(f"{spine}:{count}" for spine, count in sorted(total.items())) or "none"
+
+
+def downlink_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, and each cell's receiver against sender
+    verdict."""
+    lines = [
+        "| group | size | condition | arm | cost mean us (seeds) | vs reps_tail | reaction us | receiver reaction us "
+        "| receiver tail missing | late | receiver holds | receiver lost | sender holds | sender lost "
+        "| false receiver holds, lost | false sender holds, lost |",
+        "|---" * 16 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            def false(side):
+                values = entry[f"false_{side}"]
+                return "-" if None in values["holds"] else f"{sum(values['holds'])}, {sum(values['lost'])}"
+
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) "
+                f"| {entry.get('versus_reference_cost') or '-'} "
+                f"| {_us(entry['reaction_ns_mean'])} | {_us(entry['receiver_reaction_ns_mean'])} "
+                f"| {_per_spine(entry['receiver_tail_missing_by_spine'])} "
+                f"| {_per_spine(entry['receiver_tail_missing_late_by_spine'])} "
+                f"| {_per_spine([h and h['holds'] for h in entry['receiver_holds']])} "
+                f"| {_per_spine([h and h['lost'] for h in entry['receiver_holds']])} "
+                f"| {_per_spine([h and h['holds'] for h in entry['sender_holds']])} "
+                f"| {_per_spine([h and h['lost'] for h in entry['sender_holds']])} "
+                f"| {false('receiver_holds')} | {false('sender_holds')} |"
+            )
+    lines.append("")
+    for cell in cells:
+        lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {A2A_DOWNLINK_RECEIVER} against "
+                     f"{A2A_DOWNLINK_SENDER}: {cell['receiver_versus_sender'] or 'unreadable'}")
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration and
 # a2a_calibration_4k.
@@ -1692,11 +1837,12 @@ def main() -> int:
     i.add_argument("--other-root", type=Path, required=True)
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep"):
+                 "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
-                                             "a2a_cycles", "a2a_compute_gaps", "a2a_sweep") else None)
+                                             "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink")
+                       else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -1706,8 +1852,9 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep"):
-            stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k"}
+        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink"):
+            stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
+                      "a2a_downlink": "a2a_downlink_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
@@ -1749,6 +1896,12 @@ def main() -> int:
         cells = a2a_candidates(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(candidates_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_downlink":
+        cells = a2a_downlink(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(downlink_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep":
