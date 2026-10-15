@@ -456,10 +456,15 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_sweep_probe         one healthy uniform_tail run, seed 301, per
 #                           (group, size) the sweep adds, at its provisional
 #                           compute gap (A2A_SWEEP_PROBE_COMPUTE_NS)
+#   a2a_sweep_calibration   a2a_calibration's per_receiver pass on the
+#                           A2A_SWEEP_CALIBRATION_CELLS; refused until
+#                           A2A_SWEEP_COMPUTE_NS holds the probe's gaps
 #   a2a_sweep               the A2A_SWEEP_ARMS on the A2A_SWEEP_CELLS, the
 #                           A2A_SWEEP_ANCHOR and the A2A_SWEEP_HANDOVER cell
 #                           and their healthy pairs, seeds 301-303; refused
 #                           until A2A_SWEEP_COMPUTE_NS holds the probe's gaps
+#                           and a2a_calibration.json a per_receiver entry for
+#                           every (group, size) off one leaf
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -546,6 +551,9 @@ A2A_SOFT_LOSS_THRESHOLDS = [0.0005, 0.002, 0.008]
 A2A_SOFT_CELL = ("ep64", "2m")
 A2A_SOFT_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down")
 A2A_MIX_WEIGHT = 0.75
+# The pooled calibration pass's setting: graded_per_receiver_mix at the mix
+# weight, its loss trace at the report interval.
+A2A_CALIBRATION_POOLED = {"sender_pool_weight": A2A_MIX_WEIGHT, "loss_interval_ns": A2A_REPORT_INTERVAL_NS}
 A2A_GAMMAS = (0.25, 0.5, 1.0)
 A2A_POOL_WEIGHTS = (0.25, 0.5, 0.75)
 # Held-spine exploration. The oracle holds a spine with no exploration
@@ -808,10 +816,21 @@ A2A_SWEEP_PROBE_COMPUTE_NS = {
 # a2a_stage_runs refuses a2a_sweep.
 A2A_SWEEP_COMPUTE_NS = dict(A2A_SWEEP_PROBE_COMPUTE_NS)
 A2A_SWEEP_COMPUTE_MEASURED = False
+# A group on one leaf (EP8) sends nothing up a spine, so it has no loss trace
+# to calibrate and needs no per_receiver entry: its hold arms read
+# A2A_LOSS_THRESHOLDS_PLACEHOLDER, and none of its sends crosses the faulted
+# link. a2a_sweep_calibration runs a2a_calibration's per_receiver pass (the
+# healthy graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds
+# 101-103) on each other (group, size) the sweep adds, at its a2a_sweep
+# compute gap and iterations, so that analyze.py a2a_calibrate merges their
+# loss thresholds into a2a_calibration.json by the gate cells' rule.
+A2A_ONE_LEAF_GROUPS = ("ep8",)
+A2A_SWEEP_CALIBRATION_STAGE = "a2a_sweep_calibration"
+A2A_SWEEP_CALIBRATION_CELLS = tuple(cell for cell in A2A_SWEEP_PROBE_COMPUTE_NS if cell[0] not in A2A_ONE_LEAF_GROUPS)
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
-              A2A_SWEEP_PROBE_STAGE, A2A_SWEEP_STAGE)
+              A2A_SWEEP_PROBE_STAGE, A2A_SWEEP_CALIBRATION_STAGE, A2A_SWEEP_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -1094,10 +1113,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["calibration"]):
             add(A2A_ORACLE, group, size, "healthy", seed)
     elif stage == "a2a_calibration":
-        pooled = {"sender_pool_weight": A2A_MIX_WEIGHT, "loss_interval_ns": A2A_REPORT_INTERVAL_NS}
         for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["calibration"]):
             add("graded_per_connection", group, size, "healthy", seed)
-            add("graded_per_receiver_mix", group, size, "healthy", seed, pooled)
+            add("graded_per_receiver_mix", group, size, "healthy", seed, A2A_CALIBRATION_POOLED)
     elif stage == "a2a_gate":
         for (group, size), seed in itertools.product(A2A_CELLS, A2A_SEEDS["comparison"]):
             arms = [("uniform", None)]
@@ -1152,14 +1170,24 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         for (group, size), compute_ns in A2A_SWEEP_PROBE_COMPUTE_NS.items():
             add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
                 iterations=A2A_SWEEP_ITERATIONS[(group, size)], compute_ns=compute_ns)
-    elif stage == A2A_SWEEP_STAGE:
+    elif stage in (A2A_SWEEP_CALIBRATION_STAGE, A2A_SWEEP_STAGE):
         if not A2A_SWEEP_COMPUTE_MEASURED:
-            raise ValueError("a2a_sweep's compute gaps are provisional: enter the a2a_sweep_probe "
+            raise ValueError(f"{stage}'s compute gaps are provisional: enter the a2a_sweep_probe "
                              "values in A2A_SWEEP_COMPUTE_NS and set A2A_SWEEP_COMPUTE_MEASURED")
         compute = {**A2A_COMPUTE_NS, **A2A_SWEEP_COMPUTE_NS}
         iterations = {**A2A_ITERATIONS, **A2A_SWEEP_ITERATIONS}
+        if stage == A2A_SWEEP_CALIBRATION_STAGE:
+            for (group, size), seed in itertools.product(A2A_SWEEP_CALIBRATION_CELLS, A2A_SEEDS["calibration"]):
+                add("graded_per_receiver_mix", group, size, "healthy", seed, A2A_CALIBRATION_POOLED,
+                    iterations=iterations[(group, size)], compute_ns=compute[(group, size)])
+            return out
         cells = A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER)
         pairs = tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
+        uncalibrated = [a2a_cell_name(group, size) for group, size, _ in pairs
+                        if group not in A2A_ONE_LEAF_GROUPS and not calibrated("per_receiver", group, size)]
+        if uncalibrated:
+            raise ValueError(f"a2a_sweep's hold arms have no calibrated loss thresholds on {uncalibrated}: "
+                             "merge a2a_sweep_calibration into a2a_calibration.json")
         settings = a2a_tail_ack_settings(tuning, A2A_SWEEP_ARMS)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
             for group, size, condition in cells + pairs:
@@ -1196,7 +1224,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
 def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -> dict[str, Any]:
     """The t_ stages' fabric and transport under the all-to-all workload;
     the calibration stages run without this phase's calibration."""
-    if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration"):
+    if run["stage"] in ("a2a_oracle_calibration", "a2a_calibration", A2A_SWEEP_CALIBRATION_STAGE):
         calibration = None
     group, size = run["group"], run["size"]
     document = profile(

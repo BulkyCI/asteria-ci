@@ -30,11 +30,27 @@ TUNING = {
 }
 
 
-# Every stage, a2a_sweep with its compute gaps taken as measured.
+def sweep_calibrated(calibration):
+    """calibration with an empty per_receiver entry for every (group, size)
+    off one leaf that a2a_sweep runs and calibration lacks, as a2a_sweep
+    requires."""
+    cells = profiles.A2A_SWEEP_CELLS + (profiles.A2A_SWEEP_ANCHOR, profiles.A2A_SWEEP_HANDOVER)
+    entries = {f"{group}-{size}": {} for group, size, _ in cells if group not in profiles.A2A_ONE_LEAF_GROUPS}
+    calibration = calibration or {}
+    return {**calibration, "per_receiver": {**entries, **calibration.get("per_receiver", {})}}
+
+
+# Every stage, a2a_sweep_calibration and a2a_sweep with their compute gaps
+# taken as measured, and a2a_sweep with every cell calibrated.
 @mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
 class Stages(unittest.TestCase):
+    def runs(self, stage, calibration, tuning):
+        if stage == "a2a_sweep":
+            calibration = sweep_calibrated(calibration)
+        return profiles.a2a_stage_runs(stage, calibration, tuning)
+
     def counts(self, calibration, tuning):
-        return {s: len(profiles.a2a_stage_runs(s, calibration, tuning)) for s in profiles.A2A_STAGES}
+        return {s: len(self.runs(s, calibration, tuning)) for s in profiles.A2A_STAGES}
 
     def test_counts(self):
         self.assertEqual(
@@ -42,14 +58,14 @@ class Stages(unittest.TestCase):
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
-             "a2a_sweep_probe": 5, "a2a_sweep": 432},
+             "a2a_sweep_probe": 5, "a2a_sweep_calibration": 12, "a2a_sweep": 432},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
-             "a2a_sweep_probe": 5, "a2a_sweep": 432},
+             "a2a_sweep_probe": 5, "a2a_sweep_calibration": 12, "a2a_sweep": 432},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -59,7 +75,7 @@ class Stages(unittest.TestCase):
 
     def test_keys_unique_and_prefixed(self):
         for stage in profiles.A2A_STAGES:
-            runs = profiles.a2a_stage_runs(stage, CALIBRATION, TUNING)
+            runs = self.runs(stage, CALIBRATION, TUNING)
             self.assertEqual(len({r["key"] for r in runs}), len(runs))
             self.assertTrue(all(r["key"].split("-")[0] == stage for r in runs))
 
@@ -157,7 +173,7 @@ class Stages(unittest.TestCase):
 
     def test_pool_hold_propagates_in_the_mix_arm_only(self):
         for stage in profiles.A2A_STAGES:
-            for run_ in profiles.a2a_stage_runs(stage, CALIBRATION, TUNING):
+            for run_ in self.runs(stage, CALIBRATION, TUNING):
                 balancing = profiles.a2a_stage_profile(run_, CALIBRATION)["network"]["load_balancing"]
                 if run_["arm"] == "graded_per_receiver_mix":
                     self.assertIs(balancing["pool_hold_propagates"], True)
@@ -656,12 +672,43 @@ class Sweep(unittest.TestCase):
         self.assertEqual({r["k"] for r in runs if r["group"] == "ep32"}, {31})
 
     def test_refused_until_measured(self):
-        with self.assertRaises(ValueError):
+        for stage in ("a2a_sweep_calibration", "a2a_sweep"):
+            with self.assertRaisesRegex(ValueError, "provisional"):
+                profiles.a2a_stage_runs(stage, sweep_calibrated(self.calibration), self.tuning)
+
+    @mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
+    def test_refused_until_calibrated(self):
+        # The committed file covers the gate's cells, not the four the sweep
+        # adds off one leaf.
+        with self.assertRaisesRegex(ValueError, r"\['ep32-256k', 'ep64-64k', 'ep64-1m', 'ep32-4m'\]"):
             profiles.a2a_stage_runs("a2a_sweep", self.calibration, self.tuning)
+        lacking = sweep_calibrated(self.calibration)
+        del lacking["per_receiver"]["ep16-256k"]
+        with self.assertRaisesRegex(ValueError, r"\['ep16-256k'\]"):
+            profiles.a2a_stage_runs("a2a_sweep", lacking, self.tuning)
+
+    @mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
+    def test_calibration_runs(self):
+        runs = profiles.a2a_stage_runs("a2a_sweep_calibration", self.calibration, self.tuning)
+        # a2a_calibration's per_receiver pass on the 4 cells off one leaf the
+        # sweep adds, by 3 seeds.
+        self.assertEqual(len(runs), 4 * 3)
+        self.assertEqual({(r["group"], r["size"], r["iterations"], r["compute_ns"]) for r in runs},
+                         {("ep32", "256k", 40, 127_000), ("ep64", "64k", 40, 65_000), ("ep64", "1m", 40, 1_036_000),
+                          ("ep32", "4m", 12, 2_039_000)})
+        gate = next(r for r in profiles.a2a_stage_runs("a2a_calibration", self.calibration, self.tuning)
+                    if r["arm"] == "graded_per_receiver_mix" and (r["group"], r["size"], r["seed"]) == ("ep64", "256k", 101))
+        mine = next(r for r in runs if (r["group"], r["size"], r["seed"]) == ("ep64", "64k", 101))
+        self.assertEqual({**mine, "key": None, "stage": None, "size": None, "message_bytes": None, "compute_ns": None},
+                         {**gate, "key": None, "stage": None, "size": None, "message_bytes": None, "compute_ns": None})
+        self.assertEqual(mine["key"], "a2a_sweep_calibration-ep64-64k-healthy-graded_per_receiver_mix-s101")
+        # Both run at the simulator's thresholds, whatever the calibration.
+        self.assertEqual(profiles.a2a_stage_profile(mine, self.calibration)["network"]["load_balancing"],
+                         profiles.a2a_stage_profile(gate, self.calibration)["network"]["load_balancing"])
 
     @mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
     def test_runs(self):
-        runs = profiles.a2a_stage_runs("a2a_sweep", self.calibration, self.tuning)
+        runs = profiles.a2a_stage_runs("a2a_sweep", sweep_calibrated(self.calibration), self.tuning)
         arms = {"reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
                 "reps_tail", "reps_oracle_tail", "uniform_tail"}
         # 14 cells, the anchor and the handover cell, and 8 healthy pairs,
@@ -698,6 +745,11 @@ class Sweep(unittest.TestCase):
         handover = next(r for r in runs if r["condition"] == "rate16g_up")
         document = profiles.a2a_stage_profile(handover, self.calibration)
         self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("rate16g_up"))
+        # EP8 has no per_receiver entry: its hold arms read the placeholder.
+        for r in runs:
+            balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+            if r["group"] == "ep8" and "loss_thresholds" in balancing:
+                self.assertEqual(balancing["loss_thresholds"], profiles.A2A_LOSS_THRESHOLDS_PLACEHOLDER)
 
 
 class SweepProbe(unittest.TestCase):
@@ -1227,6 +1279,26 @@ class A2aCalibrate(unittest.TestCase):
                                            {"gamma": 0.5, "sender_pool_weight": 0.75, "loss_interval_ns": 123240})
         self.assertEqual(balancing["loss_thresholds"], [0.001, 0.002, 0.004])
         self.assertEqual(len(profiles.a2a_stage_runs("a2a_tuning", result, None)), 192)
+
+    def test_sweep_cells_merge_into_the_committed_file(self):
+        here = Path(profiles.__file__).parent
+        committed = json.loads((here / "a2a_calibration.json").read_text())
+        runs = [(run("graded_per_receiver_mix", group, size, "healthy", 101, "a2a_sweep_calibration"),
+                 self.reports(0.03, 0.02), self.losses(50))
+                for group, size in profiles.A2A_SWEEP_CALIBRATION_CELLS]
+        result = self.calibrate(runs, existing=json.loads(json.dumps(committed)))
+        self.assertEqual({k: v for k, v in result.items() if k != "per_receiver"},
+                         {k: v for k, v in committed.items() if k != "per_receiver"})
+        cells = ["ep32-256k", "ep64-64k", "ep64-1m", "ep32-4m"]
+        self.assertEqual(result["per_receiver"], {**committed["per_receiver"],
+                                                  **{c: result["per_receiver"][c] for c in cells}})
+        self.assertNotIn("ep8-256k", result["per_receiver"])
+        self.assertEqual(result["per_receiver"]["ep64-1m"]["loss_thresholds"]["24648"], [0.005, 0.01, 0.02])
+        with mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True):
+            sweep = profiles.a2a_stage_runs("a2a_sweep", result, None)
+        hold = next(r for r in sweep if (r["group"], r["size"], r["arm"]) == ("ep64", "1m", "reps_hold_auto_tail_ack"))
+        balancing = profiles.a2a_stage_profile(hold, result)["network"]["load_balancing"]
+        self.assertEqual(balancing["loss_thresholds"], [0.005, 0.01, 0.02])
 
     def test_one_loss_grades_0(self):
         # A zero p99: (f/4, f/2, f), rounded down so one loss reaches f.

@@ -1262,9 +1262,10 @@ def sweep_probe_markdown(rows: list[dict]) -> str:
 
 
 # Phase 9 calibration: thresholds per scope and (group, size) from the
-# healthy runs of a2a_oracle_calibration and a2a_calibration.
+# healthy runs of a2a_oracle_calibration, a2a_calibration and
+# a2a_sweep_calibration.
 
-A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration")
+A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_sweep_calibration")
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",
