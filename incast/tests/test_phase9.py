@@ -700,6 +700,30 @@ class Sweep(unittest.TestCase):
         self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("rate16g_up"))
 
 
+class SweepProbe(unittest.TestCase):
+    def test_compute_gap(self):
+        runs = [r for r in profiles.a2a_stage_runs("a2a_sweep_probe", None, None) if r["group"] == "ep32"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # EP32 at 256 KiB complete with a median of 388.4 us, the burst
+            # of EP64 at 256 KiB in A2A_COMPUTE_NS; EP32 at 4 MiB incomplete.
+            for r, complete in zip(runs, (True, False)):
+                (root / r["key"]).mkdir()
+                timing = {"complete": complete, "iterations_completed": 40 if complete else 7,
+                          "mean_ns": 390_000, "p50_ns": 388_400, "p99_ns": 400_000, "max_ns": 401_000}
+                (root / r["key"] / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs + [run("uniform", "ep64", "2m", "healthy", 301)]))
+            rows = analyze.a2a_sweep_probe([listing], root, "a2a_sweep_probe")
+        self.assertEqual([(r["size"], r["median_iteration_ns"], r["compute_ns"]) for r in rows],
+                         [("256k", 388_400, profiles.A2A_COMPUTE_NS[("ep64", "256k")]), ("4m", None, None)])
+        self.assertEqual((rows[0]["probe_compute_ns"], rows[0]["iterations_completed"], rows[0]["iterations"]),
+                         (127_000, 40, 40))
+        markdown = analyze.sweep_probe_markdown(rows)
+        self.assertIn("| ep32 | 256k | 40 of 40 | 388.4 | 259000 |", markdown)
+        self.assertIn("| ep32 | 4m | 7 of 12 | - | - |", markdown)
+
+
 class Rs3(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent

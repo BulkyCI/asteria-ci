@@ -311,6 +311,11 @@ jobs:
             cat "results/$stage.md" >> "$GITHUB_STEP_SUMMARY"
           fi
         done
+        if [[ ",${STAGES// /}," == *,a2a_sweep_probe,* ]]; then
+          python3 incast/analyze.py a2a_sweep_probe --runs results/runs.json --out-root results \
+            --markdown results/a2a_sweep_probe.md > results/a2a_sweep_probe.json
+          cat results/a2a_sweep_probe.md >> "$GITHUB_STEP_SUMMARY"
+        fi
         if [[ ",${STAGES// /}," == *,a2a_rs3,* ]]; then
           python3 incast/analyze.py a2a_candidates --runs results/runs.json --out-root results \
             --stage a2a_rs3 --markdown results/a2a_rs3.md > results/a2a_rs3.json

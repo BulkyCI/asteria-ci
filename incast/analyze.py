@@ -18,6 +18,8 @@
                                                      cost and reaction per arm and cell
     analyze.py a2a_cycles --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      cost, detection and re-admission per on- and off-period, per arm
+    analyze.py a2a_sweep_probe --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     median healthy iteration and compute gap per run
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -108,6 +110,13 @@ reaction_ns; None without a trace).
 
 Per arm the table gives each period's per-seed values and their means over
 the seeds that have one.
+
+a2a_sweep_probe reads the healthy runs of a2a_sweep_probe (--stage) and
+gives each its median iteration completion, summary.json's nearest-rank
+p50 as the a2a_probe stage read it, and the compute gap the sweep takes
+from it: two thirds of the median, rounded to a whole microsecond, so that
+the hosts are busy 60 percent of the period. Both are None while the run is
+incomplete.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -1216,6 +1225,42 @@ def cycles_markdown(cells: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# The compute gap of a (group, size) from its healthy probe run.
+
+A2A_COMPUTE_FRACTION = 2 / 3
+
+
+def a2a_sweep_probe(runs_files, out_root: Path, stage: str) -> list[dict]:
+    """Per run of the stage with a summary: its group, size, the compute
+    gap it ran at, the iterations it completed of those it ran, the median
+    iteration completion and the compute gap it gives (see the module
+    docstring)."""
+    out = []
+    for run in _listed_runs(runs_files):
+        path = out_root / run["key"] / "summary.json"
+        if run["stage"] != stage or not path.exists():
+            continue
+        summary = json.loads(path.read_text())
+        stats = iteration_stats(summary)
+        median = stats["iteration_p50_ns"] if (summary.get("all_to_all") or {}).get("complete") else None
+        out.append({"key": run["key"], "group": run["group"], "size": run["size"],
+                    "probe_compute_ns": run["compute_ns"], "iterations": run["iterations"],
+                    "iterations_completed": stats.get("iterations_completed"), "median_iteration_ns": median,
+                    "compute_ns": None if median is None else round(median * A2A_COMPUTE_FRACTION / 1000) * 1000})
+    return out
+
+
+def sweep_probe_markdown(rows: list[dict]) -> str:
+    def value(v) -> str:
+        return "-" if v is None else str(v)
+
+    lines = ["| group | size | iterations completed | median iteration us | compute_ns |", "|---|---|---|---|---|"]
+    for row in rows:
+        lines.append(f"| {row['group']} | {row['size']} | {value(row['iterations_completed'])} of {row['iterations']} "
+                     f"| {_us(row['median_iteration_ns'])} | {value(row['compute_ns'])} |")
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration and a2a_calibration.
 
@@ -1399,11 +1444,11 @@ def main() -> int:
     v.add_argument("--runs", type=Path, required=True)
     v.add_argument("--out-root", type=Path, required=True)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
-                 "a2a_candidates", "a2a_cycles"):
+                 "a2a_candidates", "a2a_cycles", "a2a_sweep_probe"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
-                                             "a2a_cycles") else None)
+                                             "a2a_cycles", "a2a_sweep_probe") else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
             x.add_argument("--into", type=Path)
@@ -1413,8 +1458,8 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name == "a2a_gate_reps":
-            x.add_argument("--stage", default="a2a_gate_reps")
+        if name in ("a2a_gate_reps", "a2a_sweep_probe"):
+            x.add_argument("--stage", default=name)
             x.add_argument("--markdown", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
             x.add_argument("--stage")
@@ -1456,6 +1501,12 @@ def main() -> int:
         if arguments.markdown:
             arguments.markdown.write_text(candidates_markdown(cells))
         print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_sweep_probe":
+        rows = a2a_sweep_probe(arguments.runs, arguments.out_root, arguments.stage)
+        if arguments.markdown:
+            arguments.markdown.write_text(sweep_probe_markdown(rows))
+        print(json.dumps(rows, indent=1))
         return 0
     if arguments.command == "a2a_cycles":
         cells = a2a_cycles(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
