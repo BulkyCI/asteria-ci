@@ -36,11 +36,11 @@ class Runs(unittest.TestCase):
 
 
 class Timing(unittest.TestCase):
-    def timing(self, rows, iterations=3, group=(0, 1)):
+    def timing(self, rows, iterations=3, group=(0, 1), collectives=1):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "collective_events.csv"
             path.write_text(HEADER + "".join(f"{r},,{t},{i},{i},8,{s},{e}\n" for r, t, i, s, e in rows))
-            return summarize.all_to_all_timing(path, iterations, list(group))
+            return summarize.all_to_all_timing(path, iterations, list(group), collectives)
 
     def test_span_over_ranks(self):
         rows = [
@@ -54,6 +54,20 @@ class Timing(unittest.TestCase):
         self.assertEqual(timing["iteration_completion_ns"], {"1": 400, "2": 300, "3": 100})
         self.assertEqual((timing["p50_ns"], timing["p99_ns"], timing["max_ns"]), (300, 400, 400))
         self.assertAlmostEqual(timing["mean_ns"], 800 / 3)
+
+    def test_dispatch_and_combine_share_the_step(self):
+        # Each step's dispatch, then its combine; step 2 lacks rank 1's
+        # combine, as a run stopped after its last dispatch would.
+        rows = [
+            (0, "all_to_all", 1, 100, 200), (1, "all_to_all", 1, 100, 210),
+            (0, "all_to_all", 1, 330, 500), (1, "all_to_all", 1, 330, 520),
+            (0, "all_to_all", 2, 1000, 1100), (1, "all_to_all", 2, 1000, 1110),
+            (0, "all_to_all", 2, 1230, 1400),
+        ]
+        timing = self.timing(rows, 2, collectives=2)
+        self.assertFalse(timing["complete"])
+        self.assertEqual(timing["iteration_completion_ns"], {"1": 420})
+        self.assertTrue(self.timing(rows, 2)["complete"])
 
     def test_missing_rank_is_incomplete(self):
         timing = self.timing([(0, "all_to_all", 1, 0, 10), (1, "all_to_all", 1, 0, 10), (0, "all_to_all", 2, 20, 30)], 2)

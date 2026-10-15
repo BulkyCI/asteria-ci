@@ -471,6 +471,14 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           and their healthy pairs, seeds 301-303
 #   a2a_downlink_4k         the A2A_DOWNLINK_ARMS on the A2A_DOWNLINK_CELLS
 #                           and their healthy pairs, seeds 301-303
+#   a2a_decode_probe_4k     one healthy uniform_tail run, seed 301, of the
+#                           decode cell (A2A_DECODE), at its provisional
+#                           compute gap
+#   a2a_decode_calibration_4k
+#                           a2a_calibration's per_receiver pass on the
+#                           decode cell
+#   a2a_decode_4k           the A2A_ARMS_4K on the A2A_DECODE_CELLS and their
+#                           healthy pair, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -796,9 +804,22 @@ A2A_PAYLOAD_4K = 4096
 # does: 124 MiB per host per iteration, near EP64 at 2 MiB's 126 MiB.
 A2A_RUN_GROUPS: dict[str, Any] = {**A2A_GROUPS, "ep8": {"leaves": [0]}, "ep32": {"leaves": [0, 1, 2, 3]}}
 A2A_RUN_GROUP_SIZES = {**A2A_GROUP_SIZES, "ep8": 8, "ep32": 32}
-A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB}
+A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB, "decode8": 59_264}
 A2A_RUN_ITERATIONS = {**A2A_ITERATIONS, ("ep8", "256k"): 40, ("ep32", "256k"): 40, ("ep64", "64k"): 40,
-                      ("ep64", "1m"): 40, ("ep32", "4m"): 12}
+                      ("ep64", "1m"): 40, ("ep32", "4m"): 12, ("ep64", "decode8"): 58}
+# The decode cell (A2A_DECODE, size decode8): one iteration is a decode layer
+# exchange of EP64 at 8 token copies per pair, a dispatch all-to-all of 59,264
+# B per pair (8 copies of 7,408 B: a 7,168-element FP8 hidden state with its
+# scales and header), expert_compute_ns of expert compute, a combine
+# all-to-all of combine_bytes per pair (8 copies of 14,336 B, the hidden
+# state in BF16), then compute_ns, the rest of the layer, before the next
+# dispatch. Both all-to-alls carry the iteration's step, so its completion
+# runs from the dispatch's first start to the combine's last end. 58
+# iterations: 29 MoE layers by 2 micro-batches, whose exchanges alternate on
+# one stream. Each run of the size carries combine_bytes and
+# expert_compute_ns, written into the workload.
+A2A_DECODE = ("ep64", "decode8")
+A2A_COMBINE = {"decode8": {"combine_bytes": 114_688, "expert_compute_ns": 129_000}}
 # A group on one leaf (EP8) sends nothing up a spine: it has no loss trace to
 # calibrate, its hold arms read A2A_LOSS_THRESHOLDS_PLACEHOLDER, and none of
 # its sends crosses the faulted link.
@@ -822,7 +843,12 @@ A2A_PROBE_4K_COMPUTE_NS = {
 # is taken as measured once the pair is listed in the payload's
 # A2A_PAYLOAD_COMPUTE_MEASURED; until then a2a_stage_runs refuses every stage
 # at the payload that runs the pair, but its probe.
-A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: dict(A2A_PROBE_4K_COMPUTE_NS)}
+# a2a_decode_probe_4k's provisional compute gap of the decode cell, the rest
+# of a 711 us layer exchange period (the period analyze.py a2a_compute_gaps
+# holds) after an estimated 467 us healthy exchange.
+A2A_DECODE_PROBE_STAGE = "a2a_decode_probe_4k"
+A2A_DECODE_PROBE_COMPUTE_NS = {A2A_DECODE: 244_000}
+A2A_PAYLOAD_COMPUTE_NS = {A2A_PAYLOAD_4K: {**A2A_PROBE_4K_COMPUTE_NS, **A2A_DECODE_PROBE_COMPUTE_NS}}
 A2A_PAYLOAD_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {A2A_PAYLOAD_4K: ()}
 # a2a_calibration_4k: a2a_calibration's per_receiver pass (the healthy
 # graded_per_receiver_mix runs at A2A_CALIBRATION_POOLED, seeds 101-103, at the
@@ -875,13 +901,23 @@ A2A_DOWNLINK_CELLS = tuple((group, "256k", condition) for group in ("ep64", "ep1
                            for condition in ("blackhole_down", "halfrate_down"))
 A2A_DOWNLINK_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail", "mrc_hold_auto_tail_ack",
                      "reps_oracle_tail")
+# The decode cell's stages: a2a_decode_calibration_4k, a2a_calibration's
+# per_receiver pass on it, and a2a_decode_4k, the A2A_ARMS_4K under a2a_tail's
+# conditions (loss 1e-3 and 1e-2 up and down, blackhole up) with its healthy
+# pair, seeds 301-303.
+A2A_DECODE_CALIBRATION_STAGE = "a2a_decode_calibration_4k"
+A2A_DECODE_STAGE = "a2a_decode_4k"
+A2A_DECODE_CELLS = tuple(A2A_DECODE + (condition,) for condition in A2A_TAIL_CONDITIONS)
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
-A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS}
-A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS}
-A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K for stage in (*A2A_PROBE_STAGES, *A2A_CALIBRATION_STAGES_4K,
-                                                          A2A_TAIL_ACK_4K_STAGE, A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE)}
+A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROBE_STAGE: A2A_DECODE_PROBE_COMPUTE_NS}
+A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
+                             A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,)}
+A2A_STAGE_PAYLOAD = {stage: A2A_PAYLOAD_4K
+                     for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
+                                   A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
+                                   A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1133,6 +1169,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_TAIL_ACK_4K_STAGE: (tuple(a2a_gate_cells()), A2A_ARMS_4K),
         A2A_SWEEP_STAGE: (A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER), A2A_ARMS_4K),
         A2A_DOWNLINK_STAGE: (A2A_DOWNLINK_CELLS, A2A_DOWNLINK_ARMS),
+        A2A_DECODE_STAGE: (A2A_DECODE_CELLS, A2A_ARMS_4K),
     }[stage]
 
 
@@ -1173,6 +1210,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "seed": seed,
                 **({} if flap is None else {"flap": flap}),
                 **({} if payload is None else {"payload_bytes": payload}),
+                **A2A_COMBINE.get(size, {}),
             }
         )
 
@@ -1312,6 +1350,7 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
         "message_bytes": run["message_bytes"],
         "iterations": run["iterations"],
         "compute_ns": run["compute_ns"],
+        **{key: run[key] for key in ("combine_bytes", "expert_compute_ns") if key in run},
     }
     document["network"]["link_failures"] = a2a_flap(run["flap"]) if "flap" in run else a2a_fault(run["condition"])
     return document

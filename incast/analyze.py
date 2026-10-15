@@ -47,8 +47,8 @@ seeds with a known cost).
 
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
-a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k and
-a2a_sweep_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
+a2a_sweep_4k and a2a_decode_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -121,11 +121,14 @@ Per arm the table gives each period's per-seed values and their means over
 the seeds that have one.
 
 a2a_compute_gaps reads the healthy runs of a probe stage (--stage,
-a2a_probe_4k by default) and gives each its median iteration completion,
-summary.json's nearest-rank p50 as the a2a_probe stage read it, and the
-compute gap the later stages at its payload take from it: two thirds of the
-median, rounded to a whole microsecond, so that the hosts are busy 60
-percent of the period. Both are None while the run is incomplete.
+a2a_probe_4k by default; a2a_decode_probe_4k) and gives each its median
+iteration completion t_h, summary.json's nearest-rank p50 as the a2a_probe
+stage read it, and the compute gap the later stages at its payload take
+from it: two thirds of the median, rounded to a whole microsecond, so that
+the hosts are busy 60 percent of the period; for a decode layer exchange
+(a run with combine_bytes), the rest of the A2A_LAYER_PERIOD_NS period
+after it, rounded up to a whole microsecond. Both are None while the run is
+incomplete.
 
 a2a_sweep reads one stage's runs alone (--stage, a2a_sweep_4k by default;
 a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
@@ -134,8 +137,9 @@ cell:
 * the expected loss evidence on spine 3 of a host of leaf 0 under even
   spraying, from the runs' packet payload (payload_bytes, 1000 B when unset)
   and the system layer's split of each pair's message per iteration into
-  four flows of a quarter of it: n_s_flow, a flow's packets over the 8
-  spines, and n_s_pair, four times it; the loss rate p; m_flow and m_pair,
+  four flows of a quarter of it (and of its combine message, with
+  combine_bytes): n_s_pair, the pair's packets per iteration over the 8
+  spines, and n_s_flow, its mean over the pair's flows; the loss rate p; m_flow and m_pair,
   their losses n_s p; and host_evidence, m_pair times the group's hosts off
   leaf 0, the losses a host expects on the spine per iteration (p, the m
   and host_evidence None under a condition with no uplink loss rate);
@@ -1335,6 +1339,16 @@ def cycles_markdown(cells: list[dict]) -> str:
 # The compute gap of a (group, size) at a payload from its healthy probe run.
 
 A2A_COMPUTE_FRACTION = 2 / 3
+# A decode layer exchange's period, dispatch to next dispatch.
+A2A_LAYER_PERIOD_NS = 711_000
+
+
+def compute_gap(median_ns: float, layer: bool) -> int:
+    """The compute gap from a healthy median iteration completion (see the
+    module docstring); layer for a decode layer exchange."""
+    if layer:
+        return math.ceil((A2A_LAYER_PERIOD_NS - median_ns) / 1000) * 1000
+    return round(median_ns * A2A_COMPUTE_FRACTION / 1000) * 1000
 
 
 def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
@@ -1354,7 +1368,7 @@ def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
                     "payload_bytes": run.get("payload_bytes"),
                     "probe_compute_ns": run["compute_ns"], "iterations": run["iterations"],
                     "iterations_completed": stats.get("iterations_completed"), "median_iteration_ns": median,
-                    "compute_ns": None if median is None else round(median * A2A_COMPUTE_FRACTION / 1000) * 1000})
+                    "compute_ns": None if median is None else compute_gap(median, "combine_bytes" in run)})
     return out
 
 
@@ -1430,8 +1444,9 @@ def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
         arms = cell["arms"]
         off_leaf = shape["k"] + 1 - A2A_HOSTS_PER_LEAF_OF_TRACE
         payload = shape.get("payload_bytes") or A2A_DEFAULT_PAYLOAD_BYTES
-        n_s_flow = math.ceil(shape["message_bytes"] / A2A_FLOWS_PER_PAIR / payload) / SPINES
-        n_s_pair = A2A_FLOWS_PER_PAIR * n_s_flow
+        messages = [shape["message_bytes"]] + ([shape["combine_bytes"]] if "combine_bytes" in shape else [])
+        n_s_pair = sum(A2A_FLOWS_PER_PAIR * math.ceil(m / A2A_FLOWS_PER_PAIR / payload) for m in messages) / SPINES
+        n_s_flow = n_s_pair / (A2A_FLOWS_PER_PAIR * len(messages))
         p = A2A_SWEEP_LOSS_RATES.get(cell["condition"])
         for entry in arms.values():
             entry["cost_ns_range"] = _cost_range(entry)
@@ -1647,10 +1662,11 @@ def downlink_markdown(cells: list[dict]) -> str:
 
 
 # Phase 9 calibration: thresholds per scope and (group, size) from the
-# healthy runs of a2a_oracle_calibration, a2a_calibration and
-# a2a_calibration_4k.
+# healthy runs of a2a_oracle_calibration, a2a_calibration,
+# a2a_calibration_4k and a2a_decode_calibration_4k.
 
-A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k")
+A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k",
+                          "a2a_decode_calibration_4k")
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",

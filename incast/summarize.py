@@ -45,7 +45,10 @@ the group's ranks minus the earliest start_time_ns, and summary.json's
 "all_to_all" holds every iteration's value and their mean, p50, p99 and max,
 and every iteration's start (the earliest start_time_ns).
 The run is complete when every iteration has a row from every rank of the
-group. The windows are taken for leaf 0, where the probe's faulted link is.
+group, two when workload.combine_bytes is set, since the dispatch and the
+combine all-to-all both carry the iteration's training_step and the span
+runs from the dispatch's first start to the combine's last end. The
+windows are taken for leaf 0, where the probe's faulted link is.
 
 When RUN_DIR/ns3/spine_losses.csv exists (the sender loss trace, written
 under spray_policy with loss_thresholds and a sender pool weight above 0),
@@ -205,11 +208,13 @@ def nearest_rank(values: list[int], q: float) -> int:
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
 
 
-def all_to_all_timing(path: Path, iterations: int, group: list[int]) -> dict:
+def all_to_all_timing(path: Path, iterations: int, group: list[int], collectives: int = 1) -> dict:
     """Per-iteration completion of the all-to-all from collective_events.csv:
-    max end over the ranks minus min start over the ranks."""
+    max end over the ranks minus min start over the ranks. An iteration is
+    done once every rank of the group has written collectives all_to_all
+    rows for it."""
     spans: dict[int, list[int]] = {}
-    ranks: dict[int, set[int]] = {}
+    ranks: dict[int, dict[int, int]] = {}
     if path.is_file():
         with path.open() as handle:
             for row in csv.DictReader(handle):
@@ -220,9 +225,11 @@ def all_to_all_timing(path: Path, iterations: int, group: list[int]) -> dict:
                 span = spans.setdefault(step, [start, end])
                 span[0] = min(span[0], start)
                 span[1] = max(span[1], end)
-                ranks.setdefault(step, set()).add(int(row["rank"]))
+                rows = ranks.setdefault(step, {})
+                rows[int(row["rank"])] = rows.get(int(row["rank"]), 0) + 1
     members = set(group)
-    done = [i for i in range(1, iterations + 1) if ranks.get(i) == members]
+    done = [i for i in range(1, iterations + 1)
+            if set(ranks.get(i, {})) == members and min(ranks[i].values()) >= collectives]
     times = [spans[i][1] - spans[i][0] for i in done]
     return {
         "group_size": len(group),
@@ -494,6 +501,7 @@ def main() -> int:
             arguments.run_dir / "telemetry" / "collective_events.csv",
             workload["iterations"],
             all_to_all_group(workload, hosts, hosts_per_leaf),
+            1 + bool(workload.get("combine_bytes")),
         )
         summary = {
             "flows_expected": None,

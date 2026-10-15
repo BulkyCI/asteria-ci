@@ -41,7 +41,7 @@ def calibrated_4k(calibration):
     (group, size) off one leaf that a 4096-byte stage runs and calibration
     lacks, as those stages require."""
     entries = {profiles.a2a_cell_name(group, size, profiles.A2A_PAYLOAD_4K): {}
-               for group, size in profiles.A2A_CALIBRATION_4K_CELLS}
+               for pairs in profiles.A2A_CALIBRATION_STAGES_4K.values() for group, size in pairs}
     calibration = calibration or {}
     return {**calibration, "per_receiver": {**entries, **calibration.get("per_receiver", {})}}
 
@@ -66,7 +66,8 @@ class Stages(unittest.TestCase):
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
-             "a2a_downlink_4k": 90},
+             "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
+             "a2a_decode_4k": 126},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -75,7 +76,8 @@ class Stages(unittest.TestCase):
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
              "a2a_tail_ack_4k": 672, "a2a_sweep_4k": 504,
-             "a2a_downlink_4k": 90},
+             "a2a_downlink_4k": 90, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
+             "a2a_decode_4k": 126},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -946,6 +948,73 @@ class Downlink(unittest.TestCase):
                       "reps_hold_auto_tail_ack_rx beats reps_hold_auto_tail_ack", markdown)
 
 
+class Decode(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
+
+    def test_probe(self):
+        (probe,) = profiles.a2a_stage_runs("a2a_decode_probe_4k", None, None)
+        self.assertEqual(probe["key"], "a2a_decode_probe_4k-ep64-decode8-healthy-uniform_tail-s301")
+        self.assertEqual((probe["message_bytes"], probe["combine_bytes"], probe["expert_compute_ns"],
+                          probe["iterations"], probe["compute_ns"], probe["payload_bytes"]),
+                         (59_264, 114_688, 129_000, 58, 244_000, 4096))
+        workload = profiles.a2a_stage_profile(probe, None)["workload"]
+        self.assertEqual(workload, {"kind": "all_to_all", "group": "all", "message_bytes": 59_264, "iterations": 58,
+                                    "compute_ns": 244_000, "combine_bytes": 114_688, "expert_compute_ns": 129_000})
+        # The training cells' runs carry neither key.
+        for r in profiles.a2a_stage_runs("a2a_probe_4k", None, None):
+            self.assertNotIn("combine_bytes", profiles.a2a_stage_profile(r, None)["workload"])
+
+    def test_refused_until_its_own_probe(self):
+        pairs = tuple(profiles.A2A_PROBE_4K_COMPUTE_NS)
+        with mock.patch.dict(profiles.A2A_PAYLOAD_COMPUTE_MEASURED, {4096: pairs}):
+            for stage in ("a2a_decode_calibration_4k", "a2a_decode_4k"):
+                with self.assertRaisesRegex(ValueError, r"\['ep64-decode8'\] are provisional"):
+                    profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
+        with measured_4k():
+            lacking = json.loads(json.dumps(self.calibration))
+            del lacking["per_receiver"]["ep64-decode8-p4096"]
+            with self.assertRaisesRegex(ValueError, r"\['ep64-decode8-p4096'\]"):
+                profiles.a2a_stage_runs("a2a_decode_4k", lacking, self.tuning)
+
+    @measured_4k()
+    def test_calibration_and_stage(self):
+        calibration = profiles.a2a_stage_runs("a2a_decode_calibration_4k", self.calibration, self.tuning)
+        self.assertEqual([(r["arm"], r["size"], r["condition"], r["seed"]) for r in calibration],
+                         [("graded_per_receiver_mix", "decode8", "healthy", seed) for seed in (101, 102, 103)])
+        self.assertEqual({r["setting"]["sender_pool_weight"] for r in calibration}, {0.75})
+        runs = profiles.a2a_stage_runs("a2a_decode_4k", self.calibration, self.tuning)
+        # 5 conditions and the healthy pair by 7 arms by 3 seeds.
+        self.assertEqual(len(runs), (5 + 1) * 7 * 3)
+        self.assertEqual({r["condition"] for r in runs},
+                         {"loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "blackhole_up", "healthy"})
+        self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
+        self.assertEqual({(r["combine_bytes"], r["expert_compute_ns"], r["iterations"]) for r in runs},
+                         {(114_688, 129_000, 58)})
+
+    @measured_4k()
+    def test_expected_evidence(self):
+        # Per pair per layer, dispatch 4 flows of 4 packets and combine 4 of
+        # 7: 44 packets, 5.5 on each spine.
+        runs = [r for r in profiles.a2a_stage_runs("a2a_decode_4k", self.calibration, self.tuning)
+                if r["arm"] == "uniform_tail" and r["seed"] == 301 and r["condition"] in ("healthy", "loss1e2_up")]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for r in runs:
+                (root / r["key"]).mkdir()
+                completion = 500 if r["condition"] == "healthy" else 600
+                timing = {"complete": True, "iteration_completion_ns": {"1": completion}}
+                (root / r["key"] / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_sweep(analyze.a2a_rows([listing], root, "a2a_decode_4k"), root)
+        self.assertEqual((cell["n_s_pair"], cell["n_s_flow"]), (5.5, 0.6875))
+        self.assertAlmostEqual(cell["m_pair"], 0.055)
+        self.assertAlmostEqual(cell["host_evidence"], 3.08)
+
+
 class ComputeGaps(unittest.TestCase):
     def test_compute_gap(self):
         runs = [r for r in profiles.a2a_stage_runs("a2a_probe_4k", None, None) if r["group"] == "ep32"]
@@ -968,6 +1037,20 @@ class ComputeGaps(unittest.TestCase):
         markdown = analyze.compute_gaps_markdown(rows)
         self.assertIn("| ep32 | 256k | 40 of 40 | 388.4 | 259000 |", markdown)
         self.assertIn("| ep32 | 4m | 7 of 12 | - | - |", markdown)
+
+    def test_decode_period(self):
+        # The rest of the 711 us layer period after t_h, rounded up.
+        (probe,) = profiles.a2a_stage_runs("a2a_decode_probe_4k", None, None)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / probe["key"]).mkdir()
+            timing = {"complete": True, "iterations_completed": 58, "mean_ns": 467_500, "p50_ns": 467_300,
+                      "p99_ns": 480_000, "max_ns": 481_000}
+            (root / probe["key"] / "summary.json").write_text(json.dumps({"all_to_all": timing}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps([probe]))
+            (row,) = analyze.a2a_compute_gaps([listing], root, "a2a_decode_probe_4k")
+        self.assertEqual((row["median_iteration_ns"], row["compute_ns"]), (467_300, 244_000))
 
 
 class SweepCells(unittest.TestCase):
