@@ -39,7 +39,7 @@ seeds with a known cost).
 
 a2a_candidates gives every arm of the runs given (all stages unless --stage;
 the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail, a2a_ackloss,
-a2a_candidates_ack and a2a_tail_ack each so) per cell its per-seed and mean primary and tail cost, and these
+a2a_candidates_ack, a2a_tail_ack and a2a_sweep each so) per cell its per-seed and mean primary and tail cost, and these
 measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to

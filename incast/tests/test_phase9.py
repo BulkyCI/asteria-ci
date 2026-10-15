@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -29,6 +30,8 @@ TUNING = {
 }
 
 
+# Every stage, a2a_sweep with its compute gaps taken as measured.
+@mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
 class Stages(unittest.TestCase):
     def counts(self, calibration, tuning):
         return {s: len(profiles.a2a_stage_runs(s, calibration, tuning)) for s in profiles.A2A_STAGES}
@@ -38,13 +41,15 @@ class Stages(unittest.TestCase):
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
+             "a2a_sweep_probe": 5, "a2a_sweep": 432},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
+             "a2a_sweep_probe": 5, "a2a_sweep": 432},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -68,6 +73,14 @@ class Stages(unittest.TestCase):
                          [{"model": "gray", "rate": "200Gbps", **onset, "leaf": 0, "direction": "up"}])
         self.assertEqual(profiles.a2a_fault("structural"),
                          [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": 3}])
+        self.assertEqual(profiles.a2a_fault("loss3e3_up"),
+                         [{"model": "gray", "error_rate": 3e-3, **onset, "leaf": 0, "direction": "up"}])
+        self.assertEqual(profiles.a2a_fault("loss3e2_up"),
+                         [{"model": "gray", "error_rate": 3e-2, **onset, "leaf": 0, "direction": "up"}])
+        self.assertEqual(profiles.a2a_fault("rate16g_up"),
+                         [{"model": "gray", "rate": "16Gbps", **onset, "leaf": 0, "direction": "up"}])
+        with self.assertRaises(ValueError):
+            profiles.a2a_fault("rate16g_down")
 
     def test_profiles(self):
         runs = {r["key"]: r for r in profiles.a2a_stage_runs("a2a_gate", CALIBRATION, None)}
@@ -617,6 +630,74 @@ class TailAck(unittest.TestCase):
             self.assertEqual(settings[arm], {**tail[arm], "tail_loss_rtts": 4})
         for setting in settings.values():
             self.assertEqual({k: setting[k] for k in transport}, transport)
+
+
+class Sweep(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_probe(self):
+        runs = profiles.a2a_stage_runs("a2a_sweep_probe", self.calibration, self.tuning)
+        self.assertEqual([(r["group"], r["size"], r["iterations"], r["compute_ns"]) for r in runs],
+                         [("ep8", "256k", 40, 29_000), ("ep32", "256k", 40, 127_000), ("ep64", "64k", 40, 65_000),
+                          ("ep64", "1m", 40, 1_036_000), ("ep32", "4m", 12, 2_039_000)])
+        self.assertEqual({(r["arm"], r["condition"], r["seed"]) for r in runs}, {("uniform_tail", "healthy", 301)})
+        self.assertEqual(runs[0]["key"], "a2a_sweep_probe-ep8-256k-healthy-uniform_tail-s301")
+        documents = {(r["group"], r["size"]): profiles.a2a_stage_profile(r, self.calibration) for r in runs}
+        self.assertEqual(documents[("ep8", "256k")]["workload"]["group"], {"leaves": [0]})
+        self.assertEqual(documents[("ep32", "4m")]["workload"],
+                         {"kind": "all_to_all", "group": {"leaves": [0, 1, 2, 3]}, "message_bytes": 4 * 1024 * 1024,
+                          "iterations": 12, "compute_ns": 2_039_000})
+        self.assertEqual(documents[("ep32", "4m")]["steps"], 12)
+        self.assertEqual(documents[("ep64", "64k")]["network"]["load_balancing"],
+                         {"mode": "spray_uniform", "path_seq": True, "tail_recovery": True, "tail_loss_rtts": 4})
+        self.assertEqual({r["k"] for r in runs if r["group"] == "ep32"}, {31})
+
+    def test_refused_until_measured(self):
+        with self.assertRaises(ValueError):
+            profiles.a2a_stage_runs("a2a_sweep", self.calibration, self.tuning)
+
+    @mock.patch.object(profiles, "A2A_SWEEP_COMPUTE_MEASURED", True)
+    def test_runs(self):
+        runs = profiles.a2a_stage_runs("a2a_sweep", self.calibration, self.tuning)
+        arms = {"reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                "reps_tail", "reps_oracle_tail", "uniform_tail"}
+        # 14 cells, the anchor and the handover cell, and 8 healthy pairs,
+        # by 6 arms by 3 seeds.
+        self.assertEqual(len(runs), (14 + 1 + 1 + 8) * 6 * 3)
+        self.assertEqual({r["arm"] for r in runs}, arms)
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual(len({r["key"] for r in runs}), len(runs))
+        faulted = {(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"}
+        self.assertEqual(faulted, {
+            ("ep8", "256k", "loss1e2_up"), ("ep16", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
+            ("ep64", "256k", "loss1e2_up"), ("ep64", "64k", "loss1e2_up"), ("ep64", "1m", "loss1e2_up"),
+            ("ep64", "2m", "loss1e2_up"), ("ep64", "256k", "loss1e3_up"), ("ep64", "256k", "loss3e3_up"),
+            ("ep64", "256k", "loss3e2_up"), ("ep64", "64k", "loss1e3_up"), ("ep64", "64k", "loss3e2_up"),
+            ("ep64", "2m", "loss1e3_up"), ("ep64", "2m", "loss3e2_up"),
+            ("ep32", "4m", "loss3e2_up"), ("ep64", "256k", "rate16g_up")})
+        self.assertEqual({(r["group"], r["size"]) for r in runs if r["condition"] == "healthy"},
+                         {(g, s) for g, s, _ in faulted})
+        timing = {(r["group"], r["size"]): (r["iterations"], r["compute_ns"]) for r in runs}
+        self.assertEqual(timing, {
+            ("ep8", "256k"): (40, 29_000), ("ep16", "256k"): (40, 62_000), ("ep32", "256k"): (40, 127_000),
+            ("ep64", "256k"): (40, 259_000), ("ep64", "64k"): (40, 65_000), ("ep64", "1m"): (40, 1_036_000),
+            ("ep64", "2m"): (12, 2_070_000), ("ep32", "4m"): (12, 2_039_000)})
+        settings = profiles.a2a_tail_ack_settings(self.tuning, tuple(arms))
+        for r in runs:
+            self.assertEqual(r["setting"], settings[r["arm"]])
+        # A run of a cell the gate also has is the a2a_tail_ack run of it,
+        # but for the stage.
+        theirs = {r["key"].split("-", 1)[1]: r for r in profiles.a2a_stage_runs("a2a_tail_ack", self.calibration,
+                                                                             self.tuning)}
+        mine = next(r for r in runs if r["key"] == "a2a_sweep-ep64-2m-loss1e2_up-reps_hold_leaf_tail_ack-s302")
+        self.assertEqual({**mine, "key": None, "stage": None},
+                         {**theirs[mine["key"].split("-", 1)[1]], "key": None, "stage": None})
+        handover = next(r for r in runs if r["condition"] == "rate16g_up")
+        document = profiles.a2a_stage_profile(handover, self.calibration)
+        self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("rate16g_up"))
 
 
 class Rs3(unittest.TestCase):

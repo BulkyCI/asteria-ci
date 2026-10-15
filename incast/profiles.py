@@ -453,6 +453,13 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           the gate and their healthy pairs, seeds 301-303
 #   a2a_tail_ack            the A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of
 #                           the gate and their healthy pairs, seeds 301-303
+#   a2a_sweep_probe         one healthy uniform_tail run, seed 301, per
+#                           (group, size) the sweep adds, at its provisional
+#                           compute gap (A2A_SWEEP_PROBE_COMPUTE_NS)
+#   a2a_sweep               the A2A_SWEEP_ARMS on the A2A_SWEEP_CELLS, the
+#                           A2A_SWEEP_ANCHOR and the A2A_SWEEP_HANDOVER cell
+#                           and their healthy pairs, seeds 301-303; refused
+#                           until A2A_SWEEP_COMPUTE_NS holds the probe's gaps
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -514,6 +521,12 @@ A2A_FAULTS = (
     "loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down",
     "blackhole_up", "halfrate_up", "structural",
 )
+# A condition <kind>_<direction>: the error rate of each loss kind, and the
+# rate of each lower-rate kind (up only). The gate's are loss1e3, loss1e2 and
+# halfrate; the sweep adds loss3e3, loss3e2 and rate16g, 16 Gbps, four
+# percent of the link's rate.
+A2A_LOSS_RATES = {"loss1e3": 1e-3, "loss3e3": 3e-3, "loss1e2": 1e-2, "loss3e2": 3e-2}
+A2A_LINK_RATES = {"halfrate": "200Gbps", "rate16g": "16Gbps"}
 # The tuning cell, <group>-<size>-<condition>. P17 picked (b) or (a) on
 # EP64 at 2 MiB, but the oracle-headroom gate dropped every EP64 2 MiB loss
 # cell (the oracle, holding a spine without exploration for a 3 ms
@@ -742,9 +755,63 @@ A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack",
 # Every arm that adds transport keys (tail recovery, ack_loss_rtts) to a base
 # arm, and that base arm.
 A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS}
+# a2a_sweep: one gray loss on leaf 0's uplink to spine 3, from the onset to
+# the end of the run, swept over three axes through EP64 at 256 KiB and 1e-2:
+# the group at 256 KiB and 1e-2 (EP8, whose all-to-all stays on leaf 0 and
+# crosses no spine, then EP16, EP32 and EP64, 0, 8, 24 and 56 peers of a leaf
+# 0 host off its leaf), the size at EP64 and 1e-2 (64 KiB, 256 KiB, 1 MiB and
+# 2 MiB per pair), the loss rate at EP64 and 256 KiB (1e-3, 3e-3, 1e-2 and
+# 3e-2), and the four corners of the size by loss plane at EP64
+# (A2A_SWEEP_CELLS). Two cells besides: A2A_SWEEP_ANCHOR, EP32 at 4 MiB and
+# 3e-2, where a flow expects more than three losses on the spine; and
+# A2A_SWEEP_HANDOVER, EP64 at 256 KiB with the same uplink at 16 Gbps and no
+# loss, a link degraded to a few percent of its rate rather than lossy, on
+# EP64 at 256 KiB's healthy pairs. Every cell runs the A2A_SWEEP_ARMS, each
+# with its a2a_tail_ack setting, with healthy pairs, seeds 301-303, at 40
+# iterations, 12 for EP64 at 2 MiB (as the gate) and for EP32 at 4 MiB (124
+# MiB per host per iteration, near EP64 at 2 MiB's 126 MiB). The groups and
+# sizes the sweep adds are in A2A_RUN_GROUPS and A2A_RUN_SIZES, not in
+# A2A_GROUPS and A2A_SIZES, so the earlier stages' cells stay as they are.
+A2A_SWEEP_STAGE = "a2a_sweep"
+A2A_SWEEP_PROBE_STAGE = "a2a_sweep_probe"
+A2A_RUN_GROUPS: dict[str, Any] = {**A2A_GROUPS, "ep8": {"leaves": [0]}, "ep32": {"leaves": [0, 1, 2, 3]}}
+A2A_RUN_GROUP_SIZES = {**A2A_GROUP_SIZES, "ep8": 8, "ep32": 32}
+A2A_RUN_SIZES = {**A2A_SIZES, "64k": 64 * 1024, "1m": MIB, "4m": 4 * MIB}
+A2A_SWEEP_CELLS = (
+    ("ep8", "256k", "loss1e2_up"), ("ep16", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
+    ("ep64", "256k", "loss1e2_up"), ("ep64", "64k", "loss1e2_up"), ("ep64", "1m", "loss1e2_up"),
+    ("ep64", "2m", "loss1e2_up"), ("ep64", "256k", "loss1e3_up"), ("ep64", "256k", "loss3e3_up"),
+    ("ep64", "256k", "loss3e2_up"), ("ep64", "64k", "loss1e3_up"), ("ep64", "64k", "loss3e2_up"),
+    ("ep64", "2m", "loss1e3_up"), ("ep64", "2m", "loss3e2_up"),
+)
+A2A_SWEEP_ANCHOR = ("ep32", "4m", "loss3e2_up")
+A2A_SWEEP_HANDOVER = ("ep64", "256k", "rate16g_up")
+A2A_SWEEP_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                  "reps_tail", "reps_oracle_tail", "uniform_tail")
+# Iterations per (group, size) the sweep adds; the others are A2A_ITERATIONS.
+A2A_SWEEP_ITERATIONS = {("ep8", "256k"): 40, ("ep32", "256k"): 40, ("ep64", "64k"): 40, ("ep64", "1m"): 40,
+                        ("ep32", "4m"): 12}
+# The compute gap of a2a_sweep_probe's run of each (group, size) the sweep
+# adds, provisional: A2A_COMPUTE_NS's rule, two thirds of 1.176 times the
+# line-rate burst, rounded to a whole microsecond.
+A2A_SWEEP_PROBE_COMPUTE_NS = {
+    ("ep8", "256k"): 29_000,  # burst 1.176 x 36.7 us = 43.2 us
+    ("ep32", "256k"): 127_000,  # 1.176 x 162.5 us = 191.1 us
+    ("ep64", "64k"): 65_000,  # 1.176 x 82.6 us = 97.1 us
+    ("ep64", "1m"): 1_036_000,  # 1.176 x 1.321 ms = 1.554 ms
+    ("ep32", "4m"): 2_039_000,  # 1.176 x 2.601 ms = 3.058 ms
+}
+# a2a_sweep's compute gap for the same pairs: two thirds of the median
+# iteration completion of the pair's a2a_sweep_probe run, rounded to a whole
+# microsecond, as analyze.py a2a_sweep_probe prints it. Until those values
+# replace the provisional ones below and A2A_SWEEP_COMPUTE_MEASURED is True,
+# a2a_stage_runs refuses a2a_sweep.
+A2A_SWEEP_COMPUTE_NS = dict(A2A_SWEEP_PROBE_COMPUTE_NS)
+A2A_SWEEP_COMPUTE_MEASURED = False
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
-              A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE)
+              A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
+              A2A_SWEEP_PROBE_STAGE, A2A_SWEEP_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -763,10 +830,11 @@ def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
 
 
 def a2a_fault(condition: str) -> list[dict[str, Any]]:
-    """The link_failures of a condition: loss and half rate in one direction
-    of one link (up: leaf 0 to spine 3; down: spine 3 to leaf 1), the
-    blackhole silent on leaf 0's uplink, and the structural asymmetry the
-    spine-wide rate form from t = 0 with no duration."""
+    """The link_failures of a condition: loss (A2A_LOSS_RATES) in one
+    direction of one link (up: leaf 0 to spine 3; down: spine 3 to leaf 1), a
+    lower rate (A2A_LINK_RATES) and the blackhole silent on leaf 0's uplink,
+    and the structural asymmetry the spine-wide rate form from t = 0 with no
+    duration."""
     if condition == "healthy":
         return []
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
@@ -774,12 +842,12 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
         return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
     kind, direction = condition.split("_")
     link = {"leaf": 0 if direction == "up" else 1, "direction": direction}
-    if kind in ("loss1e3", "loss1e2"):
-        model = {"model": "gray", "error_rate": 1e-3 if kind == "loss1e3" else 1e-2}
+    if kind in A2A_LOSS_RATES:
+        model = {"model": "gray", "error_rate": A2A_LOSS_RATES[kind]}
     elif kind == "blackhole" and direction == "up":
         model = {"model": "silent"}
-    elif kind == "halfrate" and direction == "up":
-        model = {"model": "gray", "rate": "200Gbps"}
+    elif kind in A2A_LINK_RATES and direction == "up":
+        model = {"model": "gray", "rate": A2A_LINK_RATES[kind]}
     else:
         raise ValueError(f"unknown condition {condition}")
     return [{**model, **onset, **link}]
@@ -998,7 +1066,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
     """Every run of a Phase 9 stage."""
     out: list[dict[str, Any]] = []
 
-    def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None):
+    def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None,
+            compute_ns=None):
         label = arm if not label_setting else f"{arm}-{setting_name(setting)}"
         out.append(
             {
@@ -1006,12 +1075,12 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 "stage": stage,
                 "arm": arm,
                 "setting": setting,
-                "k": A2A_GROUP_SIZES[group] - 1,
+                "k": A2A_RUN_GROUP_SIZES[group] - 1,
                 "group": group,
                 "size": size,
-                "message_bytes": A2A_SIZES[size],
+                "message_bytes": A2A_RUN_SIZES[size],
                 "condition": condition,
-                "compute_ns": A2A_COMPUTE_NS[(group, size)],
+                "compute_ns": compute_ns or A2A_COMPUTE_NS[(group, size)],
                 "iterations": iterations or A2A_ITERATIONS[(group, size)],
                 "seed": seed,
                 **({} if flap is None else {"flap": flap}),
@@ -1078,6 +1147,24 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
+    elif stage == A2A_SWEEP_PROBE_STAGE:
+        setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
+        for (group, size), compute_ns in A2A_SWEEP_PROBE_COMPUTE_NS.items():
+            add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
+                iterations=A2A_SWEEP_ITERATIONS[(group, size)], compute_ns=compute_ns)
+    elif stage == A2A_SWEEP_STAGE:
+        if not A2A_SWEEP_COMPUTE_MEASURED:
+            raise ValueError("a2a_sweep's compute gaps are provisional: enter the a2a_sweep_probe "
+                             "values in A2A_SWEEP_COMPUTE_NS and set A2A_SWEEP_COMPUTE_MEASURED")
+        compute = {**A2A_COMPUTE_NS, **A2A_SWEEP_COMPUTE_NS}
+        iterations = {**A2A_ITERATIONS, **A2A_SWEEP_ITERATIONS}
+        cells = A2A_SWEEP_CELLS + (A2A_SWEEP_ANCHOR, A2A_SWEEP_HANDOVER)
+        pairs = tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
+        settings = a2a_tail_ack_settings(tuning, A2A_SWEEP_ARMS)
+        for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
+            for group, size, condition in cells + pairs:
+                add(arm, group, size, condition, seed, setting, iterations=iterations[(group, size)],
+                    compute_ns=compute[(group, size)])
     elif stage == A2A_RS3_STAGE:
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
             for group, size in A2A_RS3_CELLS:
@@ -1119,7 +1206,7 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
     document["steps"] = run["iterations"]
     document["workload"] = {
         "kind": "all_to_all",
-        "group": A2A_GROUPS[group],
+        "group": A2A_RUN_GROUPS[group],
         "message_bytes": run["message_bytes"],
         "iterations": run["iterations"],
         "compute_ns": run["compute_ns"],
