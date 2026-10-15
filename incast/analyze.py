@@ -21,7 +21,7 @@
                                                      cost, detection and re-admission per on- and off-period, per arm
     analyze.py a2a_compute_gaps --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      median healthy iteration and compute gap per run
-    analyze.py a2a_sweep --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+    analyze.py a2a_sweep --runs RUNS.json... --out-root DIR [--stage S] [--shared-root DIR] [--markdown FILE]
                                                      loss evidence and the hold arms' recovered fraction per cell
     analyze.py a2a_downlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      a2a_candidates with both ends' holds and tail counts per spine
@@ -134,7 +134,11 @@ incomplete.
 
 a2a_sweep reads one stage's runs alone (--stage, a2a_sweep_4k by default;
 a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
-cell:
+cell. A stage that takes some of its cells' runs from another
+(profiles.py A2A_SHARED_4K: a2a_sweep_4k from a2a_tail_ack_4k) reads them
+from that stage's out root (--shared-root: the directory a collect job
+tabulates, runs.json beside the run directories), those of the cells and
+healthy pairs both read only (profiles.py a2a_shared_4k). Per cell:
 
 * the expected loss evidence on spine 3 of a host of leaf 0 under even
   spraying, from the runs' fixture: its payload_bytes (1000 B, the
@@ -1449,14 +1453,33 @@ def _versus(arms: dict, a: str, b: str) -> str | None:
     return verdict(arms[a]["cost_ns"], arms[b]["cost_ns"], a, b)
 
 
-def a2a_sweep(rows: list[dict], out_root: Path) -> list[dict]:
+def a2a_shared_rows(stage: str, shared_root: Path) -> list[dict]:
+    """The runs a stage takes from the one profiles.py a2a_shared_4k names,
+    on the cells and healthy pairs both read, from that stage's out root,
+    as a2a_rows gives them."""
+    import profiles
+
+    source, cells = profiles.a2a_shared_4k(stage)
+    if source is None:
+        raise ValueError(f"{stage} runs every cell it reads")
+    return [row for row in a2a_rows([shared_root / "runs.json"], shared_root, source)
+            if (row["group"], row["size"], row["condition"]) in cells]
+
+
+def a2a_sweep(rows: list[dict], out_root: Path, shared_root: Path | None = None) -> list[dict]:
     """a2a_cost_cells against uniform_tail, with each cell's expected
     evidence, the realized losses, R, the gaps and the control (see the
-    module docstring)."""
+    module docstring); with shared_root, over the rows and the runs their
+    stage takes from that out root (a2a_shared_rows)."""
+    directories = {row["key"]: out_root / row["key"] for row in rows}
+    if shared_root is not None:
+        shared = [r for stage in sorted({row["stage"] for row in rows}) for r in a2a_shared_rows(stage, shared_root)]
+        directories.update((row["key"], shared_root / row["key"]) for row in shared)
+        rows = rows + shared
     lost = {}
     for row in rows:
         if row["condition"] != "healthy":
-            count = spine_lost(out_root / row["key"], row["condition"])
+            count = spine_lost(directories[row["key"]], row["condition"])
             lost[row["key"]] = (None if count is None
                                 else count / A2A_HOSTS_PER_LEAF_OF_TRACE / row["iterations"])
     shapes = {(r["group"], r["size"], _fixture_key(r)): r for r in rows}
@@ -2008,6 +2031,8 @@ def main() -> int:
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
+        if name == "a2a_sweep":
+            x.add_argument("--shared-root", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
             x.add_argument("--stage")
             x.add_argument("--markdown", type=Path)
@@ -2062,7 +2087,8 @@ def main() -> int:
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep":
-        cells = a2a_sweep(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        cells = a2a_sweep(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root,
+                          arguments.shared_root)
         if arguments.markdown:
             arguments.markdown.write_text(sweep_markdown(cells))
         print(json.dumps(cells, indent=1))

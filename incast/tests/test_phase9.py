@@ -65,7 +65,7 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432,
+             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
@@ -76,7 +76,7 @@ class Stages(unittest.TestCase):
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
              "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480,
              "a2a_probe_4k": 9, "a2a_calibration_4k": 24,
-             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 432,
+             "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
@@ -816,22 +816,23 @@ class Payload4k(unittest.TestCase):
     def test_sweep(self):
         runs = profiles.a2a_stage_runs("a2a_sweep_4k", calibrated_4k(self.calibration), self.tuning)
         # 14 cells, the anchor and the handover cell, and 8 healthy pairs,
-        # by 6 arms by 3 seeds.
-        self.assertEqual(len(runs), (14 + 1 + 1 + 8) * 6 * 3)
+        # but the 5 cells and 3 healthy pairs a2a_tail_ack_4k runs, by 6
+        # arms by 3 seeds.
+        self.assertEqual(len(runs), (14 + 1 + 1 + 8 - 5 - 3) * 6 * 3)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_ARMS_4K))
         self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
         self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
         self.assertEqual(len({r["key"] for r in runs}), len(runs))
         faulted = {(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"}
         self.assertEqual(faulted, {
-            ("ep8", "256k", "loss1e2_up"), ("ep16", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
-            ("ep64", "256k", "loss1e2_up"), ("ep64", "64k", "loss1e2_up"), ("ep64", "1m", "loss1e2_up"),
-            ("ep64", "2m", "loss1e2_up"), ("ep64", "256k", "loss1e3_up"), ("ep64", "256k", "loss3e3_up"),
+            ("ep8", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
+            ("ep64", "64k", "loss1e2_up"), ("ep64", "1m", "loss1e2_up"),
+            ("ep64", "256k", "loss3e3_up"),
             ("ep64", "256k", "loss3e2_up"), ("ep64", "64k", "loss1e3_up"), ("ep64", "64k", "loss3e2_up"),
-            ("ep64", "2m", "loss1e3_up"), ("ep64", "2m", "loss3e2_up"),
+            ("ep64", "2m", "loss3e2_up"),
             ("ep32", "4m", "loss3e2_up"), ("ep64", "256k", "rate16g_up")})
         self.assertEqual({(r["group"], r["size"]) for r in runs if r["condition"] == "healthy"},
-                         {(g, s) for g, s, _ in faulted})
+                         {("ep8", "256k"), ("ep32", "256k"), ("ep64", "64k"), ("ep64", "1m"), ("ep32", "4m")})
         timing = {(r["group"], r["size"]): (r["iterations"], r["compute_ns"]) for r in runs}
         self.assertEqual(timing, {pair: (profiles.A2A_RUN_ITERATIONS[pair], profiles.A2A_PAYLOAD_COMPUTE_NS[4096][pair])
                                   for pair in timing})
@@ -839,13 +840,24 @@ class Payload4k(unittest.TestCase):
         settings = profiles.a2a_tail_ack_settings(self.tuning, profiles.A2A_ARMS_4K)
         for r in runs:
             self.assertEqual(r["setting"], settings[r["arm"]])
-        # A run of a cell a2a_tail_ack_4k also has is that run, but for the
-        # stage.
+        # The runs the stage leaves to a2a_tail_ack_4k are a2a_tail_ack_4k's
+        # runs, but for the stage.
+        source, shared = profiles.a2a_shared_4k("a2a_sweep_4k")
+        self.assertEqual(source, "a2a_tail_ack_4k")
+        self.assertEqual(set(shared), {
+            ("ep16", "256k", "loss1e2_up"), ("ep64", "256k", "loss1e2_up"), ("ep64", "2m", "loss1e2_up"),
+            ("ep64", "256k", "loss1e3_up"), ("ep64", "2m", "loss1e3_up"),
+            ("ep16", "256k", "healthy"), ("ep64", "256k", "healthy"), ("ep64", "2m", "healthy")})
         theirs = {r["key"].split("-", 1)[1]: r
                   for r in profiles.a2a_stage_runs("a2a_tail_ack_4k", calibrated_4k(self.calibration), self.tuning)}
-        mine = next(r for r in runs if r["key"] == "a2a_sweep_4k-ep64-2m-loss1e2_up-reps_hold_leaf_tail_ack-s302")
-        self.assertEqual({**mine, "key": None, "stage": None},
-                         {**theirs[mine["key"].split("-", 1)[1]], "key": None, "stage": None})
+        with mock.patch.dict(profiles.A2A_SHARED_4K, clear=True):
+            every = profiles.a2a_stage_runs("a2a_sweep_4k", calibrated_4k(self.calibration), self.tuning)
+        left = [r for r in every if r not in runs]
+        self.assertEqual(len(left), 8 * 6 * 3)
+        for mine in left:
+            self.assertIn((mine["group"], mine["size"], mine["condition"]), shared)
+            self.assertEqual({**mine, "key": None, "stage": None},
+                             {**theirs[mine["key"].split("-", 1)[1]], "key": None, "stage": None})
         handover = next(r for r in runs if r["condition"] == "rate16g_up")
         document = profiles.a2a_stage_profile(handover, self.calibration)
         self.assertEqual(document["network"]["link_failures"], profiles.a2a_fault("rate16g_up"))
@@ -939,7 +951,7 @@ class Downlink(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r"\['ep16-2m'\] are provisional"):
                 profiles.a2a_stage_runs("a2a_tail_ack_4k", self.calibration, self.tuning)
             self.assertEqual(len(profiles.a2a_stage_runs("a2a_downlink_4k", self.calibration, self.tuning)), 120)
-            self.assertEqual(len(profiles.a2a_stage_runs("a2a_sweep_4k", self.calibration, self.tuning)), 432)
+            self.assertEqual(len(profiles.a2a_stage_runs("a2a_sweep_4k", self.calibration, self.tuning)), 288)
 
     def test_analyzer(self):
         onset = analyze.DEGRADE_AT_NS
@@ -1206,14 +1218,18 @@ class SweepCells(unittest.TestCase):
 
     def cells(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            runs = []
+            # The sweep's cells that a2a_tail_ack_4k runs are in its out root.
+            roots = {stage: Path(directory) / stage for stage in ("a2a_sweep_4k", "a2a_tail_ack_4k")}
+            runs = {stage: [] for stage in roots}
+            _, shared = profiles.a2a_shared_4k("a2a_sweep_4k")
 
-            def write(arm, group, size, condition, seed, cost):
-                r = {**run(arm, group, size, condition, seed, "a2a_sweep_4k"), "k": self.SHAPE[group],
+            def write(arm, group, size, condition, seed, cost, stage=None):
+                stage = stage or ("a2a_tail_ack_4k" if (group, size, condition) in shared else "a2a_sweep_4k")
+                root = roots[stage]
+                r = {**run(arm, group, size, condition, seed, stage), "k": self.SHAPE[group],
                      "message_bytes": 256 * 1024, "iterations": 2,
                      **({} if group == "ep8" else {"fixture": profiles.A2A_FIXTURE_4K})}
-                runs.append(r)
+                runs[stage].append(r)
                 (root / r["key"] / "ns3").mkdir(parents=True)
                 timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + cost, "2": 1000 + cost}}
                 (root / r["key"] / "summary.json").write_text(json.dumps({"all_to_all": timing}))
@@ -1234,16 +1250,25 @@ class SweepCells(unittest.TestCase):
                 for arm, costs in arms.items():
                     for seed, cost in zip((301, 302, 303), costs):
                         write(arm, group, size, condition, seed, cost)
-                        if not any(r["key"] == f"a2a_sweep_4k-{group}-{size}-healthy-{arm}-s{seed}" for r in runs):
+                        if not any(r["key"].endswith(f"-{group}-{size}-healthy-{arm}-s{seed}")
+                                   for listed in runs.values() for r in listed):
                             write(arm, group, size, "healthy", seed, 0)
-            listing = root / "runs.json"
-            listing.write_text(json.dumps(runs))
+            # A cell of a2a_tail_ack_4k the sweep does not read.
+            write("uniform_tail", "ep64", "256k", "blackhole_up", 301, 900, "a2a_tail_ack_4k")
+            for stage, root in roots.items():
+                (root / "runs.json").write_text(json.dumps(runs[stage]))
+            sweep = roots["a2a_sweep_4k"]
+            with self.assertRaisesRegex(ValueError, "a2a_tail_ack_4k runs every cell it reads"):
+                analyze.a2a_shared_rows("a2a_tail_ack_4k", roots["a2a_tail_ack_4k"])
+            rows = analyze.a2a_rows([sweep / "runs.json"], sweep, "a2a_sweep_4k")
             return {(c["group"], c["size"], c["condition"]): c
-                    for c in analyze.a2a_sweep(analyze.a2a_rows([listing], root, "a2a_sweep_4k"), root)}
+                    for c in analyze.a2a_sweep(rows, sweep, roots["a2a_tail_ack_4k"])}
 
     def test_cells(self):
         cells = self.cells()
+        self.assertEqual(set(cells), set(self.COSTS))
         cell = cells[("ep64", "256k", "loss1e2_up")]
+        self.assertEqual({stage for entry in cell["arms"].values() for stage in entry["stages"]}, {"a2a_tail_ack_4k"})
         # One flow of 256 KiB per pair: 64 packets of 4096 B, 8 per spine.
         self.assertEqual((cell["payload_bytes"], cell["flows_per_pair"], cell["n_s_flow"], cell["n_s_pair"], cell["p"]),
                          (4096, 1, 8.0, 8.0, 0.01))
@@ -1274,6 +1299,8 @@ class SweepCells(unittest.TestCase):
         self.assertIsNone(arms["uniform_tail"]["spine_losses_per_host_iteration"])
         self.assertIsNone(cell["control"])
         handover = cells[("ep64", "256k", "rate16g_up")]
+        # Against a2a_tail_ack_4k's healthy runs.
+        self.assertEqual(handover["arms"]["uniform_tail"]["cost_ns_mean"], 50)
         self.assertEqual((handover["n_s_pair"], handover["p"], handover["m_flow"], handover["m_pair"],
                           handover["host_evidence"]), (8.0, None, None, None, None))
         self.assertEqual(handover["ceiling"], dict.fromkeys(handover["ceiling"]))

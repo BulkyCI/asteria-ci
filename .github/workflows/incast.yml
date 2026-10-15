@@ -313,7 +313,10 @@ jobs:
           fi
         done
         # Evidence, R and the hold arms' gaps per cell, for the stages that
-        # run the 4096-byte arms.
+        # run the 4096-byte arms. a2a_sweep_4k's table here lacks the cells
+        # whose runs it takes from a2a_tail_ack_4k, and the costs of those
+        # it pairs with that stage's healthy runs: analyze.py a2a_sweep
+        # --shared-root with the directory that dispatch tabulated adds them.
         for stage in a2a_tail_ack_4k a2a_sweep_4k a2a_decode_4k; do
           if [[ ",${STAGES// /}," == *,$stage,* ]]; then
             python3 incast/analyze.py a2a_sweep --runs results/runs.json --out-root results \

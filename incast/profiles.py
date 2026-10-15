@@ -469,7 +469,8 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           their healthy pairs, seeds 301-303
 #   a2a_sweep_4k            the A2A_ARMS_4K on the A2A_SWEEP_CELLS, the
 #                           A2A_SWEEP_ANCHOR and the A2A_SWEEP_HANDOVER cell
-#                           and their healthy pairs, seeds 301-303
+#                           and their healthy pairs, seeds 301-303, but
+#                           those of a2a_tail_ack_4k (A2A_SHARED_4K)
 #   a2a_downlink_4k         the A2A_DOWNLINK_ARMS on the A2A_DOWNLINK_CELLS
 #                           and their healthy pairs, seeds 301-303
 #   a2a_decode_probe_4k     one healthy uniform_tail run, seed 301, of the
@@ -915,7 +916,8 @@ A2A_TAIL_ACK_4K_STAGE = "a2a_tail_ack_4k"
 # iteration; and A2A_SWEEP_HANDOVER, EP64 at 256 KiB with the same uplink at
 # 16 Gbps and no loss, a link degraded to a few percent of its rate rather
 # than lossy, on EP64 at 256 KiB's healthy pairs. Every cell runs the
-# A2A_ARMS_4K with healthy pairs, seeds 301-303.
+# A2A_ARMS_4K with healthy pairs, seeds 301-303, but those a2a_tail_ack_4k
+# runs (A2A_SHARED_4K).
 A2A_SWEEP_STAGE = "a2a_sweep_4k"
 A2A_SWEEP_CELLS = (
     ("ep8", "256k", "loss1e2_up"), ("ep16", "256k", "loss1e2_up"), ("ep32", "256k", "loss1e2_up"),
@@ -926,6 +928,15 @@ A2A_SWEEP_CELLS = (
 )
 A2A_SWEEP_ANCHOR = ("ep32", "4m", "loss3e2_up")
 A2A_SWEEP_HANDOVER = ("ep64", "256k", "rate16g_up")
+# The stage whose runs a 4096-byte stage reads on the cells and healthy
+# pairs both read, rather than run them again: there the two stages' runs
+# are the same runs but for the stage in the key, as both run the
+# A2A_ARMS_4K on the settled fixture at the same compute gaps, iterations
+# and seeds. a2a_sweep_4k takes a2a_tail_ack_4k's on EP64 at 256 KiB and 2
+# MiB at loss 1e-3 and 1e-2 up and on EP16 at 256 KiB at loss 1e-2 up, and
+# on their healthy pairs (a2a_shared_4k), which analyze.py a2a_sweep reads
+# from a2a_tail_ack_4k's out root (--shared-root).
+A2A_SHARED_4K = {A2A_SWEEP_STAGE: A2A_TAIL_ACK_4K_STAGE}
 # a2a_downlink_4k: the downlink from spine 3 to leaf 1, the down cells' link,
 # silent (blackhole_down) or at half rate (halfrate_down) from the onset, on
 # EP64 and EP16 at 256 KiB, and gray at loss 1e-3 and 1e-2 (loss1e3_down,
@@ -1262,6 +1273,25 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
     }[stage]
 
 
+def a2a_read_cells_4k(stage: str) -> tuple[tuple[str, str, str], ...]:
+    """The (group, size, condition) cells a 4096-byte stage other than a
+    probe or a calibration pass reads: its faulted cells, then their
+    healthy pairs (condition healthy)."""
+    cells, _ = a2a_faulted_4k(stage)
+    return cells + tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
+
+
+def a2a_shared_4k(stage: str) -> tuple[str | None, tuple[tuple[str, str, str], ...]]:
+    """The stage A2A_SHARED_4K names for a 4096-byte stage, and the cells of
+    a2a_read_cells_4k both read, whose runs the stage takes from it rather
+    than runs; (None, ()) for a stage that runs every cell it reads."""
+    source = A2A_SHARED_4K.get(stage)
+    if source is None:
+        return None, ()
+    theirs = set(a2a_read_cells_4k(source))
+    return source, tuple(cell for cell in a2a_read_cells_4k(stage) if cell in theirs)
+
+
 def a2a_admitted_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, str]]:
     """The (group, size, condition) cells a2a_tuning.json admits, every
     cell without it."""
@@ -1389,9 +1419,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
                              "merge the payload's calibration pass into a2a_calibration.json")
         settings = a2a_tail_ack_settings(tuning, arms)
+        _, shared = a2a_shared_4k(stage)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
-            for group, size, condition in cells + tuple((group, size, "healthy") for group, size in pairs):
-                add(arm, group, size, condition, seed, setting)
+            for group, size, condition in a2a_read_cells_4k(stage):
+                if (group, size, condition) not in shared:
+                    add(arm, group, size, condition, seed, setting)
     elif stage == A2A_RS3_STAGE:
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
             for group, size in A2A_RS3_CELLS:
