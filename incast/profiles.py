@@ -451,6 +451,8 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           healthy pairs, seeds 301-303
 #   a2a_candidates_ack      the A2A_CANDIDATES_ACK_ARMS on the 28 cells of
 #                           the gate and their healthy pairs, seeds 301-303
+#   a2a_tail_ack            the A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of
+#                           the gate and their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -675,8 +677,9 @@ A2A_TAIL = {"path_seq": True, "tail_recovery": True}
 A2A_REPS_SPINE = "reps_spine"
 A2A_TAIL_ARMS = {"uniform_tail": "uniform", "reps_tail": A2A_REPS_SPINE, "reps_hold_auto_tail": "reps_hold_auto",
                  "reps_hold_auto_tail4": "reps_hold_auto"}
+A2A_TAIL_LOSS_RTTS = 4
 # The keys an a2a_tail arm adds to A2A_TAIL.
-A2A_TAIL_KEYS = {"reps_hold_auto_tail4": {"tail_loss_rtts": 4}}
+A2A_TAIL_KEYS = {"reps_hold_auto_tail4": {"tail_loss_rtts": A2A_TAIL_LOSS_RTTS}}
 A2A_TAIL_CONDITIONS = ("loss1e3_up", "loss1e2_up", "loss1e3_down", "loss1e2_down", "blackhole_up")
 # a2a_ackloss's arms: ack_loss_rtts (A2A_ACKLOSS: load_balancing
 # ack_loss_rtts, written as SPRAY_ACK_LOSS_RTTS) on a base arm:
@@ -700,9 +703,48 @@ A2A_CANDIDATES_ACK_ARMS = {"reps_hold_auto_ack": "reps_hold_auto", "reps_flow_ho
                            "mrc_hold_auto_ack": "mrc_hold_auto"}
 # Every ack_loss_rtts arm and its base arm.
 A2A_ACK_ARMS = {**A2A_ACKLOSS_ARMS, **A2A_CANDIDATES_ACK_ARMS}
+# The arms of a2a_tail_ack and the stages after it, which all run one
+# transport: A2A_TAIL with tail_loss_rtts A2A_TAIL_LOSS_RTTS, as
+# reps_hold_auto_tail4 does. The loss-hold arms add A2A_ACKLOSS to their base
+# arm's a2a_candidates setting: reps_hold_auto, reps_flow_hold and
+# mrc_hold_auto, and reps_hold_leaf_tail_ack, reps_hold_auto's setting with
+# hold_scope leaf (a hold per destination leaf and spine, never widened to
+# every destination). The baselines add the transport alone to reps_spine
+# (reps_tail), reps_oracle (reps_oracle_tail) and the uniform draw
+# (uniform_tail), so reps_tail and uniform_tail are a2a_tail's arms of those
+# names with tail_loss_rtts set. tail_loss_rtts only delays the path
+# selector's report of a loss a tail repair request declares, which the
+# uniform draw and REPS do not read, and lengthens the time in which a repair
+# of that send is moved off the declared send's path, so the baselines carry
+# it too and every arm's repairs follow the same rule. a2a_tail_ack runs
+# A2A_TAIL_ACK_STAGE_ARMS on the 28 cells of the gate and their healthy
+# pairs; mrc_hold_auto_tail_ack runs in no stage yet.
+A2A_TAIL_ACK_STAGE = "a2a_tail_ack"
+A2A_TAIL_ACK_ARMS = {
+    "reps_hold_auto_tail_ack": "reps_hold_auto", "reps_hold_leaf_tail_ack": "reps_hold_auto",
+    "reps_flow_hold_tail_ack": "reps_flow_hold", "mrc_hold_auto_tail_ack": "mrc_hold_auto",
+    "reps_tail": A2A_REPS_SPINE, "reps_oracle_tail": A2A_REPS_ORACLE, "uniform_tail": "uniform",
+}
+# The keys an A2A_TAIL_ACK_ARMS arm adds to A2A_TAIL.
+A2A_TAIL_ACK_TRANSPORT = {"tail_loss_rtts": A2A_TAIL_LOSS_RTTS}
+A2A_TAIL_ACK_HOLD = {**A2A_TAIL_ACK_TRANSPORT, **A2A_ACKLOSS}
+A2A_TAIL_ACK_KEYS = {
+    "reps_hold_auto_tail_ack": A2A_TAIL_ACK_HOLD,
+    "reps_hold_leaf_tail_ack": {**A2A_TAIL_ACK_HOLD, "hold_scope": "leaf"},
+    "reps_flow_hold_tail_ack": A2A_TAIL_ACK_HOLD,
+    "mrc_hold_auto_tail_ack": A2A_TAIL_ACK_HOLD,
+    "reps_tail": A2A_TAIL_ACK_TRANSPORT,
+    "reps_oracle_tail": A2A_TAIL_ACK_TRANSPORT,
+    "uniform_tail": A2A_TAIL_ACK_TRANSPORT,
+}
+A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                           "reps_tail", "uniform_tail")
+# Every arm that adds transport keys (tail recovery, ack_loss_rtts) to a base
+# arm, and that base arm.
+A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
-              A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE)
+              A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE)
 
 
 def a2a_cell_name(group: str, size: str) -> str:
@@ -771,21 +813,18 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
     if arm == A2A_REPS_SPINE:
         return {"mode": "spray_uniform", "selector": "reps_spine"}
-    if arm in A2A_TAIL_ARMS and A2A_TAIL_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
-        # The setting is A2A_TAIL alone.
-        return {**a2a_balancing(A2A_TAIL_ARMS[arm], group, size, calibration, None), **(setting or {})}
-    if arm in A2A_ACK_ARMS and A2A_ACK_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
-        # The setting is A2A_ACKLOSS alone.
-        return {**a2a_balancing(A2A_ACK_ARMS[arm], group, size, calibration, None), **(setting or {})}
+    if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
+        # The setting is the transport keys alone.
+        return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None), **(setting or {})}
     if (arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS
-            or arm in A2A_TAIL_ARMS or arm in A2A_ACK_ARMS):
+            or arm in A2A_TRANSPORT_ARMS):
         # The setting holds the loss interval, the clean sentinels and the
         # sentinel interval (or the trickle release's hold test), the
         # exploration sends, hold_scope where the selector reads it, the
         # receiver's hold where the arm has it, and tail recovery or
         # ack_loss_rtts where the arm has it.
         base = (A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS
-                else A2A_TRICKLE_ARMS.get(arm, A2A_TAIL_ARMS.get(arm, A2A_ACK_ARMS.get(arm, arm))))
+                else A2A_TRICKLE_ARMS.get(arm, A2A_TRANSPORT_ARMS.get(arm, arm)))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size), {})
@@ -905,13 +944,22 @@ def a2a_rs3_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any] 
     return {arm: settings[arm] for arm in A2A_RS3_ARMS}
 
 
-def a2a_tail_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Each a2a_tail arm's setting: A2A_TAIL and the arm's A2A_TAIL_KEYS, on
-    reps_hold_auto's candidate setting for reps_hold_auto_tail and
-    reps_hold_auto_tail4."""
+def a2a_tail_settings(tuning: dict[str, Any] | None, arms: dict[str, str] = A2A_TAIL_ARMS,
+                      keys: dict[str, dict[str, Any]] = A2A_TAIL_KEYS) -> dict[str, dict[str, Any]]:
+    """Each arm's setting (a2a_tail's arms and A2A_TAIL_KEYS unless arms and
+    keys are given): A2A_TAIL and the arm's keys, on its base arm's candidate
+    setting (none for a baseline)."""
     candidates = a2a_candidate_settings(tuning)
-    return {arm: {**candidates.get(base, {}), **A2A_TAIL, **A2A_TAIL_KEYS.get(arm, {})}
-            for arm, base in A2A_TAIL_ARMS.items()}
+    return {arm: {**candidates.get(base, {}), **A2A_TAIL, **keys.get(arm, {})}
+            for arm, base in arms.items()}
+
+
+def a2a_tail_ack_settings(tuning: dict[str, Any] | None,
+                          arms: tuple[str, ...] = A2A_TAIL_ACK_STAGE_ARMS) -> dict[str, dict[str, Any]]:
+    """Each arm's setting (a2a_tail_ack's arms unless arms is given), from
+    A2A_TAIL_ACK_ARMS and A2A_TAIL_ACK_KEYS."""
+    settings = a2a_tail_settings(tuning, A2A_TAIL_ACK_ARMS, A2A_TAIL_ACK_KEYS)
+    return {arm: settings[arm] for arm in arms}
 
 
 def a2a_ackloss_settings(tuning: dict[str, Any] | None,
@@ -1022,8 +1070,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in pairs:
                 add(arm, group, size, "healthy", seed, setting)
-    elif stage == A2A_CANDIDATES_ACK_STAGE:
-        settings = a2a_ackloss_settings(tuning, A2A_CANDIDATES_ACK_ARMS)
+    elif stage in (A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE):
+        settings = (a2a_ackloss_settings(tuning, A2A_CANDIDATES_ACK_ARMS) if stage == A2A_CANDIDATES_ACK_STAGE
+                    else a2a_tail_ack_settings(tuning))
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
             for group, size, condition in a2a_gate_cells():
                 add(arm, group, size, condition, seed, setting)

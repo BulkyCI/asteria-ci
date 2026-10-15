@@ -38,13 +38,13 @@ class Stages(unittest.TestCase):
             self.counts(None, None),
             {"a2a_oracle_calibration": 12, "a2a_gate": 96, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 207,
              "a2a_gate_reps": 192, "a2a_candidates": 384, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
             {"a2a_oracle_calibration": 12, "a2a_gate": 192, "a2a_calibration": 24, "a2a_tuning": 192, "a2a_tuning_mix": 90, "a2a_comparison": 591,
              "a2a_gate_reps": 192, "a2a_candidates": 576, "a2a_receiver": 288, "a2a_rs3": 24,
-             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288},
+             "a2a_tail": 288, "a2a_ackloss": 72, "a2a_candidates_ack": 288, "a2a_tail_ack": 480},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -562,6 +562,62 @@ class CandidatesAck(unittest.TestCase):
         other = profiles.a2a_stage_profile(theirs[0], self.calibration)
         self.assertEqual(profile["name"], mine[0]["key"])
         self.assertEqual({**profile, "name": None}, {**other, "name": None})
+
+class TailAck(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+        self.runs = profiles.a2a_stage_runs("a2a_tail_ack", self.calibration, self.tuning)
+
+    def test_runs(self):
+        # The 28 gate cells and 4 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(self.runs), (28 + 4) * 5 * 3)
+        self.assertEqual({r["arm"] for r in self.runs},
+                         {"reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                          "reps_tail", "uniform_tail"})
+        self.assertEqual({r["seed"] for r in self.runs}, {301, 302, 303})
+        faulted = {(r["group"], r["size"], r["condition"]) for r in self.runs if r["condition"] != "healthy"}
+        self.assertEqual(faulted, set(profiles.a2a_gate_cells()))
+        self.assertEqual({(r["group"], r["size"]) for r in self.runs if r["condition"] == "healthy"},
+                         set(profiles.A2A_CELLS))
+        self.assertEqual(len({r["key"] for r in self.runs}), len(self.runs))
+        self.assertEqual(self.runs, profiles.a2a_stage_runs("a2a_tail_ack", self.calibration, self.tuning))
+        self.assertIn("a2a_tail_ack-ep64-256k-loss1e2_up-reps_hold_leaf_tail_ack-s301", {r["key"] for r in self.runs})
+
+    def test_settings(self):
+        cell = ("ep64", "256k", "loss1e2_up", 301)
+        by_arm = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                  for r in self.runs if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
+        candidates = {r["arm"]: profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                      for r in profiles.a2a_stage_runs("a2a_candidates", self.calibration, self.tuning)
+                      if (r["group"], r["size"], r["condition"], r["seed"]) == cell}
+        transport = {"path_seq": True, "tail_recovery": True, "tail_loss_rtts": 4}
+        hold = {**transport, "ack_loss_rtts": 2}
+        self.assertEqual(by_arm["reps_hold_auto_tail_ack"], {**candidates["reps_hold_auto"], **hold})
+        self.assertEqual(by_arm["reps_hold_leaf_tail_ack"],
+                         {**candidates["reps_hold_auto"], **hold, "hold_scope": "leaf"})
+        self.assertEqual(by_arm["reps_flow_hold_tail_ack"], {**candidates["reps_flow_hold"], **hold})
+        self.assertNotIn("hold_scope", by_arm["reps_flow_hold_tail_ack"])
+        self.assertEqual(by_arm["reps_tail"], {"mode": "spray_uniform", "selector": "reps_spine", **transport})
+        self.assertEqual(by_arm["uniform_tail"], {"mode": "spray_uniform", **transport})
+        # The arms the stage does not run take the same transport.
+        settings = profiles.a2a_tail_ack_settings(self.tuning, tuple(profiles.A2A_TAIL_ACK_ARMS))
+        others = {}
+        for arm in ("reps_oracle_tail", "mrc_hold_auto_tail_ack"):
+            r = {**self.runs[0], "arm": arm, "setting": settings[arm], "group": "ep64", "size": "256k"}
+            others[arm] = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+        self.assertEqual(others["reps_oracle_tail"], {"mode": "spray_uniform", "selector": "reps_oracle",
+                                                      "grade_cost_source": "switch_queue", **transport})
+        self.assertEqual(others["mrc_hold_auto_tail_ack"], {**candidates["mrc_hold_auto"], **hold})
+        # Every arm's transport keys are the same, so the baselines match
+        # a2a_tail's but for tail_loss_rtts.
+        tail = profiles.a2a_tail_settings(self.tuning)
+        for arm in ("reps_tail", "uniform_tail"):
+            self.assertEqual(settings[arm], {**tail[arm], "tail_loss_rtts": 4})
+        for setting in settings.values():
+            self.assertEqual({k: setting[k] for k in transport}, transport)
+
 
 class Rs3(unittest.TestCase):
     def setUp(self):
