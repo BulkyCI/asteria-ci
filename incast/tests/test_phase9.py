@@ -69,7 +69,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150, "a2a_ackroute_fwd_4k": 126},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -81,7 +81,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150, "a2a_ackroute_fwd_4k": 126},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1398,10 +1398,10 @@ class HostLink(unittest.TestCase):
     def test_runs_and_settings(self):
         runs = profiles.a2a_stage_runs("a2a_hostlink_4k", self.calibration, self.tuning)
         conditions = ("hostloss1e2_up", "hostloss1e3_up", "hostloss1e2_down", "hostloss1e3_down")
-        # 8 cells and 2 healthy pairs by 5 arms by 3 seeds.
-        self.assertEqual(len(runs), (8 + 2) * 5 * 3)
+        # 12 cells and 3 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(runs), (12 + 3) * 5 * 3)
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
-                         {(g, s, c) for g, s in (("ep64", "256k"), ("ep64", "decode8"))
+                         {(g, s, c) for g, s in (("ep64", "256k"), ("ep64", "2m"), ("ep64", "decode8"))
                           for c in conditions + ("healthy",)})
         self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
                          ["reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",

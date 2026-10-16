@@ -1064,15 +1064,15 @@ A2A_COPY_DEADLINE = {"copy_expiry": "deadline"}
 # (A2A_FAULT_HOST, the second host of leaf 1, the leaf of the down cells'
 # link), up (host to leaf) or down (leaf to host), the condition named
 # host<kind>_<direction> (a2a_host_fault), its loss per byte as the fixture
-# takes every gray loss. On EP64 at 256 KiB and on the decode cell, each
-# with its healthy pair, seeds 301-303, under the 4096-byte arms but
+# takes every gray loss. On EP64 at 256 KiB and 2 MiB and on the decode
+# cell, each with its healthy pair, seeds 301-303, under the 4096-byte arms but
 # reps_oracle_tail, whose oracle reads the leaf-spine links alone, every
 # answer routed over its data's spine (no ack_route).
 A2A_HOST_PREFIX = "host"
 A2A_FAULT_HOST = 9
 A2A_HOSTLINK_STAGE = "a2a_hostlink_4k"
 A2A_HOSTLINK_CONDITIONS = ("hostloss1e2_up", "hostloss1e3_up", "hostloss1e2_down", "hostloss1e3_down")
-A2A_HOSTLINK_CELLS = tuple((group, size, condition) for group, size in (("ep64", "256k"), A2A_DECODE)
+A2A_HOSTLINK_CELLS = tuple((group, size, condition) for group, size in (("ep64", "256k"), ("ep64", "2m"), A2A_DECODE)
                            for condition in A2A_HOSTLINK_CONDITIONS)
 A2A_HOSTLINK_ARMS = A2A_HOLD_ARMS_4K + ("reps_tail", "uniform_tail")
 # The ring's stages: ar_parity_probe_4k, one healthy uniform_tail run, seed
