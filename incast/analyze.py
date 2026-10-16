@@ -27,7 +27,8 @@
                                                      a2a_candidates with both ends' holds and tail counts per spine
     analyze.py a2a_reaction --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      each end's first hold, the losses before it and the lead
-    analyze.py a2a_ackroute --runs RUNS.json... --out-root DIR [--stage S] [--ack-route R] [--markdown FILE]
+    analyze.py a2a_ackroute --runs RUNS.json... --out-root DIR [--stage S] [--ack-route R]
+                            [--with-root DIR [--with-stage S]] [--markdown FILE]
                                                      a2a_candidates with correct and false sender holds by the
                                                      answers' routing, and the answers lost per spine
     analyze.py a2a_noack --runs RUNS.json... --out-root DIR [--stage S] [--ack-root DIR...] [--markdown FILE]
@@ -58,7 +59,7 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k and a2a_hostlink_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k and a2a_ackroute_fwd_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -249,7 +250,16 @@ Per cell, versus gives the seed-rule verdict on cost of each
 ack_route_oracle arm against the arm it adds the key to, and of
 reps_hold_auto_tail_ack against reps_hold_auto_tail4 and against
 reps_hold_auto_tail_ack_data_spine, the same arm with every answer over its
-data's spine.
+data's spine; of each oracle_hops forward arm of a2a_ackroute_fwd_4k
+against its arm of a2a_ackroute_4k and, under ack_route_oracle, against
+reps_oracle_tail_fwd; and of reps_oracle_tail_fwd_route_oracle against
+reps_hold_auto_tail_ack_data_spine; each where the cell has both arms.
+--with-root adds the runs of another tabulated out root (runs.json beside
+the run directories) of one stage (--with-stage, a2a_ackroute_4k by
+default), each read from its own root and costed against its own healthy
+pair, so that a2a_ackroute_fwd_4k's runs, read with a2a_ackroute_4k's
+dispatch, share its cells; the workflow, which tabulates one dispatch,
+passes none.
 
 a2a_noack reads one stage's runs alone (--stage, a2a_noack_4k by default),
 whose arms are the loss-hold arms of a2a_tail_ack_4k, a2a_sweep_4k and
@@ -1273,15 +1283,29 @@ def early_cost(directory: Path, healthy: Path | None, condition: str) -> float |
     return sum(timing[i][1] - reference[i][1] for i in window)
 
 
+def _run_roots(rows: list[dict], out_root: Path) -> dict[str, Path]:
+    """Each run's out root by key: the out_root a row of another root
+    carries (a2a_root_rows), else out_root."""
+    return {row["key"]: row.get("out_root", out_root) for row in rows}
+
+
+def a2a_root_rows(root: Path, stage: str) -> list[dict]:
+    """One stage's runs in another tabulated out root (runs.json beside the
+    run directories), as a2a_rows gives them, each carrying that root as
+    out_root."""
+    return [{**row, "out_root": root} for row in a2a_rows([root / "runs.json"], root, stage)]
+
+
 def a2a_candidates(rows: list[dict], out_root: Path, reference: str | None = None) -> list[dict]:
     """a2a_cost_cells (verdicts against reference when given) with every
     arm's reaction_ns and early_cost_ns per seed and their means over the
     seeds that have one."""
+    roots = _run_roots(rows, out_root)
     measured = {}
     for row in a2a_costs(rows):
         interval = (row.get("setting") or {}).get("loss_interval_ns", A2A_DEFAULT_LOSS_INTERVAL_NS)
-        directory = out_root / row["key"]
-        healthy = None if row["healthy_key"] is None else out_root / row["healthy_key"]
+        directory = roots[row["key"]] / row["key"]
+        healthy = None if row["healthy_key"] is None else roots[row["healthy_key"]] / row["healthy_key"]
         measured[row["key"]] = {**reaction(directory, row["condition"], interval),
                                 **receiver_reaction(directory, row["condition"]),
                                 **rto_counts(directory),
@@ -1853,7 +1877,15 @@ A2A_ANSWER_DROP_EVENTS = ("answer_drop_up", "answer_drop_down")
 A2A_ACKROUTE_VERSUS = (("reps_hold_auto_tail4_route_oracle", "reps_hold_auto_tail4"),
                        ("reps_oracle_tail_route_oracle", "reps_oracle_tail"),
                        ("reps_hold_auto_tail_ack", "reps_hold_auto_tail4"),
-                       ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_data_spine"))
+                       ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_data_spine"),
+                       ("reps_oracle_tail_fwd", "reps_oracle_tail"),
+                       ("reps_oracle_tail_fwd_route_oracle", "reps_oracle_tail_route_oracle"),
+                       ("reps_oracle_tail_fwd_route_oracle", "reps_oracle_tail_fwd"),
+                       # And the forward oracle with the answers' against the
+                       # stage's control.
+                       ("reps_oracle_tail_fwd_route_oracle", "reps_hold_auto_tail_ack_data_spine"))
+# The stage whose runs --with-root reads.
+A2A_ACKROUTE_WITH_STAGE = "a2a_ackroute_4k"
 
 
 def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_leaf: int | None,
@@ -1935,9 +1967,10 @@ def a2a_ackroute(rows: list[dict], out_root: Path, ack_route: str | None = None)
         return ack_route or (row.get("setting") or {}).get("ack_route", "data_spine")
 
     by_key = {r["key"]: r for r in rows}
+    roots = _run_roots(rows, out_root)
     measured = {}
     for row in a2a_costs(rows):
-        directory = out_root / row["key"]
+        directory = roots[row["key"]] / row["key"]
         healthy = by_key.get(row["healthy_key"])
         measured[row["key"]] = {
             **answer_drops(directory),
@@ -1945,7 +1978,7 @@ def a2a_ackroute(rows: list[dict], out_root: Path, ack_route: str | None = None)
             "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
                                                        routing(row)),
             "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
-                out_root / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", routing(healthy)),
+                roots[healthy["key"]] / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", routing(healthy)),
         }
     cells = a2a_candidates(rows, out_root, A2A_ACKROUTE_REFERENCE)
     for cell in cells:
@@ -2506,6 +2539,8 @@ def main() -> int:
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
             x.add_argument("--ack-route", choices=A2A_ACK_ROUTES)
+            x.add_argument("--with-root", type=Path)
+            x.add_argument("--with-stage", default=A2A_ACKROUTE_WITH_STAGE)
         if name == "a2a_noack":
             x.add_argument("--ack-root", type=Path, nargs="*", default=[])
         if name == "a2a_sweep":
@@ -2564,8 +2599,10 @@ def main() -> int:
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_ackroute":
-        cells = a2a_ackroute(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root,
-                             arguments.ack_route)
+        rows = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+        if arguments.with_root:
+            rows += a2a_root_rows(arguments.with_root, arguments.with_stage)
+        cells = a2a_ackroute(rows, arguments.out_root, arguments.ack_route)
         if arguments.markdown:
             arguments.markdown.write_text(ackroute_markdown(cells))
         print(json.dumps(cells, indent=1))

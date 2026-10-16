@@ -69,7 +69,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150, "a2a_ackroute_fwd_4k": 126},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -81,7 +81,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150, "a2a_ackroute_fwd_4k": 126},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1198,6 +1198,103 @@ class AckRoute(unittest.TestCase):
             self.assertEqual(analyze.sender_hold_reading(path, "loss1e2_up", "data_spine"),
                              {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
             self.assertIsNone(analyze.sender_hold_reading(Path(directory) / "none.csv", "loss1e2_up", "spray"))
+
+
+class AckRouteForward(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_runs_and_settings(self):
+        stage = "a2a_ackroute_fwd_4k"
+        runs = profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
+        # 18 cells and 3 healthy pairs by 2 arms by 3 seeds.
+        self.assertEqual(len(runs), (18 + 3) * 2 * 3)
+        ackroute = profiles.a2a_stage_runs("a2a_ackroute_4k", self.calibration, self.tuning)
+        self.assertEqual({(r["group"], r["size"], r["condition"], r["seed"]) for r in runs},
+                         {(r["group"], r["size"], r["condition"], r["seed"]) for r in ackroute})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_oracle_tail_fwd", "reps_oracle_tail_fwd_route_oracle"])
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
+        # Every profile is its a2a_ackroute_4k arm's but for its name and
+        # oracle_hops forward.
+        theirs = {r["key"]: r for r in ackroute}
+        for r in runs:
+            of = profiles.A2A_ACKROUTE_FWD_ARMS[r["arm"]]
+            other = theirs[r["key"].replace(stage, "a2a_ackroute_4k").replace(f"-{r['arm']}-", f"-{of}-")]
+            self.assertEqual(r["setting"], {**other["setting"], "oracle_hops": "forward"})
+            mine = profiles.a2a_stage_profile(r, self.calibration)
+            expected = profiles.a2a_stage_profile(other, self.calibration)
+            balancing = mine["network"]["load_balancing"]
+            self.assertEqual(balancing, {**expected["network"]["load_balancing"], "oracle_hops": "forward"})
+            self.assertEqual((balancing["selector"], balancing["ack_route"]), ("reps_oracle", "spray"))
+            self.assertEqual(balancing.get("ack_route_oracle", False), r["arm"].endswith("_route_oracle"))
+            for document in (mine, expected):
+                document.pop("name")
+                document["network"]["load_balancing"].pop("oracle_hops", None)
+            self.assertEqual(mine, expected)
+
+    def test_analyzer_with_root(self):
+        # The forward arms in one out root, a2a_ackroute_4k's in another;
+        # each run's answers lost per spine say which root it was read from.
+        costs = {("a2a_ackroute_fwd_4k", "reps_oracle_tail_fwd_route_oracle"): [100, 110, 120],
+                 ("a2a_ackroute_fwd_4k", "reps_oracle_tail_fwd"): [200, 210, 220],
+                 ("a2a_ackroute_4k", "reps_oracle_tail_route_oracle"): [300, 310, 320],
+                 ("a2a_ackroute_4k", "reps_hold_auto_tail_ack_data_spine"): [400, 420, 440],
+                 ("a2a_ackroute_4k", "reps_tail"): [500, 520, 540]}
+        with tempfile.TemporaryDirectory() as directory:
+            roots = {"a2a_ackroute_fwd_4k": Path(directory) / "fwd", "a2a_ackroute_4k": Path(directory) / "b0"}
+            runs = {stage: [] for stage in roots}
+            for (stage, arm), values in costs.items():
+                setting = {"ack_route": "data_spine" if arm.endswith("_data_spine") else "spray"}
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("loss1e2_up", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, stage, setting),
+                             "fixture": profiles.A2A_FIXTURE_4K}
+                        runs[stage].append(r)
+                        d = roots[stage] / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        drops = 7 if stage == "a2a_ackroute_fwd_4k" else 5
+                        transport = {} if condition == "healthy" else {
+                            "answer_drop_up_spine3:control": {"count": drops, "bytes": 0}}
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+            for stage, root in roots.items():
+                (root / "runs.json").write_text(json.dumps(runs[stage]))
+            fwd = roots["a2a_ackroute_fwd_4k"]
+            rows = analyze.a2a_rows([fwd / "runs.json"], fwd, "a2a_ackroute_fwd_4k")
+            (alone,) = analyze.a2a_ackroute(rows, fwd)
+            (cell,) = analyze.a2a_ackroute(rows + analyze.a2a_root_rows(roots["a2a_ackroute_4k"], "a2a_ackroute_4k"),
+                                           fwd)
+            markdown = Path(directory) / "holds.md"
+            subprocess.run(
+                [sys.executable, str(Path(analyze.__file__)), "a2a_ackroute", "--runs", str(fwd / "runs.json"),
+                 "--out-root", str(fwd), "--stage", "a2a_ackroute_fwd_4k", "--with-root",
+                 str(roots["a2a_ackroute_4k"]), "--markdown", str(markdown)],
+                check=True, capture_output=True,
+            )
+            markdown = markdown.read_text()
+        fwd_oracle = "reps_oracle_tail_fwd_route_oracle"
+        self.assertEqual(alone["versus"], {
+            f"{fwd_oracle} against reps_oracle_tail_fwd": f"{fwd_oracle} beats reps_oracle_tail_fwd"})
+        self.assertEqual(sorted(cell["arms"]), sorted(arm for _, arm in costs))
+        self.assertEqual(cell["versus"], {
+            f"{fwd_oracle} against reps_oracle_tail_route_oracle": f"{fwd_oracle} beats reps_oracle_tail_route_oracle",
+            f"{fwd_oracle} against reps_oracle_tail_fwd": f"{fwd_oracle} beats reps_oracle_tail_fwd",
+            f"{fwd_oracle} against reps_hold_auto_tail_ack_data_spine":
+                f"{fwd_oracle} beats reps_hold_auto_tail_ack_data_spine"})
+        self.assertEqual(cell["arms"][fwd_oracle]["cost_ns"], [100, 110, 120])
+        self.assertEqual(cell["arms"]["reps_hold_auto_tail_ack_data_spine"]["cost_ns"], [400, 420, 440])
+        self.assertEqual(cell["arms"][fwd_oracle]["stages"], ["a2a_ackroute_fwd_4k"])
+        self.assertEqual(cell["arms"]["reps_oracle_tail_route_oracle"]["stages"], ["a2a_ackroute_4k"])
+        self.assertEqual(cell["arms"][fwd_oracle]["answer_drop_up_by_spine"], [{3: 7}] * 3)
+        self.assertEqual(cell["arms"]["reps_oracle_tail_route_oracle"]["answer_drop_up_by_spine"], [{3: 5}] * 3)
+        self.assertEqual(cell["arms"][fwd_oracle]["versus_reference_cost"], f"{fwd_oracle} beats reps_tail")
+        self.assertIn(f"- ep64 256k loss1e2_up: {fwd_oracle} against reps_hold_auto_tail_ack_data_spine: "
+                      f"{fwd_oracle} beats reps_hold_auto_tail_ack_data_spine", markdown)
+        self.assertIn(f"| ep64 | 256k | loss1e2_up | {fwd_oracle} | spray | 0.1 (3) | {fwd_oracle} beats reps_tail ",
+                      markdown)
 
 
 class NoAck(unittest.TestCase):
