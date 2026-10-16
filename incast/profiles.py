@@ -1212,13 +1212,67 @@ A2A_HOSTLINK_COVER_ARMS = {f"{arm}_cover": arm for arm in A2A_HOLD_ARMS_4K}
 A2A_RING_PROBE_STAGE = "ar_parity_probe_4k"
 A2A_RING_CALIBRATION_STAGE = "ar_parity_calibration_4k"
 A2A_RING_STAGE = "ar_parity_4k"
+# The path-count fixtures (A2A_SPINES_FIXTURE): the settled fixture on a
+# fabric of P spines (A2A_SPINES), each leaf's 3.2 Tb/s up to the spines
+# (A2A_LEAF_UPLINK_GBPS) split over them, so that the leaf-spine links run at
+# 3.2 Tb/s / P: 400, 100, 25 and 12.5 Gb/s. A run on one carries, beyond
+# A2A_FIXTURE_4K:
+#   spine_count      network.spine_count: P
+#   spine_link_rate  network.spine_link_rate: 3200 / P Gb/s
+#   pair_bandwidth   network.pair_bandwidth: spines, a pair of hosts on two
+#                    leaves taken at the sum of its paths over the spines, at
+#                    most its host links (400 Gb/s at every P), as its sprayed
+#                    packets cross every spine, so that its window's BDP is
+#                    not one spine link's
+#   port_rate_thresholds
+#                    network.switch.port_rate_thresholds: true, each switch
+#                    port's ECN and queue thresholds the ue profile's bytes
+#                    scaled by its link speed over the host links' 400 Gb/s,
+#                    so that a port marks, trims and drops at the queueing
+#                    delay a 400 Gb/s port does; each switch's 32 MB shared
+#                    buffer as at 8 spines
+#   base_rtt_ns      the fabric's base RTT, the generator's config_base_rtt_ns
+#                    (the backend's maxRtt and SprayBaseRttNs): the longest
+#                    host-to-host round trip, its propagation and one 4096 B
+#                    packet's serialization per hop, 81 ns at 400 Gb/s and
+#                    2,621 ns at 12.5 Gb/s
+# The retransmission timeout and the loss and pool decay intervals follow the
+# base RTT as they do at 8 spines, 10 and 2 base RTTs (a2a_settle). At P = 8
+# the fabric is A2A_FIXTURE_4K's.
+A2A_SPINES = (8, 32, 128, 256)
+A2A_LEAF_UPLINK_GBPS = 3200
+A2A_SPINES_BASE_RTT_NS = {8: 12_324, 32: 12_816, 128: 14_782, 256: 17_404}
+A2A_SPINES_FIXTURE = {spines: {**A2A_FIXTURE_4K, "spine_count": spines,
+                               "spine_link_rate": f"{A2A_LEAF_UPLINK_GBPS / spines:g}Gbps",
+                               "pair_bandwidth": "spines", "port_rate_thresholds": True,
+                               "base_rtt_ns": A2A_SPINES_BASE_RTT_NS[spines]}
+                      for spines in A2A_SPINES}
+# The load-balancing keys a stage writes in base RTTs of the 8-spine fabric,
+# as multiples of BASE_RTT_NS, which a path-count fixture writes in its own.
+A2A_BASE_RTT_KEYS = ("loss_interval_ns", "pool_decay_interval_ns")
+# Per P, a probe stage (a2a_spines<P>_probe_4k) of the pairs the path-count
+# stages run (A2A_SPINES_PAIRS), EP64 at 256 KiB and 2 MiB, at a2a_probe_4k's
+# provisional gaps; and a2a_calibration_4k's per_receiver pass on the same
+# pairs (a2a_spines<P>_calibration_4k), at the gaps the probe at P measured:
+# a pair's gap at P is taken as measured once it is entered in
+# A2A_SPINES_COMPUTE_NS and listed in A2A_SPINES_COMPUTE_MEASURED; until then
+# a2a_stage_runs refuses the calibration stage. analyze.py a2a_calibrate names
+# the cells <group>-<size>-p4096-s<P> (a2a_cell_name).
+A2A_SPINES_PAIRS = (("ep64", "256k"), ("ep64", "2m"))
+A2A_SPINES_PROBE_STAGES = {f"a2a_spines{spines}_probe_4k": spines for spines in A2A_SPINES}
+A2A_SPINES_CALIBRATION_STAGES = {f"a2a_spines{spines}_calibration_4k": spines for spines in A2A_SPINES}
+A2A_SPINES_COMPUTE_NS: dict[int, dict[tuple[str, str], int]] = {spines: {} for spines in A2A_SPINES}
+A2A_SPINES_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {spines: () for spines in A2A_SPINES}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
 A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROBE_STAGE: A2A_DECODE_PROBE_COMPUTE_NS,
-                    A2A_RING_PROBE_STAGE: {A2A_RING: 0}}
+                    A2A_RING_PROBE_STAGE: {A2A_RING: 0},
+                    **{stage: {pair: A2A_PROBE_4K_COMPUTE_NS[pair] for pair in A2A_SPINES_PAIRS}
+                       for stage in A2A_SPINES_PROBE_STAGES}}
 A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
-                             A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,), A2A_RING_CALIBRATION_STAGE: (A2A_RING,)}
+                             A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,), A2A_RING_CALIBRATION_STAGE: (A2A_RING,),
+                             **{stage: A2A_SPINES_PAIRS for stage in A2A_SPINES_CALIBRATION_STAGES}}
 A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
@@ -1227,15 +1281,20 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
                                    A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
                                    A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE, A2A_TWOEND_RETRACT_STAGE)}
+A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
+                          for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
+                          for stage, spines in stages.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
               *A2A_STAGE_FIXTURE)
 
 
-def a2a_cell_name(group: str, size: str, payload: int | None = None) -> str:
-    """<group>-<size>, and -p<payload> for a run with a packet payload."""
-    return f"{group}-{size}" + ("" if payload is None else f"-p{payload}")
+def a2a_cell_name(group: str, size: str, payload: int | None = None, spines: int | None = None) -> str:
+    """<group>-<size>, -p<payload> for a run with a packet payload, and
+    -s<spines> for one on a path-count fixture."""
+    return (f"{group}-{size}" + ("" if payload is None else f"-p{payload}")
+            + ("" if spines is None else f"-s{spines}"))
 
 
 def a2a_fixture(stage: str, arm: str, group: str, size: str) -> dict[str, Any] | None:
@@ -1270,6 +1329,20 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
             else failure
             for failure in network["link_failures"]
         ]
+    for key in ("spine_count", "spine_link_rate", "pair_bandwidth"):
+        if key in fixture:
+            network[key] = fixture[key]
+    if "port_rate_thresholds" in fixture:
+        network["switch"] = {**network["switch"], "port_rate_thresholds": fixture["port_rate_thresholds"]}
+    if "base_rtt_ns" in fixture:
+        rtt = fixture["base_rtt_ns"]
+        balancing = network["load_balancing"]
+        for key in A2A_BASE_RTT_KEYS:
+            if key in balancing and balancing[key] % BASE_RTT_NS:
+                raise ValueError(f"{key} {balancing[key]} is no whole number of base RTTs")
+        network["load_balancing"] = {**balancing, **{key: balancing[key] // BASE_RTT_NS * rtt
+                                                     for key in A2A_BASE_RTT_KEYS if key in balancing}}
+        network["transport_recovery"] = {**network["transport_recovery"], "retransmission_timeout_ns": 10 * rtt}
 
 
 def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
@@ -1666,7 +1739,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
     """Every run of a Phase 9 stage."""
     out: list[dict[str, Any]] = []
     payload = (A2A_STAGE_FIXTURE.get(stage) or {}).get("payload_bytes")
-    compute = A2A_COMPUTE_NS if payload is None else A2A_PAYLOAD_COMPUTE_NS[payload]
+    spines = (A2A_STAGE_FIXTURE.get(stage) or {}).get("spine_count")
+    compute = (A2A_COMPUTE_NS if payload is None else A2A_SPINES_COMPUTE_NS[spines] if spines is not None
+               else A2A_PAYLOAD_COMPUTE_NS[payload])
+    measured = (A2A_SPINES_COMPUTE_MEASURED[spines] if spines is not None
+                else A2A_PAYLOAD_COMPUTE_MEASURED.get(payload, ()))
 
     def add(arm, group, size, condition, seed, setting=None, label_setting=False, iterations=None, flap=None,
             compute_ns=None):
@@ -1695,8 +1772,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         return a2a_cell_name(group, size, payload) in (calibration or {}).get(scope, {})
 
     def require_measured(pairs):
-        provisional = [a2a_cell_name(group, size) for group, size in pairs
-                       if (group, size) not in A2A_PAYLOAD_COMPUTE_MEASURED[payload]]
+        provisional = [a2a_cell_name(group, size) for group, size in pairs if (group, size) not in measured]
+        if provisional and spines is not None:
+            raise ValueError(f"{stage}'s compute gaps on {provisional} are provisional: enter the probe's values "
+                             f"at {spines} spines in A2A_SPINES_COMPUTE_NS and list the pairs in "
+                             "A2A_SPINES_COMPUTE_MEASURED")
         if provisional:
             raise ValueError(f"{stage}'s compute gaps on {provisional} are provisional: enter the probe's values "
                              f"at {payload} B in A2A_PAYLOAD_COMPUTE_NS and list the pairs in "

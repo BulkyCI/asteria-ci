@@ -2794,8 +2794,13 @@ def twoend_markdown(cells: list[dict]) -> str:
 # a2a_calibration_4k, a2a_decode_calibration_4k and
 # ar_parity_calibration_4k.
 
+# profiles.py's A2A_SPINES: a path-count fixture's calibration pass per spine
+# count, its cells named -s<spines>, its candidate loss intervals in its
+# fabric's base RTTs (the run's fixture base_rtt_ns).
+A2A_SPINES = (8, 32, 128, 256)
 A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k",
-                          "a2a_decode_calibration_4k", "ar_parity_calibration_4k")
+                          "a2a_decode_calibration_4k", "ar_parity_calibration_4k",
+                          *(f"a2a_spines{spines}_calibration_4k" for spines in A2A_SPINES))
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",
@@ -2852,11 +2857,12 @@ def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], l
     return sums
 
 
-def trace_loss_thresholds(runs: list[Path]) -> dict[str, dict]:
-    """Per candidate interval, loss_thresholds from the healthy lost fraction
-    of every (host, interval, spine) with a send."""
+def trace_loss_thresholds(runs: list[Path], intervals: tuple[int, ...] = A2A_LOSS_INTERVALS_NS) -> dict[str, dict]:
+    """Per candidate interval (A2A_LOSS_INTERVALS_NS unless intervals is
+    given), loss_thresholds from the healthy lost fraction of every (host,
+    interval, spine) with a send."""
     out = {}
-    for interval in A2A_LOSS_INTERVALS_NS:
+    for interval in intervals:
         fractions, sent = [], []
         for run in runs:
             for n, lost in interval_losses(run, interval).values():
@@ -2903,7 +2909,9 @@ def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:
 def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     """a2a_calibration.json from the healthy calibration runs that have a
     summary, merged into existing: per scope and (group, size), named
-    <group>-<size>-p<payload> for runs on a fixture with a packet payload, the Phase 8
+    <group>-<size>-p<payload> for runs on a fixture with a packet payload, and
+    -s<spines> after it for runs on a path-count fixture, whose candidate
+    loss intervals are 2, 10 and 40 of its base RTTs, the Phase 8
     congestion (and, but for switch_queue, trim) thresholds of thresholds(),
     and loss_thresholds. The pooled pass's are a map from each candidate
     interval to its list, from its sender loss trace; per_connection takes
@@ -2913,13 +2921,18 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     pooled EP64 2 MiB trace, unless existing holds a "headline_reason" for a
     headline set by hand; "headline_rule" is recorded either way."""
     groups: dict[tuple[str, str], list[Path]] = defaultdict(list)
+    base_rtts: dict[str, int] = {}
     for run in _listed_runs(runs_files):
         directory = out_root / run["key"]
         if (run["stage"] in A2A_CALIBRATION_STAGES and run["condition"] == "healthy"
                 and run["arm"] in A2A_SCOPE_OF_ARM and (directory / "summary.json").exists()):
-            payload = (run.get("fixture") or {}).get("payload_bytes")
-            cell = f"{run['group']}-{run['size']}" + ("" if payload is None else f"-p{payload}")
+            fixture = run.get("fixture") or {}
+            payload = fixture.get("payload_bytes")
+            spines = fixture.get("spine_count")
+            cell = (f"{run['group']}-{run['size']}" + ("" if payload is None else f"-p{payload}")
+                    + ("" if spines is None else f"-s{spines}"))
             groups[(A2A_SCOPE_OF_ARM[run["arm"]], cell)].append(directory)
+            base_rtts[cell] = fixture.get("base_rtt_ns", BASE_RTT_NS)
     result = {key: (dict(value) if isinstance(value, dict) else value) for key, value in existing.items()}
     traced = {cell: [d for d in dirs if (d / "ns3" / "spine_losses.csv").exists()]
               for (scope, cell), dirs in groups.items() if scope == "per_receiver"}
@@ -2932,7 +2945,7 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
             entry["loss_thresholds"] = loss.pop("loss_thresholds")
             entry["loss_calibration"] = loss
         elif traced.get(cell):
-            losses = trace_loss_thresholds(traced[cell])
+            losses = trace_loss_thresholds(traced[cell], tuple(n * base_rtts[cell] for n in (2, 10, 40)))
             entry["loss_thresholds"] = {k: v.pop("loss_thresholds") for k, v in losses.items()}
             entry["loss_calibration"] = losses
             entry["loss_runs"] = sorted(d.name for d in traced[cell])

@@ -36,6 +36,27 @@ def measured_4k():
                            {profiles.A2A_PAYLOAD_4K: tuple(profiles.A2A_PAYLOAD_COMPUTE_NS[profiles.A2A_PAYLOAD_4K])})
 
 
+# Per P, the probe's 2 pairs at seed 301 and the calibration's at seeds
+# 101-103.
+SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128, 256)},
+                 **{f"a2a_spines{spines}_calibration_4k": 6 for spines in (8, 32, 128, 256)}}
+
+
+def measured_spines():
+    """Every path-count stage's pair taken as measured, at its 8-spine
+    4096-byte gap."""
+    return mock.patch.dict(profiles.A2A_SPINES_COMPUTE_MEASURED,
+                           {spines: profiles.A2A_SPINES_PAIRS for spines in profiles.A2A_SPINES})
+
+
+def spines_gaps():
+    """The path-count stages' gaps, each P's at its 8-spine 4096-byte gap."""
+    return mock.patch.dict(profiles.A2A_SPINES_COMPUTE_NS,
+                           {spines: {pair: profiles.A2A_MEASURED_4K_COMPUTE_NS[pair]
+                                     for pair in profiles.A2A_SPINES_PAIRS}
+                            for spines in profiles.A2A_SPINES})
+
+
 def calibrated_4k(calibration):
     """calibration with an empty per_receiver entry at 4096 B for every
     (group, size) off one leaf that a 4096-byte stage runs and calibration
@@ -49,6 +70,8 @@ def calibrated_4k(calibration):
 # Every stage, those at 4096 B with their compute gaps taken as measured and
 # every cell calibrated at that payload.
 @measured_4k()
+@measured_spines()
+@spines_gaps()
 class Stages(unittest.TestCase):
     def runs(self, stage, calibration, tuning):
         if stage in profiles.A2A_STAGE_FIXTURE:
@@ -71,7 +94,7 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, **SPINES_COUNTS},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -85,7 +108,7 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, **SPINES_COUNTS},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -883,17 +906,20 @@ class Payload4k(unittest.TestCase):
 
 class Fixture(unittest.TestCase):
     @measured_4k()
+    @measured_spines()
+    @spines_gaps()
     def test_every_settled_stage_takes_it(self):
         here = Path(profiles.__file__).parent
         calibration = calibrated_4k(json.loads((here / "a2a_calibration.json").read_text()))
         tuning = json.loads((here / "a2a_tuning.json").read_text())
         faults = set()
         for stage in profiles.A2A_STAGE_FIXTURE:
+            fixture = profiles.A2A_STAGE_FIXTURE[stage]
             for r in profiles.a2a_stage_runs(stage, calibration, tuning):
                 network = (document := profiles.a2a_stage_profile(r, calibration))["network"]
                 uniform = network["load_balancing"]["mode"] == "spray_uniform"
                 all_to_all = document["workload"]["kind"] == "all_to_all"
-                self.assertEqual(r["fixture"], {key: value for key, value in profiles.A2A_FIXTURE_4K.items()
+                self.assertEqual(r["fixture"], {key: value for key, value in fixture.items()
                                                 if (key != "path_state" or uniform)
                                                 and (key != "dataset_splits" or all_to_all)})
                 self.assertEqual(network["packet_payload_bytes"], 4096)
@@ -2038,7 +2064,67 @@ class HostLink(unittest.TestCase):
                       "reps_hold_auto_tail_ack_cover beats reps_hold_auto_tail_ack", markdown)
 
 
+class Spines(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+
+    def test_fixtures(self):
+        self.assertEqual({spines: fixture["spine_link_rate"] for spines, fixture in profiles.A2A_SPINES_FIXTURE.items()},
+                         {8: "400Gbps", 32: "100Gbps", 128: "25Gbps", 256: "12.5Gbps"})
+        for spines, fixture in profiles.A2A_SPINES_FIXTURE.items():
+            self.assertEqual(fixture, {**profiles.A2A_FIXTURE_4K, "spine_count": spines,
+                                       "spine_link_rate": fixture["spine_link_rate"], "pair_bandwidth": "spines",
+                                       "port_rate_thresholds": True,
+                                       "base_rtt_ns": profiles.A2A_SPINES_BASE_RTT_NS[spines]})
+        # The 8-spine fabric's base RTT is the one every earlier stage takes.
+        self.assertEqual(profiles.A2A_SPINES_BASE_RTT_NS[8], profiles.BASE_RTT_NS)
+
+    def test_probe_runs_at_each_spine_count(self):
+        for spines in profiles.A2A_SPINES:
+            stage = f"a2a_spines{spines}_probe_4k"
+            runs = profiles.a2a_stage_runs(stage, None, self.tuning)
+            self.assertEqual([(r["group"], r["size"], r["condition"], r["arm"], r["seed"]) for r in runs],
+                             [("ep64", "256k", "healthy", "uniform_tail", 301),
+                              ("ep64", "2m", "healthy", "uniform_tail", 301)])
+            self.assertEqual([r["compute_ns"] for r in runs],
+                             [profiles.A2A_PROBE_4K_COMPUTE_NS[("ep64", size)] for size in ("256k", "2m")])
+            document = profiles.a2a_stage_profile(runs[1], None)
+            network = document["network"]
+            rtt = profiles.A2A_SPINES_BASE_RTT_NS[spines]
+            self.assertEqual((network["spine_count"], network["spine_link_rate"], network["pair_bandwidth"]),
+                             (spines, profiles.A2A_SPINES_FIXTURE[spines]["spine_link_rate"], "spines"))
+            self.assertEqual(network["switch"], {"profile": "ue", "port_rate_thresholds": True})
+            self.assertEqual(network["transport_recovery"]["retransmission_timeout_ns"], 10 * rtt)
+            self.assertEqual(network["link_rate"], "400Gbps")
+            self.assertNotIn("base_rtt_ns", network)
+
+    def test_calibration_reads_the_measured_gaps(self):
+        stage = "a2a_spines256_calibration_4k"
+        with self.assertRaisesRegex(ValueError, "provisional: enter the probe's values at 256 spines"):
+            profiles.a2a_stage_runs(stage, None, self.tuning)
+        with measured_spines(), spines_gaps():
+            runs = profiles.a2a_stage_runs(stage, None, self.tuning)
+            self.assertEqual(len(runs), 6)
+            self.assertEqual({r["seed"] for r in runs}, {101, 102, 103})
+            self.assertEqual({r["arm"] for r in runs}, {"graded_per_receiver_mix"})
+            balancing = profiles.a2a_stage_profile(runs[0], None)["network"]["load_balancing"]
+        # The loss and pool decay intervals of two base RTTs at 256 spines.
+        self.assertEqual(balancing["loss_interval_ns"], 2 * 17_404)
+        self.assertEqual(balancing["pool_decay_interval_ns"], 2 * 17_404)
+        self.assertEqual(balancing["held_sentinel_interval_ns"], profiles.A2A_SENTINEL_INTERVAL_NS)
+        self.assertNotIn("path_state", runs[0]["fixture"])
+        self.assertEqual(profiles.a2a_cell_name("ep64", "2m", 4096, 256), "ep64-2m-p4096-s256")
+
+    def test_base_rtt_keys_take_whole_base_rtts(self):
+        document = profiles.profile("x", 64, "healthy", {"mode": "spray_uniform", "loss_interval_ns": 100})
+        with self.assertRaisesRegex(ValueError, "no whole number of base RTTs"):
+            profiles.a2a_settle(document, profiles.A2A_SPINES_FIXTURE[32])
+
+
 class CopyDeadline(unittest.TestCase):
+    @measured_spines()
+    @spines_gaps()
     def test_plumbing(self):
         here = Path(profiles.__file__).parent
         tuning = json.loads((here / "a2a_tuning.json").read_text())
@@ -2938,6 +3024,17 @@ class A2aCalibrate(unittest.TestCase):
         hold = next(r for r in sweep if (r["group"], r["size"], r["arm"]) == ("ep64", "1m", "reps_hold_auto_tail_ack"))
         balancing = profiles.a2a_stage_profile(hold, result)["network"]["load_balancing"]
         self.assertEqual(balancing["loss_thresholds"], [0.005, 0.01, 0.02])
+
+    def test_spine_count_cells(self):
+        # A path-count fixture's cells by spine count, their loss intervals
+        # in its base RTTs.
+        runs = [({**run("graded_per_receiver_mix", "ep64", "2m", "healthy", 101, stage),
+                  "fixture": profiles.A2A_SPINES_FIXTURE[spines]}, self.reports(0.03, 0.02), self.losses(50))
+                for stage, spines in profiles.A2A_SPINES_CALIBRATION_STAGES.items()]
+        result = self.calibrate(runs)
+        for spines, rtt in profiles.A2A_SPINES_BASE_RTT_NS.items():
+            cell = result["per_receiver"][f"ep64-2m-p4096-s{spines}"]
+            self.assertEqual(sorted(cell["loss_thresholds"], key=int), [str(n * rtt) for n in (2, 10, 40)])
 
     def test_one_loss_grades_0(self):
         # A zero p99: (f/4, f/2, f), rounded down so one loss reaches f.
