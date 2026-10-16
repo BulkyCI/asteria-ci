@@ -193,7 +193,7 @@ jobs:
     needs: [ plan, build, provision ]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.provision.result == 'success' || needs.provision.result == 'skipped') }}
     runs-on: ${{ inputs.runner == 'dcs' && format('dcs-r{0}-{1}', github.run_id, matrix.shard.id) || 'ubuntu-24.04' }}
-    timeout-minutes: ${{ inputs.run_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(inputs.run_timeout_minutes) }}
     strategy:
       fail-fast: false
       max-parallel: 64
@@ -283,7 +283,7 @@ jobs:
     needs: [ plan, run ]
     if: ${{ always() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.collect_timeout_minutes }}
+    timeout-minutes: ${{ fromJSON(inputs.collect_timeout_minutes) }}
     permissions:
       contents: write
     steps:
