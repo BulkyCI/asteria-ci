@@ -1162,6 +1162,26 @@ A2A_DUPLICATE_RETRACT = {"duplicate_report": "retract"}
 A2A_TWOEND_RETRACT_ARMS = {"reps_hold_auto_tail4_cover": {},
                            "reps_hold_auto_tail4_cover_answer_seq": A2A_ANSWER_PATH_SEQ,
                            "reps_hold_auto_tail4_cover_retract": A2A_DUPLICATE_RETRACT}
+# a2a_overdue_4k: a2a_twoend_4k's cells, healthy pairs and seeds under six
+# arms with the overdue repair (A2A_OVERDUE: load_balancing overdue_repair
+# reprobe and overdue_repair_limit 3, written as SPRAY_OVERDUE_REPAIR and
+# SPRAY_OVERDUE_REPAIR_LIMIT), a queue pair's latest send on a spine not held
+# repaired once its answer is held_loss_rtts base RTTs overdue and again each
+# time its last repair goes as long without an answer, up to 3 repairs, each
+# counting no loss, the first answer settling the send under
+# duplicate_report: a2a_twoend_4k's reps_hold_auto_tail4,
+# reps_hold_auto_tail4_cover, reps_hold_auto_tail4_cover_answer_seq and
+# reps_hold_auto_tail4_cover_dup, a2a_twoend_base_4k's
+# reps_hold_auto_tail4_cover_reverse_set and a2a_twoend_retract_4k's
+# reps_hold_auto_tail4_cover_retract, each named with _od
+# (A2A_OVERDUE_ARMS), so that each reads beside its key-off runs of those
+# stages.
+A2A_OVERDUE_STAGE = "a2a_overdue_4k"
+A2A_OVERDUE = {"overdue_repair": "reprobe", "overdue_repair_limit": 3}
+A2A_OVERDUE_ARMS = {f"{arm}_od": arm for arm in (
+    "reps_hold_auto_tail4", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_answer_seq",
+    "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_dup", "reps_hold_auto_tail4_cover_retract")}
+A2A_TRANSPORT_ARMS.update({arm: "reps_hold_auto" for arm in A2A_OVERDUE_ARMS})
 # a2a_noack_4k: the loss-hold arms of the 4096-byte stages without
 # ack_loss_rtts, tail recovery at tail_loss_rtts 4 as in them: each no-ack arm
 # is its ack arm's setting less ack_loss_rtts (A2A_NOACK_ARMS), named by
@@ -1356,7 +1376,8 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
                                    A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
-                                   A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE, A2A_TWOEND_RETRACT_STAGE)}
+                                   A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE, A2A_TWOEND_RETRACT_STAGE,
+                                   A2A_OVERDUE_STAGE)}
 A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
                           for stage, spines in stages.items()})
@@ -1759,6 +1780,15 @@ def a2a_twoend_retract_settings(tuning: dict[str, Any] | None) -> dict[str, dict
     return {arm: {**cover, **keys} for arm, keys in A2A_TWOEND_RETRACT_ARMS.items()}
 
 
+def a2a_overdue_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_overdue_4k arm's setting: its key-off arm's
+    (A2A_OVERDUE_ARMS) of a2a_twoend_4k, a2a_twoend_base_4k or
+    a2a_twoend_retract_4k, with A2A_OVERDUE."""
+    settings = {**a2a_twoend_settings(tuning), **a2a_twoend_base_settings(tuning),
+                **a2a_twoend_retract_settings(tuning)}
+    return {arm: {**settings[of], **A2A_OVERDUE} for arm, of in A2A_OVERDUE_ARMS.items()}
+
+
 def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_hostlink_s_4k arm's setting: its a2a_hostlink_4k arm's
     (A2A_HOSTLINK_COVER_ARMS) with A2A_COVERAGE_FIRST, through
@@ -1841,6 +1871,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_HOSTLINK_COVER_STAGE: (A2A_HOSTLINK_CELLS, tuple(A2A_HOSTLINK_COVER_ARMS)),
         A2A_TWOEND_BASE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_BASE_ARMS)),
         A2A_TWOEND_RETRACT_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_RETRACT_ARMS)),
+        A2A_OVERDUE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_OVERDUE_ARMS)),
         **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
     }[stage]
 
@@ -2013,6 +2044,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_twoend_retract_settings(tuning) if stage == A2A_TWOEND_RETRACT_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
+                    else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):

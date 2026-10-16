@@ -101,7 +101,8 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, **SPINES_COUNTS},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
+             **SPINES_COUNTS},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -115,7 +116,8 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, **SPINES_COUNTS},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
+             **SPINES_COUNTS},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -2322,6 +2324,35 @@ class Wide(unittest.TestCase):
         self.assertEqual(analyze.run_fabric(Path(directory)), (8, 8))
 
 
+class Overdue(unittest.TestCase):
+    def test_arms_are_the_key_off_arms_with_it(self):
+        here = Path(profiles.__file__).parent
+        tuning = json.loads((here / "a2a_tuning.json").read_text())
+        calibration = json.loads((here / "a2a_calibration.json").read_text())
+        settings = profiles.a2a_overdue_settings(tuning)
+        off = {**profiles.a2a_twoend_settings(tuning), **profiles.a2a_twoend_base_settings(tuning),
+               **profiles.a2a_twoend_retract_settings(tuning)}
+        for arm, of in profiles.A2A_OVERDUE_ARMS.items():
+            self.assertEqual(settings[arm], {**off[of], **profiles.A2A_OVERDUE})
+        self.assertEqual(analyze.A2A_OVERDUE_ARMS, profiles.A2A_OVERDUE_ARMS)
+        runs = profiles.a2a_stage_runs("a2a_overdue_4k", calibration, tuning)
+        twoend = profiles.a2a_stage_runs("a2a_twoend_4k", calibration, tuning)
+        self.assertEqual({r["key"].split("-", 1)[1].rsplit("-", 2)[0] for r in runs},
+                         {r["key"].split("-", 1)[1].rsplit("-", 2)[0] for r in twoend})
+        # Each run's profile is its key-off arm's run's, with the key.
+        twoend_profiles = {r["key"]: profiles.a2a_stage_profile(r, calibration) for r in twoend}
+        for r in runs:
+            of = profiles.A2A_OVERDUE_ARMS[r["arm"]]
+            key = r["key"].replace("a2a_overdue_4k", "a2a_twoend_4k").replace(r["arm"], of)
+            if key not in twoend_profiles:
+                continue
+            document = profiles.a2a_stage_profile(r, calibration)
+            balancing = document["network"]["load_balancing"]
+            self.assertEqual((balancing.pop("overdue_repair"), balancing.pop("overdue_repair_limit")),
+                             ("reprobe", 3))
+            self.assertEqual({**document, "name": twoend_profiles[key]["name"]}, twoend_profiles[key])
+
+
 class CopyDeadline(unittest.TestCase):
     @measured_spines()
     @spines_gaps()
@@ -2346,7 +2377,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS),
                  "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS),
                  **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx"}
-                    for stage in profiles.A2A_WIDE_STAGES}}
+                    for stage in profiles.A2A_WIDE_STAGES},
+                 "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

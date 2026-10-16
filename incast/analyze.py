@@ -47,6 +47,10 @@
     analyze.py a2a_wide_validity --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      a wide-leaf member's trims, collective span against
                                                      P = 8's, uplink load and queues per run
+    analyze.py a2a_overdue --runs RUNS.json... --out-root DIR [--stage S] [--with ROOT STAGE]...
+                           [--markdown FILE]
+                                                     a2a_twoend with the overdue repairs per arm and each
+                                                     arm against its key-off arm
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -171,6 +175,14 @@ the hosts are busy 60 percent of the period; for a decode layer exchange
 (a run with combine_bytes), the rest of the A2A_LAYER_PERIOD_NS period
 after it, rounded up to a whole microsecond. Both are None while the run is
 incomplete.
+
+a2a_overdue reads the overdue repair stage (--stage, a2a_overdue_4k by
+default) as a2a_twoend does, with the runs of each further tabulated out
+root and stage --with names (a2a_twoend_4k's, a2a_twoend_base_4k's and
+a2a_twoend_retract_4k's key-off runs), and gives each run its counts of
+overdue_repair, overdue_repair_spurious and timeout_loss_data_covered, and
+each cell the seed-rule verdict on cost of each overdue arm
+(A2A_OVERDUE_ARMS, <arm>_od) against its key-off arm.
 
 a2a_wide_validity reads a wide-leaf member's validity stage (--stage,
 a2a_wide32_validity_4k by default) and gives each healthy run its
@@ -770,7 +782,7 @@ SCOPE_OF_ARM = {
 }
 
 
-def _listed(runs_file: Path, out_root: Path, stage: str):
+def _counted(runs_file: Path, out_root: Path, stage: str):
     for run in json.loads(runs_file.read_text()):
         directory = out_root / run["key"]
         if run["stage"] == stage and (directory / "summary.json").exists():
@@ -779,7 +791,7 @@ def _listed(runs_file: Path, out_root: Path, stage: str):
 
 def calibrate(runs_file: Path, out_root: Path, existing: dict, stage: str = "calibration") -> dict:
     groups: dict[tuple[str, int], list[Path]] = defaultdict(list)
-    for run, directory in _listed(runs_file, out_root, stage):
+    for run, directory in _counted(runs_file, out_root, stage):
         groups[(SCOPE_OF_ARM[run["arm"]], run["k"])].append(directory)
     result = {scope: dict(values) for scope, values in existing.items()}
     for (scope, k), directories in sorted(groups.items()):
@@ -796,7 +808,7 @@ def calibrate(runs_file: Path, out_root: Path, existing: dict, stage: str = "cal
 
 def gains(runs_file: Path, out_root: Path, existing: dict) -> dict:
     tops: dict[tuple[str, int, float], list[int]] = defaultdict(lambda: [0, 0])
-    for run, directory in _listed(runs_file, out_root, "gain"):
+    for run, directory in _counted(runs_file, out_root, "gain"):
         gain = run["setting"]["estimator_gain"]
         counted = all_top_fraction(directory)
         cell = tops[(SCOPE_OF_ARM[run["arm"]], run["k"], gain)]
@@ -823,7 +835,7 @@ def gains(runs_file: Path, out_root: Path, existing: dict) -> dict:
 def select(runs_file: Path, out_root: Path) -> dict:
     best: dict[tuple[str, str], tuple[int, dict]] = {}
     table: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
-    for run, directory in _listed(runs_file, out_root, "tuning"):
+    for run, directory in _counted(runs_file, out_root, "tuning"):
         summary = json.loads((directory / "summary.json").read_text())
         completion = summary["collective_completion_ns"]
         table[run["arm"]][run["condition"]].append({"setting": run["setting"], "completion_ns": completion})
@@ -3046,6 +3058,61 @@ def _side_summed(readings, side: str, name: str) -> str:
     return _summed([None if r is None else r[side] for r in readings], name)
 
 
+# The overdue repair stage (profiles.py A2A_OVERDUE_ARMS): each arm with the
+# overdue repair, named its key-off arm's with _od, read beside the key-off
+# arm's runs of the stages --with names.
+A2A_OVERDUE_ARMS = {f"{arm}_od": arm for arm in (
+    "reps_hold_auto_tail4", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_answer_seq",
+    "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_dup", "reps_hold_auto_tail4_cover_retract")}
+A2A_OVERDUE_STAGE = "a2a_overdue_4k"
+A2A_OVERDUE_EVENTS = ("overdue_repair", "overdue_repair_spurious", "timeout_loss_data_covered")
+
+
+def a2a_overdue(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_twoend's cells with each run's A2A_OVERDUE_EVENTS counts (None
+    where the run counts none), and per cell versus_off: the seed-rule
+    verdict on cost of each overdue arm against its key-off arm, where the
+    cell has both."""
+    roots = _run_roots(rows, out_root)
+    cells = a2a_twoend(rows, out_root)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            transports = [json.loads((roots[k] / k / "summary.json").read_text()).get("transport", {})
+                          for k in entry["keys"]]
+            for event in A2A_OVERDUE_EVENTS:
+                entry[event] = [t[f"{event}:control"]["count"] if f"{event}:control" in t else None
+                                for t in transports]
+        cell["versus_off"] = {f"{arm} against {off}": _versus(cell["arms"], arm, off)
+                              for arm, off in A2A_OVERDUE_ARMS.items() if arm in cell["arms"] and off in cell["arms"]}
+    return cells
+
+
+def overdue_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, and each cell's verdicts against the key-off
+    arms."""
+    lines = [
+        "| group | size | condition | arm | cost mean us (seeds) | RTOs mean | sender false holds, rows "
+        "| overdue repairs | spurious | timed out: duplicate answer losses, data losses, covered first "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 10 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) | {_count(entry['rto_events_mean'])} "
+                f"| {_summed(entry['sender_hold_reading'], 'false_holds')}, "
+                f"{_summed(entry['sender_hold_reading'], 'false_held_rows')} "
+                f"| {_counted(entry['overdue_repair'])} | {_counted(entry['overdue_repair_spurious'])} "
+                f"| {_counted(entry['answer_loss_duplicate'])}, {_counted(entry['timeout_loss_data'])}, "
+                f"{_counted(entry['timeout_loss_data_covered'])} | {_rto_run(entry)} |")
+    lines.append("")
+    for cell in cells:
+        for name, value in cell["versus_off"].items():
+            lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {name}: {value or 'unreadable'}")
+    return "\n".join(lines) + "\n"
+
+
 def twoend_markdown(cells: list[dict]) -> str:
     """A row per cell and arm, the receivers' answer holds per seed, and
     each cell's verdicts."""
@@ -3323,13 +3390,14 @@ def main() -> int:
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
                  "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend",
-                 "a2a_wide_validity"):
+                 "a2a_wide_validity", "a2a_overdue"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
                                              "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink",
-                                             "a2a_downlink_spray", "a2a_twoend", "a2a_wide_validity")
+                                             "a2a_downlink_spray", "a2a_twoend", "a2a_wide_validity",
+                                             "a2a_overdue")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -3342,12 +3410,13 @@ def main() -> int:
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
                     "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend",
-                    "a2a_wide_validity"):
+                    "a2a_wide_validity", "a2a_overdue"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
                       "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k",
                       "a2a_hostlink": "a2a_hostlink_4k", "a2a_downlink_spray": "a2a_downlink_spray_4k",
-                      "a2a_twoend": "a2a_twoend_4k", "a2a_wide_validity": "a2a_wide32_validity_4k"}
+                      "a2a_twoend": "a2a_twoend_4k", "a2a_wide_validity": "a2a_wide32_validity_4k",
+                      "a2a_overdue": A2A_OVERDUE_STAGE}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
@@ -3356,6 +3425,9 @@ def main() -> int:
             x.add_argument("--with-root", type=Path)
             x.add_argument("--with-stage",
                            default=A2A_ACKROUTE_WITH_STAGE if name == "a2a_ackroute" else A2A_TWOEND_WITH_STAGE)
+        if name == "a2a_overdue":
+            x.add_argument("--with", nargs=2, action="append", default=[], metavar=("ROOT", "STAGE"),
+                           dest="with_runs")
         if name == "a2a_hostlink":
             x.add_argument("--with-root", type=Path, nargs="*", default=[])
             x.add_argument("--with-stage", default=A2A_HOSTLINK_WITH_STAGE)
@@ -3446,6 +3518,15 @@ def main() -> int:
         cells = a2a_twoend(rows, arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(twoend_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_overdue":
+        rows = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+        for root, stage in arguments.with_runs:
+            rows += a2a_root_rows(Path(root), stage)
+        cells = a2a_overdue(rows, arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(overdue_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_hostlink":
