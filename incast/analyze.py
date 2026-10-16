@@ -241,8 +241,9 @@ and per faulted run:
   A hold is a sender's (its leaf, the row's rank's) of one spine toward one
   destination leaf (the destination_leaf column, or the leaf of the
   destination column's host; a row naming no destination, of hold scope
-  host, holds toward every leaf). Every hold in a healthy run, and every
-  hold of a spine other than 3, is false. Of spine 3, with the faulted link
+  host, holds toward every leaf). Every hold in a healthy run, every hold
+  of a spine other than 3, and every hold toward the sender's own leaf,
+  whose traffic crosses no spine, is false. Of spine 3, with the faulted link
   leaf 0's uplink (_up) or the downlink to leaf 1 (_down): under
   data_spine, where an answer returns over the spine of the data it
   answers, an _up hold is correct when its sender is on leaf 0 (toward any
@@ -2000,10 +2001,12 @@ def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_l
                  spine: int) -> bool:
     """Whether a sender on sender_leaf holding spine toward destination_leaf
     (None: toward every leaf) holds what the fault of condition degrades
-    under ack_route (see the module docstring)."""
+    under ack_route (see the module docstring). Toward its own leaf a
+    sender's traffic and its answers cross no spine, so no such hold is."""
     if ack_route not in A2A_ACK_ROUTES:
         raise ValueError(f"ack_route must be one of {A2A_ACK_ROUTES}, not {ack_route!r}")
-    if condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE:
+    if (condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE
+            or destination_leaf == sender_leaf):
         return False
     direction = condition.rpartition("_")[2]
     if direction not in A2A_FAULT_LEAF:

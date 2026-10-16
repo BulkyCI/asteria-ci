@@ -1146,6 +1146,12 @@ class AckRoute(unittest.TestCase):
         for route in profiles.A2A_ACKROUTE["ack_route"], "data_spine":
             self.assertFalse(correct(route, "blackhole_up", 0, 5, 2))
             self.assertFalse(correct(route, "healthy", 0, 5))
+        # Toward the sender's own leaf nothing crosses a spine.
+        for route in analyze.A2A_ACK_ROUTES:
+            for condition in ("blackhole_up", "loss1e2_up"):
+                self.assertFalse(correct(route, condition, 0, 0))
+            for condition in ("blackhole_down", "loss1e2_down"):
+                self.assertFalse(correct(route, condition, 1, 1))
         with self.assertRaisesRegex(ValueError, "ack_route"):
             correct("echo", "blackhole_up", 0, 5)
         with self.assertRaisesRegex(ValueError, "faulted direction"):
@@ -1229,6 +1235,19 @@ class AckRoute(unittest.TestCase):
             self.assertEqual(analyze.sender_hold_reading(path, "loss1e2_up", "data_spine"),
                              {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
             self.assertIsNone(analyze.sender_hold_reading(Path(directory) / "none.csv", "loss1e2_up", "spray"))
+
+    def test_same_leaf_holds_are_false(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            # Host 3 on leaf 0 holds spine 3 toward leaf 0, and toward leaf 5.
+            path.write_text("time_ns,rank,destination_leaf,spine,sent,lost,grade\n1,3,0,3,10,1,0\n1,3,5,3,10,1,0\n")
+            for route in ("data_spine", "spray"):
+                self.assertEqual(analyze.sender_hold_reading(path, "blackhole_up", route),
+                                 {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
+            # Pair scope: host 3 toward host 5, on its own leaf.
+            path.write_text("time_ns,rank,destination,spine,sent,lost,grade\n1,3,5,3,10,1,0\n")
+            self.assertEqual(analyze.sender_hold_reading(path, "blackhole_up", "data_spine"),
+                             {"correct_holds": 0, "false_holds": 1, "correct_held_rows": 0, "false_held_rows": 1})
 
 
 class AckRouteForward(unittest.TestCase):
