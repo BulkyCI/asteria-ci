@@ -70,7 +70,8 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135},
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135,
+             "a2a_twoend_base_4k": 126},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -83,7 +84,8 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135},
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135,
+             "a2a_twoend_base_4k": 126},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1612,15 +1614,101 @@ class TwoEnd(unittest.TestCase):
                 "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail_ack_data_spine"})
         self.assertIn("| ep64 | 256k | blackhole_up | reps_hold_auto_tail4_cover_answer_seq | 0.1 (3) "
                       "| reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4 | - | 3, 3 | 3, 3 | 0, 0 "
-                      "| 120 | 18 | 3:15, 5:3 | 3, 3, 3, 3 | 6, 3, 3, 6 | 6 | - |", markdown)
+                      "| 120 | 18 | 3:15, 5:3 | 3, 3, 3, 3 | 6, 3, 3, 6 | 6 | -, - | - | - |", markdown)
         self.assertIn("| reps_tail | 0.5 (3) | reps_hold_auto_tail4 beats reps_tail | - | -, - | -, - | -, - | - | - "
-                      "| - | -, -, -, - | -, -, -, - | - | - |", markdown)
+                      "| - | -, -, -, - | -, -, -, - | - | -, - | - | - |", markdown)
         self.assertIn("- ep64 256k blackhole_up reps_hold_auto_tail4_cover_answer_seq s301: receiver answer holds: "
                       "leaf 0 spine 3 (false): 1 receivers from 1.4 us, 1 holds, 0 released, 1 at end; "
                       "leaf 1 spine 3 (correct): 2 receivers from 1.1 us, 2 holds, 1 released, 1 at end", markdown)
         self.assertIn("- ep64 256k blackhole_up: reps_hold_auto_tail4_cover_answer_seq against "
                       "reps_hold_auto_tail4_cover: reps_hold_auto_tail4_cover_answer_seq beats "
                       "reps_hold_auto_tail4_cover", markdown)
+
+
+class TwoEndBase(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def balancing(self, stage, arm, condition="blackhole_up"):
+        key = f"{stage}-ep64-256k-{condition}-{arm}-s301"
+        (r,) = [r for r in profiles.a2a_stage_runs(stage, self.calibration, self.tuning) if r["key"] == key]
+        return profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+
+    def test_runs_and_settings(self):
+        stage = "a2a_twoend_base_4k"
+        runs = profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
+        # 18 faulted cells and 3 healthy pairs by 2 arms by 3 seeds.
+        self.assertEqual(len(runs), (18 + 3) * 2 * 3)
+        twoend = profiles.a2a_stage_runs("a2a_twoend_4k", self.calibration, self.tuning)
+        self.assertEqual({(r["group"], r["size"], r["condition"], r["seed"]) for r in runs},
+                         {(r["group"], r["size"], r["condition"], r["seed"]) for r in twoend})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_repath"])
+        cover = self.balancing("a2a_twoend_4k", "reps_hold_auto_tail4_cover", "loss1e2_down")
+        for arm, route in (("reps_hold_auto_tail4_cover_reverse_set", "reverse_set"),
+                           ("reps_hold_auto_tail4_cover_repath", "repath")):
+            self.assertEqual(self.balancing(stage, arm, "loss1e2_down"), {**cover, "ack_route": route})
+
+    def test_read_with_twoend(self):
+        onset = analyze.DEGRADE_AT_NS
+        costs = {("a2a_twoend_4k", "reps_hold_auto_tail4_cover"): [300, 310, 320],
+                 ("a2a_twoend_4k", "reps_hold_auto_tail4_cover_answer_seq"): [100, 110, 120],
+                 ("a2a_twoend_base_4k", "reps_hold_auto_tail4_cover_reverse_set"): [200, 205, 215],
+                 ("a2a_twoend_base_4k", "reps_hold_auto_tail4_cover_repath"): [290, 330, 310]}
+        with tempfile.TemporaryDirectory() as directory:
+            roots = {"a2a_twoend_4k": Path(directory) / "twoend", "a2a_twoend_base_4k": Path(directory) / "base"}
+            runs = {stage: [] for stage in roots}
+            for (stage, arm), values in costs.items():
+                setting = {"ack_route": arm.rpartition("_cover_")[2] if "_cover_" in arm else "spray",
+                           "coverage_first": True}
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("blackhole_up", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, stage, setting),
+                             "fixture": profiles.A2A_FIXTURE_4K}
+                        runs[stage].append(r)
+                        d = roots[stage] / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        transport = {}
+                        if arm.endswith("reverse_set"):
+                            transport = {"answer_set_probe:control": {"count": 30, "bytes": 0},
+                                         "answer_set_replace:control": {"count": 4, "bytes": 0}}
+                        if arm.endswith("repath"):
+                            transport = {"answer_repath:control": {"count": 7, "bytes": 0}}
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+            for stage, root in roots.items():
+                (root / "runs.json").write_text(json.dumps(runs[stage]))
+            markdown_path = Path(directory) / "base.md"
+            subprocess.run(
+                [sys.executable, str(Path(analyze.__file__)), "a2a_twoend", "--runs",
+                 str(roots["a2a_twoend_base_4k"] / "runs.json"), "--out-root", str(roots["a2a_twoend_base_4k"]),
+                 "--stage", "a2a_twoend_base_4k", "--with-root", str(roots["a2a_twoend_4k"]),
+                 "--markdown", str(markdown_path)],
+                check=True, capture_output=True,
+            )
+            markdown = markdown_path.read_text()
+            rows = (analyze.a2a_rows([roots["a2a_twoend_base_4k"] / "runs.json"], roots["a2a_twoend_base_4k"],
+                                     "a2a_twoend_base_4k")
+                    + analyze.a2a_root_rows(roots["a2a_twoend_4k"], "a2a_twoend_4k"))
+            (cell,) = analyze.a2a_twoend(rows, roots["a2a_twoend_base_4k"])
+        self.assertEqual(cell["arms"]["reps_hold_auto_tail4_cover_reverse_set"]["answer_set_replace"], [4] * 3)
+        self.assertEqual(cell["arms"]["reps_hold_auto_tail4_cover_repath"]["answer_repath"], [7] * 3)
+        self.assertEqual(cell["versus"], {
+            "reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover":
+                "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4_cover",
+            "reps_hold_auto_tail4_cover_reverse_set against reps_hold_auto_tail4_cover":
+                "reps_hold_auto_tail4_cover_reverse_set beats reps_hold_auto_tail4_cover",
+            "reps_hold_auto_tail4_cover_repath against reps_hold_auto_tail4_cover": "within seed noise",
+            "reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover_reverse_set":
+                "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4_cover_reverse_set",
+            "reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover_repath":
+                "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4_cover_repath"})
+        self.assertIn("| reps_hold_auto_tail4_cover_reverse_set | 0.2 (3) ", markdown)
+        self.assertIn("| - | 90, 12 | - | - |", markdown)
+        self.assertIn("| - | -, - | 21 | - |", markdown)
 
 
 class NoAck(unittest.TestCase):
@@ -1943,7 +2031,8 @@ class CopyDeadline(unittest.TestCase):
         self.assertEqual((balancing["sentinel_mode"], balancing["copy_expiry"]), ("duplicate", "deadline"))
         # Only the coverage-first arms select it.
         cover = {"a2a_twoend_4k": set(profiles.A2A_TWOEND_COVER_ARMS),
-                 "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS)}
+                 "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS),
+                 "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibration, tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

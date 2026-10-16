@@ -512,6 +512,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_hostlink_s_4k       a2a_hostlink_4k's loss-hold arms with the
 #                           sender's coverage first (A2A_HOSTLINK_COVER_ARMS)
 #                           on its cells and healthy pairs, seeds 301-303
+#   a2a_twoend_base_4k      the A2A_TWOEND_BASE_ARMS, the coverage-first arm
+#                           with its answers routed per connection, on
+#                           a2a_twoend_4k's cells and healthy pairs, seeds
+#                           301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -833,7 +837,9 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto",
                       "reps_hold_auto_tail_ack_cover": "reps_hold_auto",
                       "reps_hold_leaf_tail_ack_cover": "reps_hold_auto",
-                      "reps_flow_hold_tail_ack_cover": "reps_flow_hold"}
+                      "reps_flow_hold_tail_ack_cover": "reps_flow_hold",
+                      "reps_hold_auto_tail4_cover_reverse_set": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_repath": "reps_hold_auto"}
 # The settled fixture. The stages named *_4k and the ring's run on it, where
 # every stage above runs on the generator's defaults; a stage takes it from
 # A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
@@ -1108,6 +1114,18 @@ A2A_TWOEND_COVER_ARMS = {"reps_hold_auto_tail4_cover": {},
                          "reps_hold_auto_tail4_cover_answer_seq": A2A_ANSWER_PATH_SEQ,
                          "reps_hold_auto_tail4_cover_route_oracle": A2A_ACKROUTE_ORACLE}
 A2A_TWOEND_ARMS = ("reps_hold_auto_tail4", *A2A_TWOEND_COVER_ARMS, *A2A_ACKROUTE_DATA_SPINE, "reps_tail")
+# a2a_twoend_base_4k: a2a_twoend_4k's cells, healthy pairs and seeds under
+# two arms of reps_hold_auto_tail4_cover whose receivers route the answers per
+# connection, a sending host and priority group, rather than draw a spine per
+# answer (A2A_TWOEND_BASE_ARMS): reps_hold_auto_tail4_cover_reverse_set over a
+# set of two spines each receiver probes once per base RTT while the data
+# arrives, its sender returning each probe, and renews where a probe goes
+# unanswered (ack_route reverse_set, written as ACK_ROUTE); and
+# reps_hold_auto_tail4_cover_repath over one spine each receiver draws again
+# at each duplicate data arrival but a copied send's (ack_route repath).
+A2A_TWOEND_BASE_STAGE = "a2a_twoend_base_4k"
+A2A_TWOEND_BASE_ARMS = {"reps_hold_auto_tail4_cover_reverse_set": {"ack_route": "reverse_set"},
+                        "reps_hold_auto_tail4_cover_repath": {"ack_route": "repath"}}
 # a2a_noack_4k: the loss-hold arms of the 4096-byte stages without
 # ack_loss_rtts, tail recovery at tail_loss_rtts 4 as in them: each no-ack arm
 # is its ack arm's setting less ack_loss_rtts (A2A_NOACK_ARMS), named by
@@ -1173,7 +1191,7 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
                                    A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
-                                   A2A_HOSTLINK_COVER_STAGE)}
+                                   A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1495,6 +1513,13 @@ def a2a_twoend_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, An
     return {arm: settings[arm] for arm in A2A_TWOEND_ARMS}
 
 
+def a2a_twoend_base_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_twoend_base_4k arm's setting: a2a_twoend_4k's
+    reps_hold_auto_tail4_cover with its keys (A2A_TWOEND_BASE_ARMS)."""
+    cover = a2a_twoend_settings(tuning)["reps_hold_auto_tail4_cover"]
+    return {arm: {**cover, **keys} for arm, keys in A2A_TWOEND_BASE_ARMS.items()}
+
+
 def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_hostlink_s_4k arm's setting: its a2a_hostlink_4k arm's
     (A2A_HOSTLINK_COVER_ARMS) with A2A_COVERAGE_FIRST, through
@@ -1557,6 +1582,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_DOWNLINK_SPRAY_STAGE: (A2A_DOWNLINK_SPRAY_CELLS, A2A_DOWNLINK_SPRAY_ARMS),
         A2A_TWOEND_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_ARMS),
         A2A_HOSTLINK_COVER_STAGE: (A2A_HOSTLINK_CELLS, tuple(A2A_HOSTLINK_COVER_ARMS)),
+        A2A_TWOEND_BASE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_BASE_ARMS)),
     }[stage]
 
 
@@ -1710,6 +1736,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_downlink_spray_settings(tuning) if stage == A2A_DOWNLINK_SPRAY_STAGE
                     else a2a_twoend_settings(tuning) if stage == A2A_TWOEND_STAGE
                     else a2a_hostlink_cover_settings(tuning) if stage == A2A_HOSTLINK_COVER_STAGE
+                    else a2a_twoend_base_settings(tuning) if stage == A2A_TWOEND_BASE_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)

@@ -68,7 +68,7 @@ a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
 a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k,
-a2a_downlink_spray_4k, a2a_twoend_4k and a2a_hostlink_s_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_downlink_spray_4k, a2a_twoend_4k, a2a_hostlink_s_4k and a2a_twoend_base_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -377,8 +377,11 @@ verdicts against reps_hold_auto_tail4, and per faulted run:
   <event>:control, the sends a loss rule found covered and counted as
   answer losses (coverage_first), the answers found lost by their route's
   numbers, the receivers' probe answers over a held spine and the senders'
-  holds and releases of a route of their answers (answer_path_seq); None
-  without the row, as in a run without the key. answer_route_lost_by_spine
+  holds and releases of a route of their answers (answer_path_seq); and
+  answer_set_probe, answer_set_replace and answer_repath, the receivers'
+  probes of their connections' sets and the members they replaced (ack_route
+  reverse_set) and their redraws of a connection's spine (ack_route repath);
+  each None without the row, as in a run without the key. answer_route_lost_by_spine
   is answer_route_lost per route spine, from the rows
   answer_route_lost_spine<k>:control;
 * sender_hold_reading and healthy_sender_hold_reading as a2a_ackroute gives
@@ -400,12 +403,17 @@ verdicts against reps_hold_auto_tail4, and per faulted run:
   the holds, the releases and the receivers still holding it at the end.
 
 Per cell, versus gives the seed-rule verdict on cost of
-reps_hold_auto_tail4_cover against reps_hold_auto_tail4, and of
+reps_hold_auto_tail4_cover against reps_hold_auto_tail4, of
 reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover,
 reps_hold_auto_tail4_cover_route_oracle and
-reps_hold_auto_tail_ack_data_spine, where the cell has both arms.
---with-root adds one stage's runs (--with-stage, a2a_twoend_4k by default)
-of another tabulated out root, as a2a_ackroute's does.
+reps_hold_auto_tail_ack_data_spine, of a2a_twoend_base_4k's
+reps_hold_auto_tail4_cover_reverse_set and reps_hold_auto_tail4_cover_repath
+against reps_hold_auto_tail4_cover, and of
+reps_hold_auto_tail4_cover_answer_seq against each of them, where the cell
+has both arms. --with-root adds one stage's runs (--with-stage, a2a_twoend_4k
+by default) of another tabulated out root, as a2a_ackroute's does, so that
+a2a_twoend_base_4k's runs, read with --stage a2a_twoend_base_4k, share
+a2a_twoend_4k's cells.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -2566,15 +2574,21 @@ def downlink_spray_markdown(cells: list[dict]) -> str:
 # sequences, every answer but the control's on a spine its receiver draws.
 
 A2A_TWOEND_REFERENCE = "reps_hold_auto_tail4"
-# The coverage-first arm against the arm without it, and the arm with the
+# The coverage-first arm against the arm without it, the arm with the
 # answers' path sequences against the coverage-first arm, the same with
-# ack_route_oracle and the stage's control, on cost.
+# ack_route_oracle and the stage's control, and a2a_twoend_base_4k's
+# per-connection routes against the coverage-first arm and the arm with the
+# answers' path sequences against them, on cost.
 A2A_TWOEND_VERSUS = (("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_route_oracle"),
-                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail_ack_data_spine"))
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail_ack_data_spine"),
+                     ("reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover"),
+                     ("reps_hold_auto_tail4_cover_repath", "reps_hold_auto_tail4_cover"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_repath"))
 A2A_ANSWER_LOSS_EVENTS = ("answer_loss_covered", "answer_route_lost", "answer_probe", "answer_route_hold",
-                          "answer_route_release")
+                          "answer_route_release", "answer_set_probe", "answer_set_replace", "answer_repath")
 A2A_TWOEND_READINGS = (*A2A_ANSWER_LOSS_EVENTS, "answer_route_lost_by_spine", "sender_hold_reading",
                        "healthy_sender_hold_reading", "answer_hold_reading", "healthy_answer_hold_reading")
 # The stage whose runs --with-root reads.
@@ -2714,8 +2728,9 @@ def twoend_markdown(cells: list[dict]) -> str:
         "| answer losses covered | answer route lost | by route spine "
         "| sender route holds: correct, false, released, at end "
         "| receiver answer holds: correct, false, released, at end | probe answers "
+        "| set probes, replaced | repaths "
         f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
-        "|---" * 17 + "|",
+        "|---" * 19 + "|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -2733,7 +2748,8 @@ def twoend_markdown(cells: list[dict]) -> str:
                 f"| {_per_spine(by_spine)} "
                 f"| {answer_holds(answer, 'sender')} | {answer_holds(answer, 'receiver')} "
                 f"| {_counted(entry['answer_probe'])} "
-                f"| {_rto_run(entry)} |"
+                f"| {_counted(entry['answer_set_probe'])}, {_counted(entry['answer_set_replace'])} "
+                f"| {_counted(entry['answer_repath'])} | {_rto_run(entry)} |"
             )
     lines.append("")
     for cell in cells:
