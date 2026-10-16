@@ -69,7 +69,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -81,7 +81,7 @@ class Stages(unittest.TestCase):
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
-             "a2a_noack_4k": 486},
+             "a2a_noack_4k": 486, "a2a_hostlink_4k": 150},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1277,6 +1277,147 @@ class NoAck(unittest.TestCase):
         markdown = analyze.noack_markdown([cell])
         self.assertIn("| ep64 | 256k | loss1e2_up | reps_hold_auto_tail4 | 0.5 (3) | reps_hold_auto_tail_ack | 0.3 "
                       "| 0.2 | reps_hold_auto_tail_ack beats reps_hold_auto_tail4 |", markdown)
+
+
+class HostLink(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_faults(self):
+        onset = profiles.DEGRADE_AT_NS
+        self.assertEqual(profiles.a2a_fault("hostloss1e2_up"),
+                         [{"model": "gray", "error_rate": 1e-2, "start_ns": onset, "host": 9, "direction": "up"}])
+        self.assertEqual(profiles.a2a_fault("hostloss1e3_down"),
+                         [{"model": "gray", "error_rate": 1e-3, "start_ns": onset, "host": 9, "direction": "down"}])
+        self.assertEqual(profiles.A2A_FAULT_HOST // 8, 1)
+        self.assertEqual((analyze.A2A_FAULT_HOST, analyze.A2A_HOST_PREFIX),
+                         (profiles.A2A_FAULT_HOST, profiles.A2A_HOST_PREFIX))
+        for condition in ("hostloss5e2_up", "hostloss1e2_both", "hostblackhole_up"):
+            with self.assertRaisesRegex(ValueError, "unknown condition"):
+                profiles.a2a_fault(condition)
+
+    def test_runs_and_settings(self):
+        runs = profiles.a2a_stage_runs("a2a_hostlink_4k", self.calibration, self.tuning)
+        conditions = ("hostloss1e2_up", "hostloss1e3_up", "hostloss1e2_down", "hostloss1e3_down")
+        # 8 cells and 2 healthy pairs by 5 arms by 3 seeds.
+        self.assertEqual(len(runs), (8 + 2) * 5 * 3)
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
+                         {(g, s, c) for g, s in (("ep64", "256k"), ("ep64", "decode8"))
+                          for c in conditions + ("healthy",)})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
+                          "reps_tail", "uniform_tail"])
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
+
+        def network(stage, arm, size, condition):
+            key = f"{stage}-ep64-{size}-{condition}-{arm}-s301"
+            (r,) = [r for r in profiles.a2a_stage_runs(stage, self.calibration, self.tuning) if r["key"] == key]
+            return profiles.a2a_stage_profile(r, self.calibration)["network"]
+
+        # Each arm as a2a_tail_ack_4k and a2a_decode_4k run it, the answers
+        # on their data's spines; the loss per byte.
+        for arm in profiles.A2A_HOSTLINK_ARMS:
+            hostlink = network("a2a_hostlink_4k", arm, "256k", "hostloss1e2_up")
+            self.assertEqual(hostlink["load_balancing"],
+                             network("a2a_tail_ack_4k", arm, "256k", "loss1e2_up")["load_balancing"])
+            self.assertNotIn("ack_route", hostlink["load_balancing"])
+            self.assertEqual(network("a2a_hostlink_4k", arm, "decode8", "healthy"),
+                             network("a2a_decode_4k", arm, "decode8", "healthy"))
+        self.assertEqual(network("a2a_hostlink_4k", "reps_tail", "decode8", "hostloss1e3_down")["link_failures"],
+                         [{**profiles.a2a_fault("hostloss1e3_down")[0], "loss_unit": "byte"}])
+
+    def test_summary_of_a_host_link_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            path.write_text("time_ns,rank,destination_leaf,spine,sent,lost,grade\n10,0,1,3,10,2,0\n20,0,1,5,10,3,0\n")
+            result = summarize.spine_losses(path, None, 5)
+        self.assertEqual(result["faulted_spine"], None)
+        self.assertEqual(result["spines"], {"3": {"sent": 10, "lost": 2}, "5": {"sent": 10, "lost": 3}})
+        self.assertEqual(set(result["cumulative_lost_reached_ns"].values()), {None})
+
+    def test_every_hold_is_false_and_no_reaction(self):
+        for route in ("data_spine", "spray"):
+            for condition in ("hostloss1e2_up", "hostloss1e3_down"):
+                self.assertFalse(analyze.correct_hold(route, condition, 0, 0, 3))
+                self.assertFalse(analyze.correct_hold(route, condition, 1, 1, 3))
+        with tempfile.TemporaryDirectory() as directory:
+            d = Path(directory)
+            (d / "ns3").mkdir()
+            (d / "ns3" / "spine_losses.csv").write_text(
+                "time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                f"{analyze.DEGRADE_AT_NS + 24648},0,1,3,10,0,3\n")
+            (d / "ns3" / "receiver_holds.csv").write_text("time_ns,rank,sender_leaf,spine,arrivals,lost,hold\n")
+            self.assertEqual(analyze.reaction(d, "hostloss1e2_up", 24648), {"reaction_ns": None, "share_basis": None})
+            self.assertEqual(analyze.receiver_reaction(d, "hostloss1e2_down"),
+                             {"receiver_reaction_ns": None, "receiver_basis": None})
+
+    def test_host_link_reading(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            # Host 0 holds spine 3 toward leaf 1 twice and spine 5 toward
+            # leaf 2 once; host 12 loses on spine 2 toward leaf 1 and holds
+            # nothing.
+            path.write_text("time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                            "10,0,1,3,10,2,0\n20,0,1,3,10,0,3\n30,0,1,3,10,1,0\n40,0,1,3,10,1,0\n"
+                            "10,0,2,5,10,1,0\n10,12,1,2,10,4,3\n")
+            reading = analyze.host_link_reading(path)
+            self.assertEqual(reading["faulted_leaf"], 1)
+            self.assertEqual(reading["holding_series"], [
+                {"rank": 0, "destination_leaf": 1, "spine": 3, "holds": 2, "held_rows": 3},
+                {"rank": 0, "destination_leaf": 2, "spine": 5, "holds": 1, "held_rows": 1}])
+            self.assertEqual(reading["toward_faulted_leaf"], {"series": 1, "holds": 2, "held_rows": 3})
+            self.assertEqual(reading["toward_other_leaves"], {"series": 1, "holds": 1, "held_rows": 1})
+            self.assertEqual(reading["toward_every_leaf"], {"series": 0, "holds": 0, "held_rows": 0})
+            self.assertEqual(reading["lost_toward_faulted_leaf_by_spine"], {2: 4, 3: 4})
+            self.assertEqual(reading["lost_by_spine"], {2: 4, 3: 4, 5: 1})
+            # Host scope: every hold is toward every leaf.
+            path.write_text("time_ns,rank,spine,sent,lost,grade\n10,0,3,10,2,0\n")
+            self.assertEqual(analyze.host_link_reading(path)["toward_every_leaf"],
+                             {"series": 1, "holds": 1, "held_rows": 1})
+            self.assertIsNone(analyze.host_link_reading(Path(directory) / "none.csv"))
+
+    def test_analyzer(self):
+        onset = analyze.DEGRADE_AT_NS
+        costs = {"reps_hold_auto_tail_ack": [300, 310, 320], "reps_tail": [400, 420, 440]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for arm, values in costs.items():
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("hostloss1e2_down", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, "a2a_hostlink_4k"),
+                             "fixture": profiles.A2A_FIXTURE_4K}
+                        runs.append(r)
+                        d = root / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        if arm != "reps_tail":
+                            (d / "ns3" / "spine_losses.csv").write_text(
+                                "time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                                + (f"{onset + 1000},0,1,3,10,2,0\n{onset + 1000},0,1,4,10,3,3\n"
+                                   f"{onset + 1000},0,2,6,10,1,0\n" if condition != "healthy" else ""))
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": {}}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            (cell,) = analyze.a2a_hostlink(analyze.a2a_rows([listing], root, "a2a_hostlink_4k"), root)
+        hold = cell["arms"]["reps_hold_auto_tail_ack"]
+        self.assertEqual(hold["versus_reference_cost"], "reps_hold_auto_tail_ack beats reps_tail")
+        self.assertEqual(hold["reaction_ns"], [None] * 3)
+        self.assertEqual(hold["sender_hold_reading"],
+                         [{"correct_holds": 0, "false_holds": 2, "correct_held_rows": 0, "false_held_rows": 2}] * 3)
+        self.assertEqual([h["toward_faulted_leaf"] for h in hold["host_link"]],
+                         [{"series": 1, "holds": 1, "held_rows": 1}] * 3)
+        self.assertEqual([h["lost_toward_faulted_leaf_by_spine"] for h in hold["host_link"]], [{3: 2, 4: 3}] * 3)
+        self.assertEqual(cell["arms"]["reps_tail"]["host_link"], [None] * 3)
+        markdown = analyze.hostlink_markdown([cell])
+        self.assertIn("| ep64 | 256k | hostloss1e2_down | reps_hold_auto_tail_ack | 0.3 (3) "
+                      "| reps_hold_auto_tail_ack beats reps_tail | 6, 6 | 3, 3 (3) | 3, 3 (3) | 0, 0 (0) | 0, 0 "
+                      "| 3:6, 4:9 | 3:6, 4:9, 6:3 | - |", markdown)
+        self.assertIn("| reps_tail | 0.4 (3) | - | -, - | - | - | - | -, - | - | - | - |", markdown)
+        self.assertIn("|---" * 14 + "|\n", markdown)
 
 
 class Decode(unittest.TestCase):

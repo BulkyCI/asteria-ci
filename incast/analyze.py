@@ -32,6 +32,9 @@
                                                      answers' routing, and the answers lost per spine
     analyze.py a2a_noack --runs RUNS.json... --out-root DIR [--stage S] [--ack-root DIR...] [--markdown FILE]
                                                      each loss-hold arm without ack_loss_rtts against its ack arm
+    analyze.py a2a_hostlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     a2a_candidates with the false sender holds under a lossy
+                                                     host link and the losses toward its leaf per spine
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -55,7 +58,7 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k and a2a_noack_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k and a2a_hostlink_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -261,6 +264,27 @@ beside the run directories; none in the workflow, which tabulates one
 dispatch), the no-ack arm's mean cost less the ack arm's, and the
 seed-rule verdict of the no-ack arm against it on cost (None without the
 ack arm's runs on the same seeds).
+
+a2a_hostlink reads one stage's runs alone (--stage, a2a_hostlink_4k by
+default), whose faults are host-link conditions (host<kind>_<direction>, a
+gray loss on the link of host 9, A2A_FAULT_HOST, to its leaf, leaf 1),
+which fault no spine: reaction_ns and receiver_reaction_ns are None, and
+correct_hold takes every hold for false. It gives a2a_candidates' table,
+with verdicts against reps_tail, and per faulted run sender_hold_reading
+and healthy_sender_hold_reading as a2a_ackroute gives them, under the
+run's setting's ack_route, and host_link (None without
+ns3/spine_losses.csv, or for a run of another condition):
+
+* holding_series: every series of the trace that holds (grade 0), a series
+  being a sender (rank), a destination leaf (None for a row of hold scope
+  host) and a spine, with its hold intervals (holds) and the rows that
+  hold (held_rows);
+* toward_faulted_leaf, toward_other_leaves and toward_every_leaf: the
+  series, holds and held rows of the holding series whose destination
+  leaf is the faulted host's, another, or every leaf;
+* lost_toward_faulted_leaf_by_spine and lost_by_spine: per spine, the lost
+  column summed over the rows toward the faulted host's leaf, and over
+  every row, how the access link's losses spread over the spines.
 
 a2a_reaction reads one stage's runs alone (--stage, a2a_reaction_4k by
 default) and gives per faulted run, over the trace rows reaction_ns and
@@ -1152,7 +1176,7 @@ def first_window_above(totals: dict, faulted: dict, interval_ns: int, start: int
 
 def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE) -> dict:
     """reaction_ns (see the module docstring) and the rows' basis."""
-    series = share_series(directory, condition, interval_ns, spine)
+    series = None if host_link_condition(condition) else share_series(directory, condition, interval_ns, spine)
     if series is None:
         return {"reaction_ns": None, "share_basis": None}
     totals, faulted, basis = series
@@ -1163,7 +1187,7 @@ def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEG
 def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> dict:
     """receiver_reaction_ns (see the module docstring) and the rows' basis."""
     path = directory / "ns3" / "receiver_holds.csv"
-    if not path.exists():
+    if not path.exists() or host_link_condition(condition):
         return {"receiver_reaction_ns": None, "receiver_basis": None}
     keep, basis = receiver_share_rows(condition)
     onset = fault_onset_ns(condition)
@@ -1839,7 +1863,7 @@ def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_l
     under ack_route (see the module docstring)."""
     if ack_route not in A2A_ACK_ROUTES:
         raise ValueError(f"ack_route must be one of {A2A_ACK_ROUTES}, not {ack_route!r}")
-    if condition == "healthy" or spine != DEGRADED_SPINE:
+    if condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE:
         return False
     direction = condition.rpartition("_")[2]
     if direction not in A2A_FAULT_LEAF:
@@ -2028,6 +2052,129 @@ def noack_markdown(cells: list[dict]) -> str:
                 f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) | {entry['ack_arm']} "
                 f"| {_us(entry['ack_cost_ns_mean'])} | {_us(entry['minus_ack_cost_ns'])} "
                 f"| {entry['versus_ack_cost'] or '-'} | {_us(entry['reaction_ns_mean'])} | {_rto_run(entry)} |"
+            )
+    return "\n".join(lines) + "\n"
+
+
+# The host-link stage: no spine is faulted, so every sender hold of a spine is
+# false; where the holds and the losses fall.
+
+A2A_HOSTLINK_REFERENCE = "reps_tail"
+# profiles.py's A2A_HOST_PREFIX and A2A_FAULT_HOST: a host-link condition's
+# name starts with the prefix, and its faulted link is that host's.
+A2A_HOST_PREFIX = "host"
+A2A_FAULT_HOST = 9
+A2A_HOSTLINK_BUCKETS = ("toward_faulted_leaf", "toward_other_leaves", "toward_every_leaf")
+
+
+def host_link_condition(condition: str) -> bool:
+    """Whether condition faults one host's access link, no spine."""
+    return condition.startswith(A2A_HOST_PREFIX)
+
+
+def host_link_reading(path: Path, host: int = A2A_FAULT_HOST) -> dict | None:
+    """The sender holds of ns3/spine_losses.csv under a fault of host's link
+    and the losses toward host's leaf (see the module docstring); None
+    without the file."""
+    if not path.exists():
+        return None
+    faulted_leaf = host // A2A_HOSTS_PER_LEAF_OF_TRACE
+    series: dict[tuple, dict[str, int]] = {}
+    holding: dict[tuple, bool] = {}
+    lost: dict[int, int] = defaultdict(int)
+    lost_toward: dict[int, int] = defaultdict(int)
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            if "destination_leaf" in row:
+                destination = int(row["destination_leaf"])
+            elif "destination" in row:
+                destination = int(row["destination"]) // A2A_HOSTS_PER_LEAF_OF_TRACE
+            else:
+                destination = None
+            spine, count = int(row["spine"]), int(row["lost"])
+            lost[spine] += count
+            if destination == faulted_leaf:
+                lost_toward[spine] += count
+            key = (int(row["rank"]), row.get("destination", row.get("destination_leaf")), spine)
+            now = row["grade"] == "0"
+            if now:
+                entry = series.setdefault(key, {"rank": key[0], "destination_leaf": destination, "spine": spine,
+                                                "holds": 0, "held_rows": 0})
+                entry["held_rows"] += 1
+                entry["holds"] += not holding.get(key)
+            holding[key] = now
+    buckets = {name: {"series": 0, "holds": 0, "held_rows": 0} for name in A2A_HOSTLINK_BUCKETS}
+    for entry in series.values():
+        bucket = buckets["toward_every_leaf" if entry["destination_leaf"] is None
+                         else "toward_faulted_leaf" if entry["destination_leaf"] == faulted_leaf
+                         else "toward_other_leaves"]
+        bucket["series"] += 1
+        bucket["holds"] += entry["holds"]
+        bucket["held_rows"] += entry["held_rows"]
+    return {"faulted_leaf": faulted_leaf, "holding_series": sorted(series.values(), key=lambda e: (
+                e["rank"], -1 if e["destination_leaf"] is None else e["destination_leaf"], e["spine"])),
+            **buckets, "lost_by_spine": dict(sorted(lost.items())),
+            "lost_toward_faulted_leaf_by_spine": dict(sorted(lost_toward.items()))}
+
+
+def a2a_hostlink(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_candidates against reps_tail with the host-link measures (see the
+    module docstring)."""
+    by_key = {r["key"]: r for r in rows}
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = out_root / row["key"]
+        healthy = by_key.get(row["healthy_key"])
+        route = (row.get("setting") or {}).get("ack_route", "data_spine")
+        measured[row["key"]] = {
+            "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
+                                                       route),
+            "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
+                out_root / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", route),
+            "host_link": (host_link_reading(directory / "ns3" / "spine_losses.csv")
+                          if host_link_condition(row["condition"]) else None),
+        }
+    cells = a2a_candidates(rows, out_root, A2A_HOSTLINK_REFERENCE)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in ("sender_hold_reading", "healthy_sender_hold_reading", "host_link"):
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+    return cells
+
+
+def _bucket(readings, name: str) -> str:
+    """A host-link reading's bucket summed over the seeds as holds, rows
+    (series); "-" when no seed has a reading."""
+    known = [r[name] for r in readings if r is not None]
+    if not known:
+        return "-"
+    return (f"{sum(b['holds'] for b in known)}, {sum(b['held_rows'] for b in known)} "
+            f"({sum(b['series'] for b in known)})")
+
+
+def hostlink_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm."""
+    lines = [
+        "| group | size | condition | arm | cost mean us (seeds) | vs reps_tail | false holds, rows "
+        "| toward the faulted leaf: holds, rows (series) | toward other leaves | toward every leaf "
+        "| healthy false holds, rows | lost toward the faulted leaf | lost "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 14 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            readings, host = entry["sender_hold_reading"], entry["host_link"]
+            healthy = entry["healthy_sender_hold_reading"]
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) "
+                f"| {entry.get('versus_reference_cost') or '-'} "
+                f"| {_summed(readings, 'false_holds')}, {_summed(readings, 'false_held_rows')} "
+                + "".join(f"| {_bucket(host, name)} " for name in A2A_HOSTLINK_BUCKETS)
+                + f"| {_summed(healthy, 'false_holds')}, {_summed(healthy, 'false_held_rows')} "
+                f"| {_per_spine([h and h['lost_toward_faulted_leaf_by_spine'] for h in host])} "
+                f"| {_per_spine([h and h['lost_by_spine'] for h in host])} | {_rto_run(entry)} |"
             )
     return "\n".join(lines) + "\n"
 
@@ -2333,12 +2480,12 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction", "a2a_ackroute", "a2a_noack"):
+                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                                             "a2a_reaction", "a2a_ackroute", "a2a_noack")
+                                             "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -2350,10 +2497,11 @@ def main() -> int:
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
-                    "a2a_ackroute", "a2a_noack"):
+                    "a2a_ackroute", "a2a_noack", "a2a_hostlink"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
-                      "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k"}
+                      "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k",
+                      "a2a_hostlink": "a2a_hostlink_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
@@ -2427,6 +2575,12 @@ def main() -> int:
                           a2a_ack_rows(arguments.ack_root))
         if arguments.markdown:
             arguments.markdown.write_text(noack_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_hostlink":
+        cells = a2a_hostlink(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(hostlink_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep":

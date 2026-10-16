@@ -255,10 +255,10 @@ DETECTION_COUNTS = (1, 5, 20)
 DEFAULT_FAULTED_SPINE = 3
 
 
-def spine_losses(path: Path, spine: int, onset_ns: int | None) -> dict:
+def spine_losses(path: Path, spine: int | None, onset_ns: int | None) -> dict:
     """Per-spine sent and lost totals of the sender loss trace, and the first
     interval end at which the spine's cumulative lost count reaches each of
-    DETECTION_COUNTS."""
+    DETECTION_COUNTS; never, for no spine."""
     totals: dict[int, list[int]] = {}
     lost_at: dict[int, int] = {}
     with path.open() as handle:
@@ -533,9 +533,10 @@ def main() -> int:
     losses = ns3 / "spine_losses.csv"
     if losses.is_file():
         failures = network.get("link_failures", [])
+        # A host's link names no spine, and no spine is faulted.
         summary["spine_losses"] = spine_losses(
             losses,
-            failures[0]["spine"] if failures else DEFAULT_FAULTED_SPINE,
+            failures[0].get("spine") if failures else DEFAULT_FAULTED_SPINE,
             failures[0]["start_ns"] if failures else None,
         )
 

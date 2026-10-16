@@ -495,6 +495,9 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #   a2a_noack_4k            the A2A_NOACK_ARMS on every faulted cell of the
 #                           A2A_NOACK_SOURCES and their healthy pairs, seeds
 #                           301-303
+#   a2a_hostlink_4k         the A2A_HOSTLINK_ARMS under a lossy host access
+#                           link on the A2A_HOSTLINK_CELLS and their healthy
+#                           pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -1031,6 +1034,22 @@ A2A_NOACK_STAGE = "a2a_noack_4k"
 A2A_NOACK_ARMS = {"reps_hold_auto_tail4": "reps_hold_auto_tail_ack", "reps_hold_leaf_tail4": "reps_hold_leaf_tail_ack",
                   "reps_flow_hold_tail4": "reps_flow_hold_tail_ack"}
 A2A_NOACK_SOURCES = ("a2a_tail_ack_4k", "a2a_sweep_4k", "a2a_decode_4k")
+# a2a_hostlink_4k: one host's access link lossy from the onset, no spine
+# faulted: a gray loss at 1e-2 or 1e-3 (A2A_LOSS_RATES) on the link of host 9
+# (A2A_FAULT_HOST, the second host of leaf 1, the leaf of the down cells'
+# link), up (host to leaf) or down (leaf to host), the condition named
+# host<kind>_<direction> (a2a_host_fault), its loss per byte as the fixture
+# takes every gray loss. On EP64 at 256 KiB and on the decode cell, each
+# with its healthy pair, seeds 301-303, under the 4096-byte arms but
+# reps_oracle_tail, whose oracle reads the leaf-spine links alone, every
+# answer routed over its data's spine (no ack_route).
+A2A_HOST_PREFIX = "host"
+A2A_FAULT_HOST = 9
+A2A_HOSTLINK_STAGE = "a2a_hostlink_4k"
+A2A_HOSTLINK_CONDITIONS = ("hostloss1e2_up", "hostloss1e3_up", "hostloss1e2_down", "hostloss1e3_down")
+A2A_HOSTLINK_CELLS = tuple((group, size, condition) for group, size in (("ep64", "256k"), A2A_DECODE)
+                           for condition in A2A_HOSTLINK_CONDITIONS)
+A2A_HOSTLINK_ARMS = A2A_HOLD_ARMS_4K + ("reps_tail", "uniform_tail")
 # The ring's stages: ar_parity_probe_4k, one healthy uniform_tail run, seed
 # 301, which reads its healthy step time; ar_parity_calibration_4k,
 # a2a_calibration's per_receiver pass on it; and ar_parity_4k, the
@@ -1051,7 +1070,7 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
                                    A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
-                                   A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE)}
+                                   A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1109,10 +1128,13 @@ def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
 def a2a_fault(condition: str) -> list[dict[str, Any]]:
     """The link_failures of a condition: loss (A2A_LOSS_RATES), a lower rate
     (A2A_LINK_RATES) or the blackhole silent, in one direction of one link
-    (up: leaf 0 to spine 3; down: spine 3 to leaf 1), and the structural
-    asymmetry the spine-wide rate form from t = 0 with no duration."""
+    (up: leaf 0 to spine 3; down: spine 3 to leaf 1), the structural
+    asymmetry the spine-wide rate form from t = 0 with no duration, and a
+    host-link condition a2a_host_fault's."""
     if condition == "healthy":
         return []
+    if condition.startswith(A2A_HOST_PREFIX):
+        return a2a_host_fault(condition)
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
     if condition == "structural":
         return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
@@ -1127,6 +1149,19 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
     else:
         raise ValueError(f"unknown condition {condition}")
     return [{**model, **onset, **link}]
+
+
+def a2a_host_fault(condition: str) -> list[dict[str, Any]]:
+    """The link_failures of a host-link condition, host<kind>_<direction>: a
+    gray loss at the loss kind's rate on A2A_FAULT_HOST's link to its leaf
+    from the onset, up (what the host sends its leaf) or down (what the leaf
+    sends the host)."""
+    kind, direction = condition.split("_")
+    loss = kind[len(A2A_HOST_PREFIX):]
+    if loss not in A2A_LOSS_RATES or direction not in ("up", "down"):
+        raise ValueError(f"unknown condition {condition}")
+    return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
+             "host": A2A_FAULT_HOST, "direction": direction}]
 
 
 def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1364,6 +1399,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_REACTION_STAGE: (A2A_REACTION_CELLS, A2A_REACTION_ARMS),
         A2A_RING_STAGE: ((A2A_RING + ("loss1e2_up",),), A2A_ARMS_4K),
         A2A_ACKROUTE_STAGE: (A2A_ACKROUTE_CELLS, A2A_ACKROUTE_ARMS),
+        A2A_HOSTLINK_STAGE: (A2A_HOSTLINK_CELLS, A2A_HOSTLINK_ARMS),
     }[stage]
 
 
