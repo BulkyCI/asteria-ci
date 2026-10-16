@@ -76,7 +76,9 @@ verdicts against a reference arm, and the means of the per-transient
 measures `summarize.py` writes to `transients.json`. `t_comparison` needs
 `runs_per_shard` of at least 3 to fit the 256-job matrix. Tests:
 `python3 -m unittest discover incast/tests`. Dispatch `.github/workflows/incast.yml` with a comma-separated
-list of stages.
+list of stages; `simulation_timeout_seconds`, `run_timeout_minutes` and
+`collect_timeout_minutes` (6 h, 12 h and 60 min by default) lift the limits of
+one simulation, a shard's job and the tabulating job for long runs.
 
 The asteria commit under test is `incast/asteria.ref`.
 

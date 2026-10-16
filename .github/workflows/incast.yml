@@ -28,6 +28,21 @@ on:
         default: dcs
         type: choice
         options: [ dcs, hosted ]
+      simulation_timeout_seconds:
+        description: Seconds one simulation may run before run.py stops it
+        required: false
+        default: 21600
+        type: number
+      run_timeout_minutes:
+        description: Minutes a shard's job may run
+        required: false
+        default: 720
+        type: number
+      collect_timeout_minutes:
+        description: Minutes the tabulating job may run
+        required: false
+        default: 60
+        type: number
 
 permissions:
   contents: read
@@ -178,7 +193,7 @@ jobs:
     needs: [ plan, build, provision ]
     if: ${{ !cancelled() && needs.build.result == 'success' && (needs.provision.result == 'success' || needs.provision.result == 'skipped') }}
     runs-on: ${{ inputs.runner == 'dcs' && format('dcs-r{0}-{1}', github.run_id, matrix.shard.id) || 'ubuntu-24.04' }}
-    timeout-minutes: 720
+    timeout-minutes: ${{ inputs.run_timeout_minutes }}
     strategy:
       fail-fast: false
       max-parallel: 64
@@ -239,6 +254,7 @@ jobs:
       env:
         KEYS: ${{ matrix.shard.keys }}
         PARALLEL: ${{ needs.plan.outputs.parallel }}
+        SIMULATION_TIMEOUT_SECONDS: ${{ inputs.simulation_timeout_seconds }}
         # Scoped to this step: the runtime's libraries would shadow the
         # system's for every later step's tooling.
         LD_LIBRARY_PATH: ${{ env.ASTRA_SIM_LD_LIBRARY_PATH }}
@@ -267,7 +283,7 @@ jobs:
     needs: [ plan, run ]
     if: ${{ always() && needs.plan.result == 'success' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: ${{ inputs.collect_timeout_minutes }}
     permissions:
       contents: write
     steps:
