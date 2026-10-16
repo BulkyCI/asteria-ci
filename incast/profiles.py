@@ -1336,8 +1336,15 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   that with the receiver's hold (A2A_RECEIVER_HOLD), which also counts as
 #   missing the sends a tail repair request shows unanswered
 #   (receiver_tail_missing) and reads a flow's late packets against its
-#   removed queue pair (A2A_STRAY_CLOSED); and reps_oracle_tail_fwd,
-#   a2a_ackroute_fwd_4k's, whose oracle reads the data's own hops.
+#   removed queue pair (A2A_STRAY_CLOSED); reps_oracle_tail_fwd,
+#   a2a_ackroute_fwd_4k's, whose oracle reads the data's own hops; and on
+#   blackhole up and the two multi-fault draws alone, each with its healthy
+#   pair (A2A_WIDE_ARM_CONDITIONS), reps_hold_auto_tail4_cover_answer_seq,
+#   a2a_twoend_4k's, and reps_hold_auto_tail4_cover_reverse_set,
+#   a2a_twoend_base_4k's. Every hold arm takes the stage's overdue repair
+#   (A2A_WIDE_OVERDUE_REPAIR): "off", none, or K, overdue_repair reprobe
+#   with overdue_repair_limit K as in A2A_OVERDUE; the other arms have none.
+#   It is None until chosen, and a2a_stage_runs refuses the stage until then.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1354,7 +1361,12 @@ A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIR
                        for condition in A2A_WIDE_CONDITIONS)
 A2A_WIDE_RECEIVER = {**A2A_RECEIVER_HOLD, "receiver_tail_missing": True, **A2A_STRAY_CLOSED}
 A2A_WIDE_ARMS = ("reps_tail", "uniform_tail", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
-                 "reps_oracle_tail_fwd")
+                 "reps_oracle_tail_fwd", "reps_hold_auto_tail4_cover_answer_seq",
+                 "reps_hold_auto_tail4_cover_reverse_set")
+A2A_WIDE_ARM_CONDITIONS = {arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2")
+                           for arm in ("reps_hold_auto_tail4_cover_answer_seq",
+                                       "reps_hold_auto_tail4_cover_reverse_set")}
+A2A_WIDE_OVERDUE_REPAIR: str | int | None = None
 A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
 A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
@@ -1802,17 +1814,27 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     receiver draws (A2A_ACKROUTE): reps_tail's of a2a_ackroute_4k,
     uniform_tail's of a2a_tail_ack with A2A_ACKROUTE,
     reps_hold_auto_tail4_cover's of a2a_twoend_4k and with A2A_WIDE_RECEIVER
-    for reps_hold_auto_tail4_cover_rx, and reps_oracle_tail_fwd's of
-    a2a_ackroute_fwd_4k."""
-    cover = a2a_twoend_settings(tuning)["reps_hold_auto_tail4_cover"]
+    for reps_hold_auto_tail4_cover_rx, reps_oracle_tail_fwd's of
+    a2a_ackroute_fwd_4k, reps_hold_auto_tail4_cover_answer_seq's of
+    a2a_twoend_4k and reps_hold_auto_tail4_cover_reverse_set's of
+    a2a_twoend_base_4k; every hold arm with overdue_repair reprobe and
+    overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR where that is a limit."""
+    twoend = a2a_twoend_settings(tuning)
+    cover = twoend["reps_hold_auto_tail4_cover"]
     settings = {
         "reps_tail": a2a_ackroute_settings(tuning)["reps_tail"],
         "uniform_tail": {**a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"], **A2A_ACKROUTE},
         "reps_hold_auto_tail4_cover": cover,
         "reps_hold_auto_tail4_cover_rx": {**cover, **A2A_WIDE_RECEIVER},
         "reps_oracle_tail_fwd": a2a_ackroute_fwd_settings(tuning)["reps_oracle_tail_fwd"],
+        "reps_hold_auto_tail4_cover_answer_seq": twoend["reps_hold_auto_tail4_cover_answer_seq"],
+        "reps_hold_auto_tail4_cover_reverse_set":
+            a2a_twoend_base_settings(tuning)["reps_hold_auto_tail4_cover_reverse_set"],
     }
-    return {arm: settings[arm] for arm in A2A_WIDE_ARMS}
+    overdue = ({} if A2A_WIDE_OVERDUE_REPAIR in (None, "off")
+               else {"overdue_repair": "reprobe", "overdue_repair_limit": A2A_WIDE_OVERDUE_REPAIR})
+    return {arm: {**settings[arm], **(overdue if A2A_TRANSPORT_ARMS[arm] in A2A_REPS_HOLD_ARMS else {})}
+            for arm in A2A_WIDE_ARMS}
 
 
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -2035,6 +2057,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         if uncalibrated:
             raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
                              "merge the payload's calibration pass into a2a_calibration.json")
+        if stage in A2A_WIDE_STAGES and A2A_WIDE_OVERDUE_REPAIR is None:
+            raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
+                             "a reprobe limit")
         settings = (a2a_ackroute_settings(tuning) if stage == A2A_ACKROUTE_STAGE
                     else a2a_ackroute_fwd_settings(tuning) if stage == A2A_ACKROUTE_FWD_STAGE
                     else a2a_downlink_spray_settings(tuning) if stage == A2A_DOWNLINK_SPRAY_STAGE
@@ -2047,8 +2072,13 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
+        # An arm a stage runs on some of its conditions only, and their
+        # healthy pairs.
+        arm_conditions = A2A_WIDE_ARM_CONDITIONS if stage in A2A_WIDE_STAGES else {}
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
+                if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):
+                    continue
                 if (group, size, condition) not in shared:
                     add(arm, group, size, condition, seed, setting)
     elif stage == A2A_RS3_STAGE:

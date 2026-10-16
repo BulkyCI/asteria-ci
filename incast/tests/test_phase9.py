@@ -42,10 +42,24 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_spines{spines}_calibration_4k": 6 for spines in (8, 32, 128, 256)},
                  # Per P, the wide-leaf validity run of each pair (P above 8),
                  # the calibration's 2 pairs at 3 seeds, and the comparison's
-                 # 2 pairs by 7 conditions by 5 arms by 3 seeds.
+                 # 2 pairs by 7 conditions by 5 arms by 3 seeds, and by 4
+                 # (3 conditions and healthy) by 2 arms by 3 seeds.
                  **{f"a2a_wide{wide}_validity_4k": 2 for wide in (32, 128, 256)},
                  **{f"a2a_wide{wide}_calibration_4k": 6 for wide in (8, 32, 128, 256)},
-                 **{f"a2a_wide{wide}_4k": 210 for wide in (8, 32, 128, 256)}}
+                 **{f"a2a_wide{wide}_4k": 258 for wide in (8, 32, 128, 256)}}
+
+
+# The wide-leaf comparisons' overdue repair, which a2a_stage_runs requires
+# chosen: off, but where a test sets it.
+_wide_overdue = mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", "off")
+
+
+def setUpModule():
+    _wide_overdue.start()
+
+
+def tearDownModule():
+    _wide_overdue.stop()
 
 
 def measured_spines():
@@ -2224,21 +2238,30 @@ class Wide(unittest.TestCase):
 
         wide = profiles_of("a2a_wide8_4k")
         compared = 0
-        for stage in ("a2a_twoend_4k", "a2a_ackroute_fwd_4k"):
+        for stage in ("a2a_twoend_4k", "a2a_ackroute_fwd_4k", "a2a_twoend_base_4k"):
             for key, document in profiles_of(stage).items():
                 if key in wide:
                     self.assertEqual({**wide[key], "name": document["name"]}, document, key)
                     compared += 1
         # reps_hold_auto_tail4_cover and reps_tail of a2a_twoend_4k and
         # reps_oracle_tail_fwd of a2a_ackroute_fwd_4k, on 4 conditions and
-        # the healthy pair of 2 sizes at 3 seeds.
-        self.assertEqual(compared, 3 * 5 * 2 * 3)
+        # the healthy pair of 2 sizes at 3 seeds; and
+        # reps_hold_auto_tail4_cover_answer_seq of a2a_twoend_4k and
+        # reps_hold_auto_tail4_cover_reverse_set of a2a_twoend_base_4k on
+        # blackhole up and the healthy pair.
+        self.assertEqual(compared, 3 * 5 * 2 * 3 + 2 * 2 * 2 * 3)
 
     @measured_4k()
     def test_members(self):
         runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
-        self.assertEqual(len(runs), 210)
+        self.assertEqual(len(runs), 258)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_WIDE_ARMS))
+        conditions = set(profiles.A2A_WIDE_CONDITIONS) | {"healthy"}
+        for arm in profiles.A2A_WIDE_ARMS:
+            self.assertEqual({r["condition"] for r in runs if r["arm"] == arm},
+                             {"blackhole_up", "multi_loss1e3", "multi_loss1e2", "healthy"}
+                             if arm in ("reps_hold_auto_tail4_cover_answer_seq",
+                                        "reps_hold_auto_tail4_cover_reverse_set") else conditions, arm)
         self.assertEqual({(r["size"], r["compute_ns"], r["iterations"]) for r in runs},
                          {("256k", 236_000, 40), ("2m", 1_816_000, 12)})
         for r in runs:
@@ -2255,7 +2278,8 @@ class Wide(unittest.TestCase):
             hold = network["load_balancing"].get("selector") == "reps_hold"
             self.assertEqual(network.get("sparse_hold_trace"), True if hold else None)
             self.assertNotIn("port_counter_interval_ns", network)
-            self.assertEqual(network["load_balancing"]["ack_route"], "spray")
+            self.assertEqual(network["load_balancing"]["ack_route"],
+                             "reverse_set" if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set" else "spray")
             if r["arm"] == "reps_hold_auto_tail4_cover" and r["size"] == "2m":
                 self.assertEqual(network["load_balancing"]["loss_thresholds"],
                                  self.calibration["per_receiver"]["ep64-2m-p4096-w32"]["loss_thresholds"]["24648"])
@@ -2282,13 +2306,40 @@ class Wide(unittest.TestCase):
                           "receiver_tail_missing": True, "stray_path_seq": "closed"})
         self.assertEqual(settings["reps_oracle_tail_fwd"],
                          profiles.a2a_ackroute_fwd_settings(self.tuning)["reps_oracle_tail_fwd"])
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_answer_seq"],
+                         profiles.a2a_twoend_settings(self.tuning)["reps_hold_auto_tail4_cover_answer_seq"])
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_reverse_set"],
+                         {**cover, "ack_route": "reverse_set"})
         self.assertEqual({arm: setting["ack_route"] for arm, setting in settings.items()},
-                         {arm: "spray" for arm in profiles.A2A_WIDE_ARMS})
+                         {**{arm: "spray" for arm in profiles.A2A_WIDE_ARMS},
+                          "reps_hold_auto_tail4_cover_reverse_set": "reverse_set"})
         # The comparison reads its own P's calibration cells.
         lacking = {**self.calibration, "per_receiver": {
             k: v for k, v in self.calibration["per_receiver"].items() if not k.endswith("-w128")}}
         with self.assertRaisesRegex(ValueError, r"\['ep64-256k-p4096-w128', 'ep64-2m-p4096-w128'\]"):
             profiles.a2a_stage_runs("a2a_wide128_4k", lacking, self.tuning)
+
+    @measured_4k()
+    def test_overdue_repair(self):
+        # The stage's one overdue repair, on every hold arm: none until it
+        # is chosen, none under off, reprobe with the limit under a limit.
+        with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", None):
+            with self.assertRaisesRegex(ValueError, "a2a_wide32_4k's overdue repair is not chosen"):
+                profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+        off = profiles.a2a_wide_settings(self.tuning)
+        self.assertFalse(any("overdue_repair" in setting for setting in off.values()))
+        hold = {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
+                "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
+        with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", 3):
+            settings = profiles.a2a_wide_settings(self.tuning)
+            for arm, setting in settings.items():
+                self.assertEqual(setting, {**off[arm], **({"overdue_repair": "reprobe", "overdue_repair_limit": 3}
+                                                          if arm in hold else {})}, arm)
+            runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+            for r in runs:
+                balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                self.assertEqual((balancing.get("overdue_repair"), balancing.get("overdue_repair_limit")),
+                                 ("reprobe", 3) if r["arm"] in hold else (None, None), r["key"])
 
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
@@ -2376,7 +2427,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS),
                  "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS),
                  "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS),
-                 **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx"}
+                 **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
+                            "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
                     for stage in profiles.A2A_WIDE_STAGES},
                  "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"}}
         for stage in profiles.A2A_STAGES:
