@@ -241,9 +241,13 @@ and per faulted run:
   A hold is a sender's (its leaf, the row's rank's) of one spine toward one
   destination leaf (the destination_leaf column, or the leaf of the
   destination column's host; a row naming no destination, of hold scope
-  host, holds toward every leaf). Every hold in a healthy run, every hold
-  of a spine other than 3, and every hold toward the sender's own leaf,
-  whose traffic crosses no spine, is false. Of spine 3, with the faulted link
+  host, holds toward every leaf). The failed links are those of the run's
+  manifest.json link_failures (run_faults), each a leaf's uplink to a spine
+  (_up), the spine's downlink to it (_down) or both, and a hold is correct
+  where one of them makes it so; without a manifest, the condition's one
+  link below. Every hold in a healthy run, every hold of a spine no link
+  of which failed, and every hold toward the sender's own leaf, whose
+  traffic crosses no spine, is false. Of spine 3, with the faulted link
   leaf 0's uplink (_up) or the downlink to leaf 1 (_down): under
   data_spine, where an answer returns over the spine of the data it
   answers, an _up hold is correct when its sender is on leaf 0 (toward any
@@ -1999,29 +2003,70 @@ A2A_ACKROUTE_VERSUS = (("reps_hold_auto_tail4_route_oracle", "reps_hold_auto_tai
 A2A_ACKROUTE_WITH_STAGE = "a2a_ackroute_4k"
 
 
-def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_leaf: int | None,
-                 spine: int) -> bool:
-    """Whether a sender on sender_leaf holding spine toward destination_leaf
-    (None: toward every leaf) holds what the fault of condition degrades
-    under ack_route (see the module docstring). Toward its own leaf a
-    sender's traffic and its answers cross no spine, so no such hold is."""
-    if ack_route not in A2A_ACK_ROUTES:
-        raise ValueError(f"ack_route must be one of {A2A_ACK_ROUTES}, not {ack_route!r}")
-    if (condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE
-            or destination_leaf == sender_leaf):
-        return False
+def fault_links(condition: str) -> tuple[tuple[int, int, str], ...]:
+    """The leaf-spine link directions condition fails, as (leaf, spine,
+    direction up or down): spine 3 of A2A_FAULT_LEAF's leaf; none for a
+    healthy run or a host's link."""
+    if condition == "healthy" or host_link_condition(condition):
+        return ()
     direction = condition.rpartition("_")[2]
     if direction not in A2A_FAULT_LEAF:
         raise ValueError(f"condition {condition!r} names no faulted direction")
-    leaf = A2A_FAULT_LEAF[direction]
-    # The data crossing the link: up, a sender of the link's leaf toward any
-    # leaf; down, any sender toward it.
-    data = sender_leaf == leaf if direction == "up" else destination_leaf == leaf
-    # Under data_spine the answers return over the data's spine: up, those
-    # the link's leaf sends back to any sender; down, those sent back to a
-    # sender of the link's leaf.
-    answers = destination_leaf == leaf if direction == "up" else sender_leaf == leaf
-    return data or (ack_route == "data_spine" and answers)
+    return ((A2A_FAULT_LEAF[direction], DEGRADED_SPINE, direction),)
+
+
+def run_faults(directory: Path, condition: str) -> tuple[tuple[tuple[int, int, str], ...], int]:
+    """The leaf-spine link directions a run failed, as fault_links gives
+    them, and its hosts per leaf: from its manifest.json (link_failures, a
+    host's link failing none and a failure of no leaf every leaf's;
+    physical_topology hosts_per_leaf), and without one from condition at
+    A2A_HOSTS_PER_LEAF_OF_TRACE."""
+    path = directory / "manifest.json"
+    if not path.is_file():
+        return fault_links(condition), A2A_HOSTS_PER_LEAF_OF_TRACE
+    manifest = json.loads(path.read_text())
+    hosts_per_leaf = manifest["physical_topology"]["hosts_per_leaf"]
+    leaves = manifest["ranks"] // hosts_per_leaf
+    links = []
+    for failure in manifest.get("link_failures") or ():
+        if failure.get("host") is not None or failure.get("spine") is None:
+            continue
+        for leaf in ([failure["leaf"]] if failure.get("leaf") is not None else range(leaves)):
+            links.append((leaf, failure["spine"], failure.get("direction") or "both"))
+    return tuple(links), hosts_per_leaf
+
+
+def _directions(direction: str) -> tuple[str, ...]:
+    return ("up", "down") if direction == "both" else (direction,)
+
+
+def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_leaf: int | None,
+                 spine: int, links: tuple[tuple[int, int, str], ...] | None = None) -> bool:
+    """Whether a sender on sender_leaf holding spine toward destination_leaf
+    (None: toward every leaf) holds what the failed links degrade under
+    ack_route (see the module docstring): links as run_faults gives them, by
+    default the fault of condition (fault_links). Toward its own leaf a
+    sender's traffic and its answers cross no spine, so no such hold is."""
+    if ack_route not in A2A_ACK_ROUTES:
+        raise ValueError(f"ack_route must be one of {A2A_ACK_ROUTES}, not {ack_route!r}")
+    if links is None:
+        links = fault_links(condition)
+    if destination_leaf == sender_leaf:
+        return False
+    for leaf, failed, link_direction in links:
+        if failed != spine:
+            continue
+        for direction in _directions(link_direction):
+            # The data crossing the link: up, a sender of the link's leaf
+            # toward any leaf; down, any sender toward it.
+            data = sender_leaf == leaf if direction == "up" else destination_leaf == leaf
+            # Under data_spine the answers return over the data's spine: up,
+            # those the link's leaf sends back to any sender; down, those
+            # sent back to a sender of the link's leaf.
+            answers = destination_leaf == leaf if direction == "up" else sender_leaf == leaf
+            if data or (ack_route == "data_spine" and answers):
+                return True
+    return False
 
 
 def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | None:
@@ -2031,6 +2076,7 @@ def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | No
     alike; None without the file (see the module docstring)."""
     if not path.exists():
         return None
+    links, hosts_per_leaf = run_faults(path.parent.parent, condition)
     counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
     holding: dict[tuple, bool] = {}
     with traces.open_trace(path) as handle:
@@ -2041,11 +2087,11 @@ def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | No
             if "destination_leaf" in row:
                 destination = int(row["destination_leaf"])
             elif "destination" in row:
-                destination = int(row["destination"]) // A2A_HOSTS_PER_LEAF_OF_TRACE
+                destination = int(row["destination"]) // hosts_per_leaf
             else:
                 destination = None
-            correct = correct_hold(ack_route, condition, int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE,
-                                   destination, int(row["spine"]))
+            correct = correct_hold(ack_route, condition, int(row["rank"]) // hosts_per_leaf,
+                                   destination, int(row["spine"]), links)
             kind = "correct" if correct else "false"
             key = tuple(row[c] for c in series)
             now = row["grade"] == "0"
@@ -2464,18 +2510,21 @@ A2A_DOWNLINK_SPRAY_READINGS = ("ack_route", "receiver_tail_missing_by_spine", "r
                                "healthy_receiver_hold_reading")
 
 
-def correct_receiver_hold(condition: str, receiver_leaf: int, sender_leaf: int, spine: int) -> bool:
+def correct_receiver_hold(condition: str, receiver_leaf: int, sender_leaf: int, spine: int,
+                          links: tuple[tuple[int, int, str], ...] | None = None) -> bool:
     """Whether a receiver on receiver_leaf holding spine for the senders of
-    sender_leaf holds what the fault of condition degrades (see the module
-    docstring)."""
-    if (condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE
-            or sender_leaf == receiver_leaf):
+    sender_leaf holds what the failed links degrade (see the module
+    docstring): links as run_faults gives them, by default the fault of
+    condition (fault_links)."""
+    if links is None:
+        links = fault_links(condition)
+    if sender_leaf == receiver_leaf:
         return False
-    direction = condition.rpartition("_")[2]
-    if direction not in A2A_FAULT_LEAF:
-        raise ValueError(f"condition {condition!r} names no faulted direction")
-    leaf = A2A_FAULT_LEAF[direction]
-    return sender_leaf == leaf if direction == "up" else receiver_leaf == leaf
+    return any(
+        failed == spine and (sender_leaf == leaf if direction == "up" else receiver_leaf == leaf)
+        for leaf, failed, link_direction in links
+        for direction in _directions(link_direction)
+    )
 
 
 def receiver_hold_reading(path: Path, condition: str) -> dict | None:
@@ -2485,6 +2534,7 @@ def receiver_hold_reading(path: Path, condition: str) -> dict | None:
     file."""
     if not path.exists():
         return None
+    links, hosts_per_leaf = run_faults(path.parent.parent, condition)
     counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
     holding: dict[tuple, bool] = {}
     with path.open() as handle:
@@ -2492,8 +2542,8 @@ def receiver_hold_reading(path: Path, condition: str) -> dict | None:
         series = [column for column in reader.fieldnames or ()
                   if column not in ("time_ns", "arrivals", "lost", "hold")]
         for row in reader:
-            correct = correct_receiver_hold(condition, int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE,
-                                            int(row["sender_leaf"]), int(row["spine"]))
+            correct = correct_receiver_hold(condition, int(row["rank"]) // hosts_per_leaf,
+                                            int(row["sender_leaf"]), int(row["spine"]), links)
             kind = "correct" if correct else "false"
             key = tuple(row[c] for c in series)
             now = row["hold"] != "none"

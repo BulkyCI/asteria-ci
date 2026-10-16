@@ -1236,6 +1236,49 @@ class AckRoute(unittest.TestCase):
                              {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
             self.assertIsNone(analyze.sender_hold_reading(Path(directory) / "none.csv", "loss1e2_up", "spray"))
 
+    def test_the_manifest_names_the_failed_links(self):
+        # A single fault reads as its condition does, from its manifest.
+        for condition in ("blackhole_up", "loss1e2_up", "loss1e3_down", "blackhole_down", "hostloss1e2_up",
+                          "healthy"):
+            links = tuple((f["leaf"], f["spine"], f["direction"]) for f in profiles.a2a_fault(condition)
+                          if "spine" in f)
+            for route in analyze.A2A_ACK_ROUTES:
+                for sender in range(8):
+                    for destination in (*range(8), None):
+                        for spine in (2, 3):
+                            with self.subTest(condition=condition, route=route, sender=sender,
+                                              destination=destination, spine=spine):
+                                self.assertEqual(
+                                    analyze.correct_hold(route, condition, sender, destination, spine, links),
+                                    analyze.correct_hold(route, condition, sender, destination, spine))
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            (run / "ns3").mkdir()
+            # Leaf 2's uplink to spine 5, both directions of leaf 4's link to
+            # spine 1 (a failure of it in both), and a host's link; 16 hosts
+            # per leaf.
+            (run / "manifest.json").write_text(json.dumps({
+                "ranks": 128, "physical_topology": {"hosts_per_leaf": 16},
+                "link_failures": [{"model": "gray", "leaf": 2, "spine": 5, "direction": "up"},
+                                  {"model": "silent", "leaf": 4, "spine": 1, "direction": "both"},
+                                  {"model": "gray", "host": 9, "spine": None, "direction": "up"}]}))
+            self.assertEqual(analyze.run_faults(run, "multi")[0], ((2, 5, "up"), (4, 1, "both")))
+            path = run / "ns3" / "spine_losses.csv"
+            path.write_text("time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                            # Host 32 on leaf 2 toward leaf 3 over spine 5: the data crosses leaf 2's uplink.
+                            "1,32,3,5,10,1,0\n"
+                            # Host 48 on leaf 3 toward leaf 4 over spine 1: spine 1's downlink to leaf 4.
+                            "1,48,4,1,10,1,0\n"
+                            # Host 64 on leaf 4 toward leaf 0 over spine 1: leaf 4's uplink.
+                            "1,64,0,1,10,1,0\n"
+                            # Host 0 on leaf 0 toward leaf 1 over spine 3, and host 32 toward leaf 3
+                            # over spine 1: no failed link.
+                            "1,0,1,3,10,1,0\n1,32,3,1,10,1,0\n")
+            self.assertEqual(analyze.sender_hold_reading(path, "multi", "spray"),
+                             {"correct_holds": 3, "false_holds": 2, "correct_held_rows": 3, "false_held_rows": 2})
+            self.assertTrue(analyze.correct_receiver_hold("multi", 4, 3, 1, ((4, 1, "both"),)))
+            self.assertFalse(analyze.correct_receiver_hold("multi", 3, 0, 1, ((4, 1, "both"),)))
+
     def test_same_leaf_holds_are_false(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "spine_losses.csv"

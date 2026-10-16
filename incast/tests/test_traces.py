@@ -32,8 +32,11 @@ class SparseTraceTest(unittest.TestCase):
         (directory / "ns3").mkdir(parents=True)
         path = directory / "ns3" / "spine_losses.csv"
         path.write_text(trace)
-        topology = {"spine_count": 3, **({"sparse_hold_trace": True} if sparse else {})}
-        (directory / "manifest.json").write_text(json.dumps({"physical_topology": topology}))
+        topology = {"spine_count": 3, "hosts_per_leaf": 8,
+                    **({"sparse_hold_trace": True} if sparse else {})}
+        (directory / "manifest.json").write_text(json.dumps({
+            "ranks": 64, "physical_topology": topology,
+            "link_failures": [{"model": "silent", "leaf": 0, "spine": 3, "direction": "up"}]}))
         return path
 
     def test_the_rebuilt_trace_is_the_dense_one(self):
