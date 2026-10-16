@@ -68,7 +68,8 @@ class Stages(unittest.TestCase):
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
-             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441},
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
+             "a2a_noack_4k": 486},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -79,7 +80,8 @@ class Stages(unittest.TestCase):
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
-             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441},
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
+             "a2a_noack_4k": 486},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1196,6 +1198,85 @@ class AckRoute(unittest.TestCase):
             self.assertEqual(analyze.sender_hold_reading(path, "loss1e2_up", "data_spine"),
                              {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
             self.assertIsNone(analyze.sender_hold_reading(Path(directory) / "none.csv", "loss1e2_up", "spray"))
+
+
+class NoAck(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_runs(self):
+        runs = profiles.a2a_stage_runs("a2a_noack_4k", self.calibration, self.tuning)
+        faulted = set()
+        for stage in profiles.A2A_NOACK_SOURCES:
+            faulted |= set(profiles.a2a_faulted_4k(stage)[0])
+        # 28 gate cells, 11 more of the sweep and 5 of the decode cell, and
+        # 10 healthy pairs, by 3 arms by 3 seeds.
+        self.assertEqual(len(faulted), 44)
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs if r["condition"] != "healthy"},
+                         faulted)
+        self.assertEqual(len({(r["group"], r["size"]) for r in runs if r["condition"] == "healthy"}), 10)
+        self.assertEqual(len(runs), (44 + 10) * 3 * 3)
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail4", "reps_hold_leaf_tail4", "reps_flow_hold_tail4"])
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual((analyze.A2A_NOACK_ARMS, analyze.A2A_NOACK_SOURCES),
+                         (profiles.A2A_NOACK_ARMS, profiles.A2A_NOACK_SOURCES))
+
+    def test_profiles_are_the_ack_arms_less_ack_loss_rtts(self):
+        ack = {}
+        for stage in profiles.A2A_NOACK_SOURCES:
+            for r in profiles.a2a_stage_runs(stage, self.calibration, self.tuning):
+                ack.setdefault((r["arm"], r["group"], r["size"], r["condition"], r["seed"]), r)
+        for r in profiles.a2a_stage_runs("a2a_noack_4k", self.calibration, self.tuning):
+            theirs = ack[(profiles.A2A_NOACK_ARMS[r["arm"]], r["group"], r["size"], r["condition"], r["seed"])]
+            for key in ("compute_ns", "iterations", "fixture", "message_bytes"):
+                self.assertEqual(r[key], theirs[key])
+            mine = profiles.a2a_stage_profile(r, self.calibration)
+            expected = profiles.a2a_stage_profile(theirs, self.calibration)
+            self.assertEqual(expected["network"]["load_balancing"].pop("ack_loss_rtts"), 2)
+            expected["name"] = mine["name"]
+            self.assertEqual(json.dumps(mine), json.dumps(expected), r["key"])
+
+    def test_analyzer(self):
+        onset = analyze.DEGRADE_AT_NS
+        with tempfile.TemporaryDirectory() as directory:
+            root, theirs = Path(directory) / "noack", Path(directory) / "ack"
+
+            def write(out, arm, stage, costs):
+                runs = []
+                for seed, cost in zip((301, 302, 303), costs):
+                    for condition, extra in (("healthy", 0), ("loss1e2_up", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, stage), "fixture": profiles.A2A_FIXTURE_4K}
+                        runs.append(r)
+                        d = out / r["key"]
+                        d.mkdir(parents=True)
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": {}}))
+                return runs
+
+            runs = write(root, "reps_hold_auto_tail4", "a2a_noack_4k", [500, 520, 540])
+            runs += write(root, "reps_hold_leaf_tail4", "a2a_noack_4k", [100, 110, 120])
+            (root / "runs.json").write_text(json.dumps(runs))
+            ack = write(theirs, "reps_hold_auto_tail_ack", "a2a_tail_ack_4k", [300, 310, 320])
+            ack += write(theirs, "reps_hold_leaf_tail_ack", "a2a_tail_ack_4k", [300, 310, 320])
+            (theirs / "runs.json").write_text(json.dumps(ack))
+            rows = analyze.a2a_rows([root / "runs.json"], root, "a2a_noack_4k")
+            (cell,) = analyze.a2a_noack(rows, root, analyze.a2a_ack_rows([theirs]))
+            (alone,) = analyze.a2a_noack(rows, root)
+        auto, leaf = cell["arms"]["reps_hold_auto_tail4"], cell["arms"]["reps_hold_leaf_tail4"]
+        self.assertEqual((auto["ack_arm"], auto["ack_stages"], auto["ack_cost_ns"]),
+                         ("reps_hold_auto_tail_ack", ["a2a_tail_ack_4k"], [300, 310, 320]))
+        self.assertEqual(auto["minus_ack_cost_ns"], 210)
+        self.assertEqual(auto["versus_ack_cost"], "reps_hold_auto_tail_ack beats reps_hold_auto_tail4")
+        self.assertEqual(leaf["versus_ack_cost"], "reps_hold_leaf_tail4 beats reps_hold_leaf_tail_ack")
+        self.assertEqual((alone["arms"]["reps_hold_auto_tail4"]["ack_cost_ns"],
+                          alone["arms"]["reps_hold_auto_tail4"]["versus_ack_cost"]), (None, None))
+        markdown = analyze.noack_markdown([cell])
+        self.assertIn("| ep64 | 256k | loss1e2_up | reps_hold_auto_tail4 | 0.5 (3) | reps_hold_auto_tail_ack | 0.3 "
+                      "| 0.2 | reps_hold_auto_tail_ack beats reps_hold_auto_tail4 |", markdown)
 
 
 class Decode(unittest.TestCase):

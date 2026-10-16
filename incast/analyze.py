@@ -30,6 +30,8 @@
     analyze.py a2a_ackroute --runs RUNS.json... --out-root DIR [--stage S] [--ack-route R] [--markdown FILE]
                                                      a2a_candidates with correct and false sender holds by the
                                                      answers' routing, and the answers lost per spine
+    analyze.py a2a_noack --runs RUNS.json... --out-root DIR [--stage S] [--ack-root DIR...] [--markdown FILE]
+                                                     each loss-hold arm without ack_loss_rtts against its ack arm
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -53,7 +55,7 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k, a2a_decode_4k and a2a_ackroute_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k and a2a_noack_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -245,6 +247,20 @@ ack_route_oracle arm against the arm it adds the key to, and of
 reps_hold_auto_tail_ack against reps_hold_auto_tail4 and against
 reps_hold_auto_tail_ack_data_spine, the same arm with every answer over its
 data's spine.
+
+a2a_noack reads one stage's runs alone (--stage, a2a_noack_4k by default),
+whose arms are the loss-hold arms of a2a_tail_ack_4k, a2a_sweep_4k and
+a2a_decode_4k without ack_loss_rtts (reps_hold_auto_tail4,
+reps_hold_leaf_tail4 and reps_flow_hold_tail4, their profiles those of
+reps_hold_auto_tail_ack, reps_hold_leaf_tail_ack and
+reps_flow_hold_tail_ack but for ack_loss_rtts), and gives a2a_candidates'
+table and per cell and no-ack arm its ack arm's per-seed and mean cost on
+the same cell, each stage's runs costed against their own healthy pairs,
+read from the tabulated out roots of those stages (--ack-root, runs.json
+beside the run directories; none in the workflow, which tabulates one
+dispatch), the no-ack arm's mean cost less the ack arm's, and the
+seed-rule verdict of the no-ack arm against it on cost (None without the
+ack arm's runs on the same seeds).
 
 a2a_reaction reads one stage's runs alone (--stage, a2a_reaction_4k by
 default) and gives per faulted run, over the trace rows reaction_ns and
@@ -1953,6 +1969,69 @@ def ackroute_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The no-ack stage: each loss-hold arm without ack_loss_rtts against its ack
+# arm on the same cell.
+
+# profiles.py's A2A_NOACK_ARMS and A2A_NOACK_SOURCES: each no-ack arm's ack
+# arm, and the stages that run the ack arms.
+A2A_NOACK_ARMS = {"reps_hold_auto_tail4": "reps_hold_auto_tail_ack", "reps_hold_leaf_tail4": "reps_hold_leaf_tail_ack",
+                  "reps_flow_hold_tail4": "reps_flow_hold_tail_ack"}
+A2A_NOACK_SOURCES = ("a2a_tail_ack_4k", "a2a_sweep_4k", "a2a_decode_4k")
+
+
+def a2a_ack_rows(ack_roots) -> list[dict]:
+    """The runs of the A2A_NOACK_SOURCES' ack arms in the tabulated out roots
+    given (runs.json beside the run directories), as a2a_rows gives them."""
+    rows = []
+    for root in ack_roots or ():
+        for stage in A2A_NOACK_SOURCES:
+            rows += [row for row in a2a_rows([root / "runs.json"], root, stage)
+                     if row["arm"] in A2A_NOACK_ARMS.values()]
+    return rows
+
+
+def a2a_noack(rows: list[dict], out_root: Path, ack_rows: list[dict] | None = None) -> list[dict]:
+    """a2a_candidates against reps_tail (see the module docstring), with each
+    no-ack arm's ack arm on the same cell from ack_rows: its per-seed and
+    mean cost, the no-ack arm's mean cost less it, and the seed-rule
+    verdict of the no-ack arm against it on cost."""
+    cells = a2a_candidates(rows, out_root, "reps_tail")
+    ack_cells = {(c["group"], c["size"], c["condition"]): c for c in a2a_cost_cells(ack_rows or [])}
+    for cell in cells:
+        theirs = ack_cells.get((cell["group"], cell["size"], cell["condition"]), {"arms": {}})["arms"]
+        for label, entry in cell["arms"].items():
+            ack = theirs.get(A2A_NOACK_ARMS.get(label, ""))
+            entry["ack_arm"] = A2A_NOACK_ARMS.get(label)
+            entry["ack_stages"] = None if ack is None else ack["stages"]
+            entry["ack_cost_ns"] = None if ack is None else ack["cost_ns"]
+            entry["ack_cost_ns_mean"] = None if ack is None else ack["cost_ns_mean"]
+            entry["minus_ack_cost_ns"] = (None if ack is None or None in (entry["cost_ns_mean"], ack["cost_ns_mean"])
+                                          else entry["cost_ns_mean"] - ack["cost_ns_mean"])
+            entry["versus_ack_cost"] = (None if ack is None or ack["seeds"] != entry["seeds"]
+                                        else verdict(entry["cost_ns"], ack["cost_ns"], label, entry["ack_arm"]))
+    return cells
+
+
+def noack_markdown(cells: list[dict]) -> str:
+    """A row per cell and no-ack arm."""
+    lines = [
+        "| group | size | condition | arm | cost mean us (seeds) | ack arm | ack cost mean us | no-ack less ack us "
+        f"| vs ack arm | reaction us | longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 11 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            if label not in A2A_NOACK_ARMS:
+                continue
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) | {entry['ack_arm']} "
+                f"| {_us(entry['ack_cost_ns_mean'])} | {_us(entry['minus_ack_cost_ns'])} "
+                f"| {entry['versus_ack_cost'] or '-'} | {_us(entry['reaction_ns_mean'])} | {_rto_run(entry)} |"
+            )
+    return "\n".join(lines) + "\n"
+
+
 # The reaction stage: how soon each end holds the faulted spine.
 
 A2A_REACTION_MEASURES = ("sender_hold_ns", "sender_lost_before", "receiver_hold_ns", "receiver_lost_before",
@@ -2254,12 +2333,12 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction", "a2a_ackroute"):
+                 "a2a_reaction", "a2a_ackroute", "a2a_noack"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                                             "a2a_reaction", "a2a_ackroute")
+                                             "a2a_reaction", "a2a_ackroute", "a2a_noack")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -2271,14 +2350,16 @@ def main() -> int:
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
-                    "a2a_ackroute"):
+                    "a2a_ackroute", "a2a_noack"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
-                      "a2a_ackroute": "a2a_ackroute_4k"}
+                      "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
             x.add_argument("--ack-route", choices=A2A_ACK_ROUTES)
+        if name == "a2a_noack":
+            x.add_argument("--ack-root", type=Path, nargs="*", default=[])
         if name == "a2a_sweep":
             x.add_argument("--shared-root", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
@@ -2339,6 +2420,13 @@ def main() -> int:
                              arguments.ack_route)
         if arguments.markdown:
             arguments.markdown.write_text(ackroute_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_noack":
+        cells = a2a_noack(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root,
+                          a2a_ack_rows(arguments.ack_root))
+        if arguments.markdown:
+            arguments.markdown.write_text(noack_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep":
