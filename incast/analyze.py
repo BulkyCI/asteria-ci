@@ -27,6 +27,9 @@
                                                      a2a_candidates with both ends' holds and tail counts per spine
     analyze.py a2a_reaction --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      each end's first hold, the losses before it and the lead
+    analyze.py a2a_ackroute --runs RUNS.json... --out-root DIR [--stage S] [--ack-route R] [--markdown FILE]
+                                                     a2a_candidates with correct and false sender holds by the
+                                                     answers' routing, and the answers lost per spine
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -50,7 +53,7 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k and a2a_decode_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k and a2a_ackroute_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -203,6 +206,45 @@ and per faulted run:
 
 Per cell, receiver_versus_sender is the seed-rule verdict of
 reps_hold_auto_tail_ack_rx against reps_hold_auto_tail_ack on cost.
+
+a2a_ackroute reads one stage's runs alone (--stage, a2a_ackroute_4k by
+default) and gives a2a_candidates' table, with verdicts against reps_tail,
+and per faulted run:
+
+* ack_route: the routing of the answers (acknowledgements, NACKs and repair
+  requests) its holds are read under: --ack-route for every run, else the
+  run's setting's ack_route, data_spine when unset.
+* answer_drop_up_by_spine and answer_drop_down_by_spine: per spine, the
+  answers a link error or a black hole dropped on a leaf-spine link, up
+  (from a leaf to the spine) or down, from summary.json's transport rows
+  <event>_spine<k>:control.
+* sender_hold_reading: the sender hold intervals of ns3/spine_losses.csv
+  (grade 0, a hold interval as for a2a_downlink's sender_holds), each
+  correct or false, as correct_holds and false_holds, and the rows that
+  hold, as correct_held_rows and false_held_rows; None without the trace.
+  A hold is a sender's (its leaf, the row's rank's) of one spine toward one
+  destination leaf (the destination_leaf column, or the leaf of the
+  destination column's host; a row naming no destination, of hold scope
+  host, holds toward every leaf). Every hold in a healthy run, and every
+  hold of a spine other than 3, is false. Of spine 3, with the faulted link
+  leaf 0's uplink (_up) or the downlink to leaf 1 (_down): under
+  data_spine, where an answer returns over the spine of the data it
+  answers, an _up hold is correct when its sender is on leaf 0 (toward any
+  leaf: the data crosses the link) or it is toward leaf 0 (the answers
+  cross it), and a _down hold when it is toward leaf 1 (the data) or its
+  sender is on leaf 1 (the answers); under spray, where the answers take
+  spines their receivers draw, only the data path counts: an _up hold is
+  correct when its sender is on leaf 0, a _down hold when it is toward
+  leaf 1. A hold toward every leaf is correct only where its sender alone
+  makes it so.
+* healthy_sender_hold_reading: the same of the paired healthy run, whose
+  holds are all false.
+
+Per cell, versus gives the seed-rule verdict on cost of each
+ack_route_oracle arm against the arm it adds the key to, and of
+reps_hold_auto_tail_ack against reps_hold_auto_tail4 and against
+reps_hold_auto_tail_ack_data_spine, the same arm with every answer over its
+data's spine.
 
 a2a_reaction reads one stage's runs alone (--stage, a2a_reaction_4k by
 default) and gives per faulted run, over the trace rows reaction_ns and
@@ -1758,6 +1800,159 @@ def downlink_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The answer-route stage: the sender holds a fault makes correct under each
+# routing of the answers, and the answers lost on each spine.
+
+A2A_ACKROUTE_REFERENCE = "reps_tail"
+A2A_ACK_ROUTES = ("data_spine", "spray")
+# The leaf of the faulted link of a condition's direction: leaf 0's uplink
+# for _up, the downlink to leaf 1 for _down.
+A2A_FAULT_LEAF = {"up": 0, "down": 1}
+A2A_ANSWER_DROP_EVENTS = ("answer_drop_up", "answer_drop_down")
+# Each arm against the arm it adds one key to, on cost.
+A2A_ACKROUTE_VERSUS = (("reps_hold_auto_tail4_route_oracle", "reps_hold_auto_tail4"),
+                       ("reps_oracle_tail_route_oracle", "reps_oracle_tail"),
+                       ("reps_hold_auto_tail_ack", "reps_hold_auto_tail4"),
+                       ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_data_spine"))
+
+
+def correct_hold(ack_route: str, condition: str, sender_leaf: int, destination_leaf: int | None,
+                 spine: int) -> bool:
+    """Whether a sender on sender_leaf holding spine toward destination_leaf
+    (None: toward every leaf) holds what the fault of condition degrades
+    under ack_route (see the module docstring)."""
+    if ack_route not in A2A_ACK_ROUTES:
+        raise ValueError(f"ack_route must be one of {A2A_ACK_ROUTES}, not {ack_route!r}")
+    if condition == "healthy" or spine != DEGRADED_SPINE:
+        return False
+    direction = condition.rpartition("_")[2]
+    if direction not in A2A_FAULT_LEAF:
+        raise ValueError(f"condition {condition!r} names no faulted direction")
+    leaf = A2A_FAULT_LEAF[direction]
+    # The data crossing the link: up, a sender of the link's leaf toward any
+    # leaf; down, any sender toward it.
+    data = sender_leaf == leaf if direction == "up" else destination_leaf == leaf
+    # Under data_spine the answers return over the data's spine: up, those
+    # the link's leaf sends back to any sender; down, those sent back to a
+    # sender of the link's leaf.
+    answers = destination_leaf == leaf if direction == "up" else sender_leaf == leaf
+    return data or (ack_route == "data_spine" and answers)
+
+
+def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | None:
+    """correct_holds and false_holds, the sender hold intervals of the trace
+    (grade 0) correct_hold takes for correct and the others, and
+    correct_held_rows and false_held_rows, the rows that hold, each taken
+    alike; None without the file (see the module docstring)."""
+    if not path.exists():
+        return None
+    counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
+    holding: dict[tuple, bool] = {}
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        series = [column for column in reader.fieldnames or ()
+                  if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
+        for row in reader:
+            if "destination_leaf" in row:
+                destination = int(row["destination_leaf"])
+            elif "destination" in row:
+                destination = int(row["destination"]) // A2A_HOSTS_PER_LEAF_OF_TRACE
+            else:
+                destination = None
+            correct = correct_hold(ack_route, condition, int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE,
+                                   destination, int(row["spine"]))
+            kind = "correct" if correct else "false"
+            key = tuple(row[c] for c in series)
+            now = row["grade"] == "0"
+            if now:
+                counts[f"{kind}_held_rows"] += 1
+                if not holding.get(key):
+                    counts[f"{kind}_holds"] += 1
+            holding[key] = now
+    return counts
+
+
+def answer_drops(directory: Path) -> dict:
+    """answer_drop_up_by_spine and answer_drop_down_by_spine, from
+    summary.json's transport rows <event>_spine<k>:control; empty when the
+    run lost none."""
+    transport = json.loads((directory / "summary.json").read_text()).get("transport", {})
+    counts: dict[str, dict[int, int]] = {event: {} for event in A2A_ANSWER_DROP_EVENTS}
+    for name, value in transport.items():
+        event, _, plane = name.rpartition(":")
+        base, separator, spine = event.rpartition("_spine")
+        if plane == "control" and separator and base in counts and spine.isdigit():
+            counts[base][int(spine)] = value["count"]
+    return {f"{event}_by_spine": dict(sorted(by_spine.items())) for event, by_spine in counts.items()}
+
+
+def a2a_ackroute(rows: list[dict], out_root: Path, ack_route: str | None = None) -> list[dict]:
+    """a2a_candidates against reps_tail with the answer-route measures (see
+    the module docstring); ack_route reads every run's holds under one
+    routing, else each under its setting's ack_route (data_spine when
+    unset)."""
+    def routing(row):
+        return ack_route or (row.get("setting") or {}).get("ack_route", "data_spine")
+
+    by_key = {r["key"]: r for r in rows}
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = out_root / row["key"]
+        healthy = by_key.get(row["healthy_key"])
+        measured[row["key"]] = {
+            **answer_drops(directory),
+            "ack_route": routing(row),
+            "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
+                                                       routing(row)),
+            "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
+                out_root / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", routing(healthy)),
+        }
+    cells = a2a_candidates(rows, out_root, A2A_ACKROUTE_REFERENCE)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in ("ack_route", "answer_drop_up_by_spine", "answer_drop_down_by_spine", "sender_hold_reading",
+                         "healthy_sender_hold_reading"):
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+        cell["versus"] = {f"{a} against {b}": _versus(cell["arms"], a, b) for a, b in A2A_ACKROUTE_VERSUS
+                          if a in cell["arms"] and b in cell["arms"]}
+    return cells
+
+
+def _summed(readings, name: str) -> str:
+    """name summed over the seeds' hold readings; "-" when none has one."""
+    known = [r[name] for r in readings if r is not None]
+    return "-" if not known else str(sum(known))
+
+
+def ackroute_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, and each cell's verdicts."""
+    lines = [
+        "| group | size | condition | arm | ack route | cost mean us (seeds) | vs reps_tail | reaction us "
+        "| correct holds, rows | false holds, rows | healthy false holds, rows | answers lost up | answers lost down "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 14 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            readings, healthy = entry["sender_hold_reading"], entry["healthy_sender_hold_reading"]
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {', '.join(sorted(set(entry['ack_route'])))} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) "
+                f"| {entry.get('versus_reference_cost') or '-'} | {_us(entry['reaction_ns_mean'])} "
+                f"| {_summed(readings, 'correct_holds')}, {_summed(readings, 'correct_held_rows')} "
+                f"| {_summed(readings, 'false_holds')}, {_summed(readings, 'false_held_rows')} "
+                f"| {_summed(healthy, 'false_holds')}, {_summed(healthy, 'false_held_rows')} "
+                f"| {_per_spine(entry['answer_drop_up_by_spine'])} "
+                f"| {_per_spine(entry['answer_drop_down_by_spine'])} | {_rto_run(entry)} |"
+            )
+    lines.append("")
+    for cell in cells:
+        for name, value in cell["versus"].items():
+            lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {name}: {value or 'unreadable'}")
+    return "\n".join(lines) + "\n"
+
+
 # The reaction stage: how soon each end holds the faulted spine.
 
 A2A_REACTION_MEASURES = ("sender_hold_ns", "sender_lost_before", "receiver_hold_ns", "receiver_lost_before",
@@ -2059,12 +2254,12 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction"):
+                 "a2a_reaction", "a2a_ackroute"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                                             "a2a_reaction")
+                                             "a2a_reaction", "a2a_ackroute")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -2075,11 +2270,15 @@ def main() -> int:
             x.add_argument("--reference", required=True)
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
-        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction"):
+        if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
+                    "a2a_ackroute"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
-                      "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k"}
+                      "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
+                      "a2a_ackroute": "a2a_ackroute_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
+        if name == "a2a_ackroute":
+            x.add_argument("--ack-route", choices=A2A_ACK_ROUTES)
         if name == "a2a_sweep":
             x.add_argument("--shared-root", type=Path)
         if name in ("a2a_candidates", "a2a_cycles"):
@@ -2133,6 +2332,13 @@ def main() -> int:
         cells = a2a_downlink(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(downlink_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_ackroute":
+        cells = a2a_ackroute(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root,
+                             arguments.ack_route)
+        if arguments.markdown:
+            arguments.markdown.write_text(ackroute_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_sweep":

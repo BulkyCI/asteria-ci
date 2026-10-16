@@ -489,6 +489,9 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           a2a_calibration's per_receiver pass on the ring
 #   ar_parity_4k            the A2A_ARMS_4K on the ring at loss 1e-2 up and
 #                           its healthy pair, seeds 301-303
+#   a2a_ackroute_4k         the A2A_ACKROUTE_ARMS, every answer on a spine
+#                           its receiver draws, on the A2A_ACKROUTE_CELLS and
+#                           their healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -795,9 +798,11 @@ A2A_TAIL_ACK_KEYS = {
 }
 A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
                            "reps_tail", "uniform_tail")
-# Every arm that adds transport keys (tail recovery, ack_loss_rtts) to a base
-# arm, and that base arm.
-A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS}
+# Every arm that adds transport keys (tail recovery, ack_loss_rtts,
+# ack_route_oracle) to a base arm, and that base arm.
+A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
+                      "reps_hold_auto_tail4_route_oracle": "reps_hold_auto", "reps_oracle_tail_route_oracle":
+                      A2A_REPS_ORACLE, "reps_hold_auto_tail_ack_data_spine": "reps_hold_auto"}
 # The settled fixture. The stages named *_4k and the ring's run on it, where
 # every stage above runs on the generator's defaults; a stage takes it from
 # A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
@@ -980,6 +985,36 @@ A2A_DECODE_CELLS = tuple(A2A_DECODE + (condition,) for condition in A2A_TAIL_CON
 A2A_REACTION_STAGE = "a2a_reaction_4k"
 A2A_REACTION_CELLS = (("ep64", "256k", "loss1e3_down"), A2A_DECODE + ("loss1e3_down",))
 A2A_REACTION_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail_ack_rx", "reps_tail")
+# a2a_ackroute_4k: every answer a receiver sends (acknowledgements, NACKs and
+# repair requests) routed over a spine it draws uniformly per answer rather
+# than over the spine of the data it answers (A2A_ACKROUTE: load_balancing
+# ack_route spray, written as ACK_ROUTE), the data's identification still
+# echoed for the sender, on EP64 at 256 KiB and 2 MiB and on the decode cell,
+# each under blackhole, loss 1e-2 and loss 1e-3, up (leaf 0 to spine 3) and
+# down (spine 3 to leaf 1), with its healthy pair, seeds 301-303. The arms,
+# each with A2A_ACKROUTE on its setting: reps_hold_auto_tail_ack;
+# reps_hold_auto_tail4, the same hold without ack_loss_rtts (a2a_tail's arm of
+# that name, tail recovery at tail_loss_rtts 4); reps_tail; reps_oracle_tail;
+# and reps_hold_auto_tail4 and reps_oracle_tail with ack_route_oracle
+# (A2A_ACKROUTE_ORACLE: written as ACK_ROUTE_ORACLE on), whose receivers leave
+# out of the draw, from the fault's onset, the spines over which an answer
+# crosses the faulted link, as the switches' state shows it. A seventh arm,
+# reps_hold_auto_tail_ack_data_spine, is reps_hold_auto_tail_ack with
+# ack_route data_spine written out (A2A_ACKROUTE_DATA_SPINE), every answer
+# over its data's spine as on every other stage: the stage's own control.
+A2A_ACKROUTE_STAGE = "a2a_ackroute_4k"
+A2A_ACKROUTE = {"ack_route": "spray"}
+A2A_ACKROUTE_ORACLE = {"ack_route_oracle": True}
+A2A_ACKROUTE_CELLS = tuple((group, size, condition) for group, size in (("ep64", "256k"), A2A_DECODE, ("ep64", "2m"))
+                           for condition in ("blackhole_up", "blackhole_down", "loss1e2_up", "loss1e2_down",
+                                             "loss1e3_up", "loss1e3_down"))
+# The ack_route_oracle arms and the arm each adds it to.
+A2A_ACKROUTE_ORACLE_ARMS = {"reps_hold_auto_tail4_route_oracle": "reps_hold_auto_tail4",
+                            "reps_oracle_tail_route_oracle": "reps_oracle_tail"}
+# The control arm and the arm it routes the answers of over the data's spines.
+A2A_ACKROUTE_DATA_SPINE = {"reps_hold_auto_tail_ack_data_spine": "reps_hold_auto_tail_ack"}
+A2A_ACKROUTE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_auto_tail4", "reps_tail", "reps_oracle_tail",
+                     *A2A_ACKROUTE_ORACLE_ARMS, *A2A_ACKROUTE_DATA_SPINE)
 # The ring's stages: ar_parity_probe_4k, one healthy uniform_tail run, seed
 # 301, which reads its healthy step time; ar_parity_calibration_4k,
 # a2a_calibration's per_receiver pass on it; and ar_parity_4k, the
@@ -999,7 +1034,8 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
                                    A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
-                                   A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE)}
+                                   A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
+                                   A2A_ACKROUTE_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1256,6 +1292,20 @@ def a2a_tail_ack_settings(tuning: dict[str, Any] | None,
     return {arm: settings[arm] for arm in arms}
 
 
+def a2a_ackroute_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_ackroute_4k arm's setting: reps_hold_auto_tail4's of a2a_tail
+    and the others' of a2a_tail_ack, with A2A_ACKROUTE; an
+    A2A_ACKROUTE_ORACLE_ARMS arm's base arm's with A2A_ACKROUTE_ORACLE; and
+    the control arm's base arm's of a2a_tail_ack with ack_route data_spine."""
+    base = {**a2a_tail_settings(tuning), **a2a_tail_ack_settings(tuning, tuple(A2A_TAIL_ACK_ARMS))}
+    settings = {arm: {**base[arm], **A2A_ACKROUTE} for arm in A2A_ACKROUTE_ARMS if arm in base}
+    for arm, of in A2A_ACKROUTE_ORACLE_ARMS.items():
+        settings[arm] = {**settings[of], **A2A_ACKROUTE_ORACLE}
+    for arm, of in A2A_ACKROUTE_DATA_SPINE.items():
+        settings[arm] = {**base[of], "ack_route": "data_spine"}
+    return {arm: settings[arm] for arm in A2A_ACKROUTE_ARMS}
+
+
 def a2a_ackloss_settings(tuning: dict[str, Any] | None,
                          arms: dict[str, str] = A2A_ACKLOSS_ARMS) -> dict[str, dict[str, Any]]:
     """Each arm's setting (a2a_ackloss's arms unless arms is given):
@@ -1286,6 +1336,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_DECODE_STAGE: (A2A_DECODE_CELLS, A2A_ARMS_4K),
         A2A_REACTION_STAGE: (A2A_REACTION_CELLS, A2A_REACTION_ARMS),
         A2A_RING_STAGE: ((A2A_RING + ("loss1e2_up",),), A2A_ARMS_4K),
+        A2A_ACKROUTE_STAGE: (A2A_ACKROUTE_CELLS, A2A_ACKROUTE_ARMS),
     }[stage]
 
 
@@ -1434,7 +1485,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         if uncalibrated:
             raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
                              "merge the payload's calibration pass into a2a_calibration.json")
-        settings = a2a_tail_ack_settings(tuning, arms)
+        settings = (a2a_ackroute_settings(tuning) if stage == A2A_ACKROUTE_STAGE
+                    else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):

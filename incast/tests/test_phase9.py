@@ -68,7 +68,7 @@ class Stages(unittest.TestCase):
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
-             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -79,7 +79,7 @@ class Stages(unittest.TestCase):
              "a2a_tail_ack_4k": 576, "a2a_sweep_4k": 288,
              "a2a_downlink_4k": 120, "a2a_decode_probe_4k": 1, "a2a_decode_calibration_4k": 3,
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
-             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36},
+             "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1018,6 +1018,184 @@ class Downlink(unittest.TestCase):
         self.assertIn("| 3:27, 5:3 | 5:3 | 3:6, 5:3 | 3:12, 5:3 | 2:3, 3:3 | 2:0, 3:12 | 3, 3 | 3, 0 |", markdown)
         self.assertIn("ep64 256k blackhole_down: reps_hold_auto_tail_ack_rx against reps_hold_auto_tail_ack: "
                       "reps_hold_auto_tail_ack_rx beats reps_hold_auto_tail_ack", markdown)
+
+
+class AckRoute(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_runs_and_settings(self):
+        # The stage's pairs are measured and calibrated in the committed files.
+        runs = profiles.a2a_stage_runs("a2a_ackroute_4k", self.calibration, self.tuning)
+        conditions = ("blackhole_up", "blackhole_down", "loss1e2_up", "loss1e2_down", "loss1e3_up", "loss1e3_down")
+        # 18 cells and 3 healthy pairs by 7 arms by 3 seeds.
+        self.assertEqual(len(runs), (18 + 3) * 7 * 3)
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
+                         {(g, s, c) for g, s in (("ep64", "256k"), ("ep64", "decode8"), ("ep64", "2m"))
+                          for c in conditions + ("healthy",)})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail_ack", "reps_hold_auto_tail4", "reps_tail", "reps_oracle_tail",
+                          "reps_hold_auto_tail4_route_oracle", "reps_oracle_tail_route_oracle",
+                          "reps_hold_auto_tail_ack_data_spine"])
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
+        for r in runs:
+            self.assertEqual(r["setting"]["ack_route"],
+                             "data_spine" if r["arm"].endswith("_data_spine") else "spray")
+            self.assertEqual(r["setting"].get("ack_route_oracle", False), r["arm"].endswith("_route_oracle"))
+
+        def balancing(stage, arm, size="256k", condition="loss1e2_up", calibration=None):
+            key = f"{stage}-ep64-{size}-{condition}-{arm}-s301"
+            (r,) = [r for r in profiles.a2a_stage_runs(stage, calibration or self.calibration, self.tuning)
+                    if r["key"] == key]
+            return profiles.a2a_stage_profile(r, self.calibration)["network"]
+
+        stage = "a2a_ackroute_4k"
+        # Each arm is its earlier stage's arm with the answers sprayed.
+        for arm, earlier in (("reps_hold_auto_tail_ack", "a2a_tail_ack_4k"), ("reps_tail", "a2a_tail_ack_4k"),
+                             ("reps_oracle_tail", "a2a_tail_ack_4k")):
+            self.assertEqual(balancing(stage, arm)["load_balancing"],
+                             {**balancing(earlier, arm)["load_balancing"], "ack_route": "spray"})
+        hold = balancing(stage, "reps_hold_auto_tail_ack")["load_balancing"]
+        tail4 = balancing(stage, "reps_hold_auto_tail4")["load_balancing"]
+        self.assertEqual(tail4, {k: v for k, v in hold.items() if k != "ack_loss_rtts"})
+        self.assertEqual(tail4["tail_loss_rtts"], 4)
+        self.assertEqual(tail4["loss_thresholds"],
+                         self.calibration["per_receiver"]["ep64-256k-p4096"]["loss_thresholds"][str(
+                             tail4["loss_interval_ns"])])
+        for arm, of in profiles.A2A_ACKROUTE_ORACLE_ARMS.items():
+            self.assertEqual(balancing(stage, arm)["load_balancing"],
+                             {**balancing(stage, of)["load_balancing"], "ack_route_oracle": True})
+        # The control: a2a_tail_ack_4k's arm with today's routing written out,
+        # on each cell's own calibration, EP64 at 2 MiB among them.
+        for size in ("256k", "2m"):
+            self.assertEqual(balancing(stage, "reps_hold_auto_tail_ack_data_spine", size)["load_balancing"],
+                             {**balancing("a2a_tail_ack_4k", "reps_hold_auto_tail_ack", size)["load_balancing"],
+                              "ack_route": "data_spine"})
+        oracle = balancing(stage, "reps_oracle_tail_route_oracle")["load_balancing"]
+        self.assertEqual((oracle["selector"], oracle["grade_cost_source"]), ("reps_oracle", "switch_queue"))
+        # The decode cell's downlink black hole, as a2a_downlink_4k's down cells.
+        decode = balancing(stage, "reps_tail", "decode8", "blackhole_down")
+        self.assertEqual(decode["link_failures"], profiles.a2a_fault("blackhole_down"))
+        self.assertEqual(decode["link_failures"][0]["leaf"], 1)
+        self.assertEqual(balancing(stage, "reps_tail", "decode8", "loss1e3_down")["link_failures"],
+                         [{**profiles.a2a_fault("loss1e3_down")[0], "loss_unit": "byte"}])
+
+    def test_correct_hold(self):
+        def correct(route, condition, sender, destination, spine=3):
+            return analyze.correct_hold(route, condition, sender, destination, spine)
+
+        for condition in ("blackhole_up", "loss1e2_up", "loss1e3_up"):
+            # Data from leaf 0 crosses the uplink; under data_spine the answers
+            # leaf 0 sends back cross it too.
+            self.assertTrue(correct("data_spine", condition, 0, 5))
+            self.assertTrue(correct("data_spine", condition, 0, None))
+            self.assertTrue(correct("data_spine", condition, 5, 0))
+            self.assertFalse(correct("data_spine", condition, 5, 1))
+            self.assertFalse(correct("data_spine", condition, 5, None))
+            self.assertTrue(correct("spray", condition, 0, 5))
+            self.assertTrue(correct("spray", condition, 0, None))
+            self.assertFalse(correct("spray", condition, 5, 0))
+            self.assertFalse(correct("spray", condition, 1, 2))
+        for condition in ("blackhole_down", "loss1e2_down", "loss1e3_down"):
+            # Data toward leaf 1 crosses the downlink; under data_spine the
+            # answers sent back to leaf 1 cross it too.
+            self.assertTrue(correct("data_spine", condition, 4, 1))
+            self.assertTrue(correct("data_spine", condition, 1, 4))
+            self.assertTrue(correct("data_spine", condition, 1, None))
+            self.assertFalse(correct("data_spine", condition, 0, 4))
+            self.assertFalse(correct("data_spine", condition, 0, None))
+            self.assertTrue(correct("spray", condition, 4, 1))
+            self.assertFalse(correct("spray", condition, 1, 4))
+            self.assertFalse(correct("spray", condition, 1, None))
+        for route in profiles.A2A_ACKROUTE["ack_route"], "data_spine":
+            self.assertFalse(correct(route, "blackhole_up", 0, 5, 2))
+            self.assertFalse(correct(route, "healthy", 0, 5))
+        with self.assertRaisesRegex(ValueError, "ack_route"):
+            correct("echo", "blackhole_up", 0, 5)
+        with self.assertRaisesRegex(ValueError, "faulted direction"):
+            correct("spray", "structural", 0, 5)
+
+    def test_analyzer(self):
+        onset = analyze.DEGRADE_AT_NS
+        costs = {"reps_hold_auto_tail4": [300, 310, 320], "reps_hold_auto_tail4_route_oracle": [100, 110, 120],
+                 "reps_tail": [400, 420, 440]}
+        # Holds of spine 3: host 0 on leaf 0 toward leaf 5, host 9 on leaf 1
+        # toward leaf 0, and host 9 of host scope; host 0 of spine 2.
+        holds = ("time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                 f"{onset + 1000},0,5,3,10,0,3\n{onset + 2000},0,5,3,10,4,0\n{onset + 3000},0,5,3,0,0,0\n"
+                 f"{onset + 2000},9,0,3,10,2,0\n{onset + 3000},9,0,3,10,0,3\n{onset + 4000},9,0,3,10,1,0\n"
+                 f"{onset + 2000},0,5,2,10,1,0\n")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = []
+            for arm, values in costs.items():
+                setting = {"ack_route": "spray", **({"ack_route_oracle": True} if "oracle" in arm else {})}
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("blackhole_up", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, "a2a_ackroute_4k", setting),
+                             "fixture": profiles.A2A_FIXTURE_4K}
+                        runs.append(r)
+                        d = root / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        transport = {}
+                        if condition != "healthy":
+                            transport = {name: {"count": count, "bytes": 0} for name, count in (
+                                ("answer_drop_up:control", 7), ("answer_drop_up_spine3:control", 7),
+                                ("answer_drop_down:control", 0))}
+                        if arm != "reps_tail":
+                            (d / "ns3" / "spine_losses.csv").write_text(
+                                holds if condition != "healthy" else holds.splitlines()[0] + "\n"
+                                f"{onset + 1000},9,0,4,10,1,0\n")
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+            listing = root / "runs.json"
+            listing.write_text(json.dumps(runs))
+            rows = analyze.a2a_rows([listing], root, "a2a_ackroute_4k")
+            (cell,) = analyze.a2a_ackroute(rows, root)
+            (data_spine,) = analyze.a2a_ackroute(rows, root, "data_spine")
+        hold, oracle = cell["arms"]["reps_hold_auto_tail4"], cell["arms"]["reps_hold_auto_tail4_route_oracle"]
+        self.assertEqual(oracle["versus_reference_cost"], "reps_hold_auto_tail4_route_oracle beats reps_tail")
+        self.assertEqual(cell["versus"], {
+            "reps_hold_auto_tail4_route_oracle against reps_hold_auto_tail4":
+                "reps_hold_auto_tail4_route_oracle beats reps_hold_auto_tail4"})
+        self.assertEqual(hold["ack_route"], ["spray"] * 3)
+        # Under spray only host 0's hold of spine 3 is correct; host 9's two
+        # toward leaf 0 and host 0's of spine 2 are false.
+        self.assertEqual(hold["sender_hold_reading"],
+                         [{"correct_holds": 1, "false_holds": 3, "correct_held_rows": 2, "false_held_rows": 3}] * 3)
+        # Under data_spine host 9's toward leaf 0 are correct too.
+        self.assertEqual(data_spine["arms"]["reps_hold_auto_tail4"]["sender_hold_reading"],
+                         [{"correct_holds": 3, "false_holds": 1, "correct_held_rows": 4, "false_held_rows": 1}] * 3)
+        self.assertEqual(hold["healthy_sender_hold_reading"],
+                         [{"correct_holds": 0, "false_holds": 1, "correct_held_rows": 0, "false_held_rows": 1}] * 3)
+        self.assertEqual(hold["answer_drop_up_by_spine"], [{3: 7}] * 3)
+        self.assertEqual(hold["answer_drop_down_by_spine"], [{}] * 3)
+        self.assertEqual(cell["arms"]["reps_tail"]["sender_hold_reading"], [None] * 3)
+        markdown = analyze.ackroute_markdown([cell])
+        self.assertIn("| ep64 | 256k | blackhole_up | reps_hold_auto_tail4 | spray | 0.3 (3) "
+                      "| reps_hold_auto_tail4 beats reps_tail ", markdown)
+        self.assertIn("| 3, 6 | 9, 9 | 3, 3 | 3:21 | none | - |", markdown)
+        self.assertIn("| reps_tail | spray | 0.4 (3) | - | - | -, - | -, - | -, - | 3:21 | none | - |", markdown)
+        self.assertIn("- ep64 256k blackhole_up: reps_hold_auto_tail4_route_oracle against reps_hold_auto_tail4: "
+                      "reps_hold_auto_tail4_route_oracle beats reps_hold_auto_tail4", markdown)
+
+    def test_host_and_pair_scope_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            # Host scope: host 3 on leaf 0 and host 12 on leaf 1 hold spine 3
+            # toward every leaf.
+            path.write_text("time_ns,rank,spine,sent,lost,grade\n1,3,3,10,1,0\n1,12,3,10,1,0\n")
+            self.assertEqual(analyze.sender_hold_reading(path, "loss1e2_up", "spray"),
+                             {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
+            # Pair scope: host 12 toward host 3 (leaf 0), host 12 toward host 20.
+            path.write_text("time_ns,rank,destination,spine,sent,lost,grade\n1,12,3,3,10,1,0\n1,12,20,3,10,1,0\n")
+            self.assertEqual(analyze.sender_hold_reading(path, "loss1e2_up", "data_spine"),
+                             {"correct_holds": 1, "false_holds": 1, "correct_held_rows": 1, "false_held_rows": 1})
+            self.assertIsNone(analyze.sender_hold_reading(Path(directory) / "none.csv", "loss1e2_up", "spray"))
 
 
 class Decode(unittest.TestCase):

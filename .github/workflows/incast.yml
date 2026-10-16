@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k, a2a_ackroute_4k)
         required: true
         type: string
       record_filter:
@@ -305,7 +305,7 @@ jobs:
           cat results/a2a_gate_reps.md >> "$GITHUB_STEP_SUMMARY"
         fi
         for stage in a2a_candidates a2a_receiver a2a_tail a2a_ackloss a2a_candidates_ack a2a_tail_ack a2a_tail_ack_4k \
-            a2a_sweep_4k a2a_decode_4k ar_parity_4k; do
+            a2a_sweep_4k a2a_decode_4k ar_parity_4k a2a_ackroute_4k; do
           if [[ ",${STAGES// /}," == *,$stage,* ]]; then
             python3 incast/analyze.py a2a_candidates --runs results/runs.json --out-root results \
               --stage "$stage" --markdown "results/$stage.md" > "results/$stage.json"
@@ -333,6 +333,13 @@ jobs:
           python3 incast/analyze.py a2a_downlink --runs results/runs.json --out-root results \
             --stage a2a_downlink_4k --markdown results/a2a_downlink_4k.md > results/a2a_downlink_4k.json
           cat results/a2a_downlink_4k.md >> "$GITHUB_STEP_SUMMARY"
+        fi
+        # Correct and false sender holds by the answers' routing, and the
+        # answers lost per spine and direction.
+        if [[ ",${STAGES// /}," == *,a2a_ackroute_4k,* ]]; then
+          python3 incast/analyze.py a2a_ackroute --runs results/runs.json --out-root results \
+            --stage a2a_ackroute_4k --markdown results/a2a_ackroute_4k_holds.md > results/a2a_ackroute_4k_holds.json
+          cat results/a2a_ackroute_4k_holds.md >> "$GITHUB_STEP_SUMMARY"
         fi
         for stage in a2a_probe_4k a2a_decode_probe_4k; do
           if [[ ",${STAGES// /}," == *,$stage,* ]]; then
