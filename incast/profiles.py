@@ -1341,10 +1341,12 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   blackhole up and the two multi-fault draws alone, each with its healthy
 #   pair (A2A_WIDE_ARM_CONDITIONS), reps_hold_auto_tail4_cover_answer_seq,
 #   a2a_twoend_4k's, and reps_hold_auto_tail4_cover_reverse_set,
-#   a2a_twoend_base_4k's. Every hold arm takes the stage's overdue repair
+#   a2a_twoend_base_4k's. Every arm takes the stage's overdue repair
 #   (A2A_WIDE_OVERDUE_REPAIR): "off", none, or K, overdue_repair reprobe
-#   with overdue_repair_limit K as in A2A_OVERDUE; the other arms have none.
-#   It is None until chosen, and a2a_stage_runs refuses the stage until then.
+#   with overdue_repair_limit K as in A2A_OVERDUE, which reps_tail,
+#   uniform_tail and reps_oracle_tail_fwd read as the hold arms do, after the
+#   same wait of 2 base RTTs (held_loss_rtts' default). It is None until
+#   chosen, and a2a_stage_runs refuses the stage until then.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1817,7 +1819,7 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     for reps_hold_auto_tail4_cover_rx, reps_oracle_tail_fwd's of
     a2a_ackroute_fwd_4k, reps_hold_auto_tail4_cover_answer_seq's of
     a2a_twoend_4k and reps_hold_auto_tail4_cover_reverse_set's of
-    a2a_twoend_base_4k; every hold arm with overdue_repair reprobe and
+    a2a_twoend_base_4k; every arm with overdue_repair reprobe and
     overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR where that is a limit."""
     twoend = a2a_twoend_settings(tuning)
     cover = twoend["reps_hold_auto_tail4_cover"]
@@ -1833,8 +1835,7 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     }
     overdue = ({} if A2A_WIDE_OVERDUE_REPAIR in (None, "off")
                else {"overdue_repair": "reprobe", "overdue_repair_limit": A2A_WIDE_OVERDUE_REPAIR})
-    return {arm: {**settings[arm], **(overdue if A2A_TRANSPORT_ARMS[arm] in A2A_REPS_HOLD_ARMS else {})}
-            for arm in A2A_WIDE_ARMS}
+    return {arm: {**settings[arm], **overdue} for arm in A2A_WIDE_ARMS}
 
 
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:

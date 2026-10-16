@@ -2321,25 +2321,24 @@ class Wide(unittest.TestCase):
 
     @measured_4k()
     def test_overdue_repair(self):
-        # The stage's one overdue repair, on every hold arm: none until it
-        # is chosen, none under off, reprobe with the limit under a limit.
+        # The stage's one overdue repair, on every arm: none until it is
+        # chosen, none under off, reprobe with the limit under a limit.
         with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", None):
             with self.assertRaisesRegex(ValueError, "a2a_wide32_4k's overdue repair is not chosen"):
                 profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
         off = profiles.a2a_wide_settings(self.tuning)
         self.assertFalse(any("overdue_repair" in setting for setting in off.values()))
-        hold = {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
-                "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
         with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", 3):
             settings = profiles.a2a_wide_settings(self.tuning)
             for arm, setting in settings.items():
-                self.assertEqual(setting, {**off[arm], **({"overdue_repair": "reprobe", "overdue_repair_limit": 3}
-                                                          if arm in hold else {})}, arm)
+                self.assertEqual(setting, {**off[arm], "overdue_repair": "reprobe", "overdue_repair_limit": 3}, arm)
             runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+            self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_WIDE_ARMS))
             for r in runs:
                 balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
                 self.assertEqual((balancing.get("overdue_repair"), balancing.get("overdue_repair_limit")),
-                                 ("reprobe", 3) if r["arm"] in hold else (None, None), r["key"])
+                                 ("reprobe", 3), r["key"])
+                self.assertNotIn("held_loss_rtts", balancing)
 
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
