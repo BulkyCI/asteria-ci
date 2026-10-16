@@ -505,6 +505,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           spine its receiver draws, on the
 #                           A2A_DOWNLINK_SPRAY_CELLS and their healthy pairs,
 #                           seeds 301-303
+#   a2a_twoend_4k           the A2A_TWOEND_ARMS, the sender's coverage first
+#                           and the answers' path sequences, on
+#                           a2a_ackroute_4k's cells and healthy pairs, seeds
+#                           301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -812,15 +816,18 @@ A2A_TAIL_ACK_KEYS = {
 A2A_TAIL_ACK_STAGE_ARMS = ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack", "reps_flow_hold_tail_ack",
                            "reps_tail", "uniform_tail")
 # Every arm that adds transport keys (tail recovery, ack_loss_rtts,
-# ack_route_oracle, oracle_hops, stray_path_seq) to a base arm, and that base
-# arm.
+# ack_route_oracle, oracle_hops, stray_path_seq, coverage_first,
+# answer_path_seq) to a base arm, and that base arm.
 A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail4_route_oracle": "reps_hold_auto", "reps_oracle_tail_route_oracle":
                       A2A_REPS_ORACLE, "reps_hold_auto_tail_ack_data_spine": "reps_hold_auto",
                       "reps_hold_leaf_tail4": "reps_hold_auto", "reps_flow_hold_tail4": "reps_flow_hold",
                       "reps_oracle_tail_fwd": A2A_REPS_ORACLE, "reps_oracle_tail_fwd_route_oracle": A2A_REPS_ORACLE,
                       "reps_hold_auto_tail_ack_rx_closed": "reps_hold_auto",
-                      "reps_hold_auto_tail4_rx_closed": "reps_hold_auto"}
+                      "reps_hold_auto_tail4_rx_closed": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_answer_seq": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto"}
 # The settled fixture. The stages named *_4k and the ring's run on it, where
 # every stage above runs on the generator's defaults; a stage takes it from
 # A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
@@ -1071,6 +1078,30 @@ A2A_DOWNLINK_SPRAY_RECEIVER_ARMS = {"reps_hold_auto_tail_ack_rx_closed": "reps_h
                                     "reps_hold_auto_tail4_rx_closed": "reps_hold_auto_tail_ack_rx"}
 A2A_DOWNLINK_SPRAY_ARMS = ("reps_hold_auto_tail4", "reps_hold_auto_tail_ack", *A2A_DOWNLINK_SPRAY_RECEIVER_ARMS,
                            "reps_tail", "reps_oracle_tail_fwd")
+# a2a_twoend_4k: a2a_ackroute_4k's cells, healthy pairs and seeds, every
+# answer on a spine its receiver draws (A2A_ACKROUTE) but under the control.
+# The arms: reps_hold_auto_tail4, a2a_ackroute_4k's; reps_hold_auto_tail4_cover,
+# the same with its sender applying the answer's cumulative and selective
+# coverage before a loss rule declares a send lost, a covered send counted as
+# an answer loss and no more (A2A_COVERAGE_FIRST: load_balancing
+# coverage_first, written as SPRAY_COVERAGE_FIRST on), and its copies under
+# copy_expiry deadline (A2A_COPY_DEADLINE); that with answer path sequences
+# (A2A_ANSWER_PATH_SEQ: load_balancing answer_path_seq, written as
+# SPRAY_ANSWER_PATH_SEQ on), the receivers numbering their answers per route
+# spine, the senders holding a route their answers go missing on and telling
+# the receivers, which leave it out of their draw but for a probe answer per
+# millisecond until no sender holds it (reps_hold_auto_tail4_cover_answer_seq);
+# that with A2A_ACKROUTE_ORACLE (reps_hold_auto_tail4_cover_route_oracle);
+# a2a_ackroute_4k's control, reps_hold_auto_tail_ack_data_spine; and
+# reps_tail.
+A2A_TWOEND_STAGE = "a2a_twoend_4k"
+A2A_COVERAGE_FIRST = {"coverage_first": True}
+A2A_ANSWER_PATH_SEQ = {"answer_path_seq": True}
+# The coverage-first arms and the keys each adds to reps_hold_auto_tail4_cover.
+A2A_TWOEND_COVER_ARMS = {"reps_hold_auto_tail4_cover": {},
+                         "reps_hold_auto_tail4_cover_answer_seq": A2A_ANSWER_PATH_SEQ,
+                         "reps_hold_auto_tail4_cover_route_oracle": A2A_ACKROUTE_ORACLE}
+A2A_TWOEND_ARMS = ("reps_hold_auto_tail4", *A2A_TWOEND_COVER_ARMS, *A2A_ACKROUTE_DATA_SPINE, "reps_tail")
 # a2a_noack_4k: the loss-hold arms of the 4096-byte stages without
 # ack_loss_rtts, tail recovery at tail_loss_rtts 4 as in them: each no-ack arm
 # is its ack arm's setting less ack_loss_rtts (A2A_NOACK_ARMS), named by
@@ -1088,7 +1119,8 @@ A2A_NOACK_SOURCES = ("a2a_tail_ack_4k", "a2a_sweep_4k", "a2a_decode_4k")
 # duplicate declared lost only past tail_loss_rtts base RTTs since they were
 # sent, whatever their data's acknowledgement, rather than at their data's
 # acknowledgement past one base RTT. A stage selects it by passing its
-# settings through a2a_copy_deadline; no stage does yet.
+# settings through a2a_copy_deadline, as a2a_twoend_4k's coverage-first arms
+# do.
 A2A_COPY_DEADLINE = {"copy_expiry": "deadline"}
 # a2a_hostlink_4k: one host's access link lossy from the onset, no spine
 # faulted: a gray loss at 1e-2 or 1e-3 (A2A_LOSS_RATES) on the link of host 9
@@ -1127,7 +1159,7 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
-                                   A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE)}
+                                   A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1438,6 +1470,17 @@ def a2a_downlink_spray_settings(tuning: dict[str, Any] | None) -> dict[str, dict
     return {arm: settings[arm] for arm in A2A_DOWNLINK_SPRAY_ARMS}
 
 
+def a2a_twoend_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_twoend_4k arm's setting: a2a_ackroute_4k's for its arms, and
+    a coverage-first arm's (A2A_TWOEND_COVER_ARMS) reps_hold_auto_tail4's with
+    A2A_COVERAGE_FIRST, through a2a_copy_deadline, and its keys."""
+    settings = a2a_ackroute_settings(tuning)
+    cover = a2a_copy_deadline({"cover": {**settings["reps_hold_auto_tail4"], **A2A_COVERAGE_FIRST}})["cover"]
+    for arm, keys in A2A_TWOEND_COVER_ARMS.items():
+        settings[arm] = {**cover, **keys}
+    return {arm: settings[arm] for arm in A2A_TWOEND_ARMS}
+
+
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """settings with A2A_COPY_DEADLINE on every setting whose copies it
     expires, those under sentinel_mode duplicate; the others as given."""
@@ -1490,6 +1533,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_HOSTLINK_STAGE: (A2A_HOSTLINK_CELLS, A2A_HOSTLINK_ARMS),
         A2A_ACKROUTE_FWD_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_ACKROUTE_FWD_ARMS)),
         A2A_DOWNLINK_SPRAY_STAGE: (A2A_DOWNLINK_SPRAY_CELLS, A2A_DOWNLINK_SPRAY_ARMS),
+        A2A_TWOEND_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_ARMS),
     }[stage]
 
 
@@ -1641,6 +1685,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         settings = (a2a_ackroute_settings(tuning) if stage == A2A_ACKROUTE_STAGE
                     else a2a_ackroute_fwd_settings(tuning) if stage == A2A_ACKROUTE_FWD_STAGE
                     else a2a_downlink_spray_settings(tuning) if stage == A2A_DOWNLINK_SPRAY_STAGE
+                    else a2a_twoend_settings(tuning) if stage == A2A_TWOEND_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)

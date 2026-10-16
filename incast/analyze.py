@@ -39,6 +39,10 @@
     analyze.py a2a_downlink_spray --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      each end's first hold, the losses before it, the tail
                                                      counts and the correct and false holds of both ends
+    analyze.py a2a_twoend --runs RUNS.json... --out-root DIR [--stage S] [--with-root DIR [--with-stage S]]
+                          [--markdown FILE]
+                                                     a2a_candidates with the answer losses, the sender holds
+                                                     under spray and both ends' answer holds
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -62,8 +66,8 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k and
-a2a_downlink_spray_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k,
+a2a_downlink_spray_4k and a2a_twoend_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -346,6 +350,46 @@ Per cell, versus gives the seed-rule verdict on cost of each receiver arm
 against its sender arm, of the receiver arm without ack_loss_rtts against
 the one with it, and of reps_hold_auto_tail_ack against
 reps_hold_auto_tail4, where the cell has both arms.
+
+a2a_twoend reads one stage's runs alone (--stage, a2a_twoend_4k by
+default), whose answers take spines their receivers draw but under the
+control (ack_route data_spine), and gives a2a_candidates' table, with
+verdicts against reps_hold_auto_tail4, and per faulted run:
+
+* answer_loss_covered, answer_route_lost, answer_probe, answer_route_hold
+  and answer_route_release: from summary.json's transport rows
+  <event>:control, the sends a loss rule found covered and counted as
+  answer losses (coverage_first), the answers found lost by their route's
+  numbers, the receivers' probe answers over a held spine and the senders'
+  holds and releases of a route of their answers (answer_path_seq); None
+  without the row, as in a run without the key. answer_route_lost_by_spine
+  is answer_route_lost per route spine, from the rows
+  answer_route_lost_spine<k>:control;
+* sender_hold_reading and healthy_sender_hold_reading as a2a_ackroute gives
+  them, under spray for every arm, the control's too: only a hold of the
+  data's path is correct;
+* answer_hold_reading and healthy_answer_hold_reading, from
+  ns3/answer_holds.csv (None without it, as in a run without
+  answer_path_seq), each row a change of a hold (held 1, or 0 for its end)
+  of a sender (side sender, rank) of a route spine of the answers from a
+  receiver leaf (leaf), or of a receiver (side receiver, rank) of a spine of
+  its answers to a sender leaf (leaf): per side, the holds correct and false
+  (correct when the answers from the answering leaf to the answered one over
+  the spine cross the faulted link, as correct_receiver_hold takes the data:
+  for _up, answers from leaf 0 over spine 3 to another leaf; for _down,
+  answers from another leaf over spine 3 to leaf 1; every hold of a healthy
+  run is false), the releases and the holds still held at the trace's end;
+  and receiver_holds, per sender leaf and spine the receivers held toward,
+  whether correct, the receivers that held it, the first hold from the onset,
+  the holds, the releases and the receivers still holding it at the end.
+
+Per cell, versus gives the seed-rule verdict on cost of
+reps_hold_auto_tail4_cover against reps_hold_auto_tail4, and of
+reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover,
+reps_hold_auto_tail4_cover_route_oracle and
+reps_hold_auto_tail_ack_data_spine, where the cell has both arms.
+--with-root adds one stage's runs (--with-stage, a2a_twoend_4k by default)
+of another tabulated out root, as a2a_ackroute's does.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -2486,6 +2530,198 @@ def downlink_spray_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The two-end stage: the sender's coverage first and the answers' path
+# sequences, every answer but the control's on a spine its receiver draws.
+
+A2A_TWOEND_REFERENCE = "reps_hold_auto_tail4"
+# The coverage-first arm against the arm without it, and the arm with the
+# answers' path sequences against the coverage-first arm, the same with
+# ack_route_oracle and the stage's control, on cost.
+A2A_TWOEND_VERSUS = (("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_route_oracle"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail_ack_data_spine"))
+A2A_ANSWER_LOSS_EVENTS = ("answer_loss_covered", "answer_route_lost", "answer_probe", "answer_route_hold",
+                          "answer_route_release")
+A2A_TWOEND_READINGS = (*A2A_ANSWER_LOSS_EVENTS, "answer_route_lost_by_spine", "sender_hold_reading",
+                       "healthy_sender_hold_reading", "answer_hold_reading", "healthy_answer_hold_reading")
+# The stage whose runs --with-root reads.
+A2A_TWOEND_WITH_STAGE = "a2a_twoend_4k"
+
+
+def answer_losses(directory: Path) -> dict:
+    """The count of each of A2A_ANSWER_LOSS_EVENTS, from summary.json's
+    transport rows <event>:control (None without the row: the run's keys
+    are off), and answer_route_lost_by_spine, from the rows
+    answer_route_lost_spine<k>:control."""
+    transport = json.loads((directory / "summary.json").read_text()).get("transport", {})
+    counts = {event: transport[f"{event}:control"]["count"] if f"{event}:control" in transport else None
+              for event in A2A_ANSWER_LOSS_EVENTS}
+    by_spine: dict[int, int] = {}
+    for name, value in transport.items():
+        event, _, plane = name.rpartition(":")
+        base, separator, spine = event.rpartition("_spine")
+        if plane == "control" and separator and base == "answer_route_lost" and spine.isdigit():
+            by_spine[int(spine)] = value["count"]
+    return {**counts, "answer_route_lost_by_spine": dict(sorted(by_spine.items()))}
+
+
+def correct_answer_hold(condition: str, answering_leaf: int, answered_leaf: int, spine: int) -> bool:
+    """Whether the answers from answering_leaf (their data's receivers) to
+    answered_leaf (its senders) over spine cross the faulted link of
+    condition: correct_receiver_hold with the answers' ends for the data's."""
+    return correct_receiver_hold(condition, answered_leaf, answering_leaf, spine)
+
+
+def answer_hold_reading(path: Path, condition: str) -> dict | None:
+    """The answer holds of ns3/answer_holds.csv (see the module docstring);
+    None without the file."""
+    if not path.exists():
+        return None
+    hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
+    onset = fault_onset_ns(condition)
+    sides = {side: {"correct_holds": 0, "false_holds": 0, "releases": 0, "held_at_end": 0}
+             for side in ("sender", "receiver")}
+    holding: dict[tuple, bool] = {}
+    toward: dict[tuple[int, int], dict] = {}
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            side, rank, leaf, spine = row["side"], int(row["rank"]), int(row["leaf"]), int(row["spine"])
+            held = row["held"] == "1"
+            key = (side, rank, leaf, spine)
+            if holding.get(key, False) == held:
+                continue
+            holding[key] = held
+            # A sender's row holds a route of the answers from leaf to it, a
+            # receiver's a spine of its answers to leaf.
+            answering, answered = (leaf, rank // hosts) if side == "sender" else (rank // hosts, leaf)
+            correct = correct_answer_hold(condition, answering, answered, spine)
+            if held:
+                sides[side][f"{'correct' if correct else 'false'}_holds"] += 1
+            else:
+                sides[side]["releases"] += 1
+            if side != "receiver":
+                continue
+            entry = toward.setdefault((leaf, spine), {"sender_leaf": leaf, "spine": spine, "correct": correct,
+                                                      "receivers": set(), "first_ns": None, "holds": 0,
+                                                      "releases": 0})
+            if held:
+                entry["receivers"].add(rank)
+                entry["holds"] += 1
+                time = int(row["time_ns"]) - onset
+                entry["first_ns"] = time if entry["first_ns"] is None else min(entry["first_ns"], time)
+            else:
+                entry["releases"] += 1
+    for (side, *_), held in holding.items():
+        sides[side]["held_at_end"] += held
+    receiver_holds = []
+    for entry in sorted(toward.values(), key=lambda e: (e["sender_leaf"], e["spine"])):
+        receiver_holds.append({**entry, "receivers": len(entry["receivers"]),
+                               "held_at_end": sum(held for (side, _, leaf, spine), held in holding.items()
+                                                  if side == "receiver" and (leaf, spine)
+                                                  == (entry["sender_leaf"], entry["spine"]))})
+    return {"sender": sides["sender"], "receiver": sides["receiver"], "receiver_holds": receiver_holds}
+
+
+def a2a_twoend(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_candidates against reps_hold_auto_tail4 with the answer losses,
+    the sender holds read under spray and the answer holds (see the module
+    docstring)."""
+    by_key = {r["key"]: r for r in rows}
+    roots = _run_roots(rows, out_root)
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = roots[row["key"]] / row["key"]
+        healthy = by_key.get(row["healthy_key"])
+        paired = None if healthy is None else roots[healthy["key"]] / healthy["key"]
+        measured[row["key"]] = {
+            **answer_losses(directory),
+            "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
+                                                       "spray"),
+            "healthy_sender_hold_reading": None if paired is None else sender_hold_reading(
+                paired / "ns3" / "spine_losses.csv", "healthy", "spray"),
+            "answer_hold_reading": answer_hold_reading(directory / "ns3" / "answer_holds.csv", row["condition"]),
+            "healthy_answer_hold_reading": None if paired is None else answer_hold_reading(
+                paired / "ns3" / "answer_holds.csv", "healthy"),
+        }
+    cells = a2a_candidates(rows, out_root, A2A_TWOEND_REFERENCE)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in A2A_TWOEND_READINGS:
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+        cell["versus"] = {f"{a} against {b}": _versus(cell["arms"], a, b) for a, b in A2A_TWOEND_VERSUS
+                          if a in cell["arms"] and b in cell["arms"]}
+    return cells
+
+
+def _counted(values) -> str:
+    """values summed over the seeds that have one; "-" when none has."""
+    known = [v for v in values if v is not None]
+    return "-" if not known else str(sum(known))
+
+
+def _side_summed(readings, side: str, name: str) -> str:
+    """name of one side of the answer hold readings summed over the seeds;
+    "-" when none has one."""
+    return _summed([None if r is None else r[side] for r in readings], name)
+
+
+def twoend_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, the receivers' answer holds per seed, and
+    each cell's verdicts."""
+    def holds(readings, kind):
+        return f"{_summed(readings, f'{kind}_holds')}, {_summed(readings, f'{kind}_held_rows')}"
+
+    def answer_holds(readings, side):
+        return (f"{_side_summed(readings, side, 'correct_holds')}, {_side_summed(readings, side, 'false_holds')}, "
+                f"{_side_summed(readings, side, 'releases')}, {_side_summed(readings, side, 'held_at_end')}")
+
+    lines = [
+        f"| group | size | condition | arm | cost mean us (seeds) | vs {A2A_TWOEND_REFERENCE} | reaction us "
+        "| sender correct holds, rows | sender false holds, rows | healthy false holds, rows "
+        "| answer losses covered | answer route lost | by route spine "
+        "| sender route holds: correct, false, released, at end "
+        "| receiver answer holds: correct, false, released, at end | probe answers "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 17 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            readings, answer = entry["sender_hold_reading"], entry["answer_hold_reading"]
+            # A run without answer path sequences counts no route's.
+            by_spine = [None if lost is None else spines
+                        for lost, spines in zip(entry["answer_route_lost"], entry["answer_route_lost_by_spine"])]
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) "
+                f"| {entry.get('versus_reference_cost') or '-'} | {_us(entry['reaction_ns_mean'])} "
+                f"| {holds(readings, 'correct')} | {holds(readings, 'false')} "
+                f"| {holds(entry['healthy_sender_hold_reading'], 'false')} "
+                f"| {_counted(entry['answer_loss_covered'])} | {_counted(entry['answer_route_lost'])} "
+                f"| {_per_spine(by_spine)} "
+                f"| {answer_holds(answer, 'sender')} | {answer_holds(answer, 'receiver')} "
+                f"| {_counted(entry['answer_probe'])} "
+                f"| {_rto_run(entry)} |"
+            )
+    lines.append("")
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            for seed, reading in zip(entry["seeds"], entry["answer_hold_reading"]):
+                if reading is None or not reading["receiver_holds"]:
+                    continue
+                spans = "; ".join(
+                    f"leaf {h['sender_leaf']} spine {h['spine']} ({'correct' if h['correct'] else 'false'}): "
+                    f"{h['receivers']} receivers from {_us(h['first_ns'])} us, {h['holds']} holds, "
+                    f"{h['releases']} released, {h['held_at_end']} at end"
+                    for h in reading["receiver_holds"])
+                lines.append(f"- {cell['group']} {cell['size']} {cell['condition']} {label} s{seed}: "
+                             f"receiver answer holds: {spans}")
+    for cell in cells:
+        for name, value in cell["versus"].items():
+            lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {name}: {value or 'unreadable'}")
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration,
 # a2a_calibration_4k, a2a_decode_calibration_4k and
@@ -2680,13 +2916,13 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray"):
+                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
                                              "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink",
-                                             "a2a_downlink_spray")
+                                             "a2a_downlink_spray", "a2a_twoend")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -2698,17 +2934,20 @@ def main() -> int:
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
-                    "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray"):
+                    "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
                       "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k",
-                      "a2a_hostlink": "a2a_hostlink_4k", "a2a_downlink_spray": "a2a_downlink_spray_4k"}
+                      "a2a_hostlink": "a2a_hostlink_4k", "a2a_downlink_spray": "a2a_downlink_spray_4k",
+                      "a2a_twoend": "a2a_twoend_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
             x.add_argument("--ack-route", choices=A2A_ACK_ROUTES)
+        if name in ("a2a_ackroute", "a2a_twoend"):
             x.add_argument("--with-root", type=Path)
-            x.add_argument("--with-stage", default=A2A_ACKROUTE_WITH_STAGE)
+            x.add_argument("--with-stage",
+                           default=A2A_ACKROUTE_WITH_STAGE if name == "a2a_ackroute" else A2A_TWOEND_WITH_STAGE)
         if name == "a2a_noack":
             x.add_argument("--ack-root", type=Path, nargs="*", default=[])
         if name == "a2a_sweep":
@@ -2787,6 +3026,15 @@ def main() -> int:
                                    arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(downlink_spray_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_twoend":
+        rows = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+        if arguments.with_root:
+            rows += a2a_root_rows(arguments.with_root, arguments.with_stage)
+        cells = a2a_twoend(rows, arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(twoend_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_hostlink":
