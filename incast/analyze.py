@@ -381,7 +381,10 @@ verdicts against reps_hold_auto_tail4, and per faulted run:
   answer_set_probe, answer_set_replace and answer_repath, the receivers'
   probes of their connections' sets and the members they replaced (ack_route
   reverse_set) and their redraws of a connection's spine (ack_route repath);
-  each None without the row, as in a run without the key. answer_route_lost_by_spine
+  and answer_loss_duplicate and timeout_loss_data, the sends a retransmission
+  timeout declared whose resend's answer was flagged as a duplicate, answer
+  losses, and those told as data losses (duplicate_report); each None
+  without the row, as in a run without the key. answer_route_lost_by_spine
   is answer_route_lost per route spine, from the rows
   answer_route_lost_spine<k>:control;
 * sender_hold_reading and healthy_sender_hold_reading as a2a_ackroute gives
@@ -406,7 +409,9 @@ Per cell, versus gives the seed-rule verdict on cost of
 reps_hold_auto_tail4_cover against reps_hold_auto_tail4, of
 reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover,
 reps_hold_auto_tail4_cover_route_oracle and
-reps_hold_auto_tail_ack_data_spine, of a2a_twoend_base_4k's
+reps_hold_auto_tail_ack_data_spine, of reps_hold_auto_tail4_cover_dup
+against reps_hold_auto_tail4_cover and of reps_hold_auto_tail4_cover_answer_seq
+against it, of a2a_twoend_base_4k's
 reps_hold_auto_tail4_cover_reverse_set and reps_hold_auto_tail4_cover_repath
 against reps_hold_auto_tail4_cover, and of
 reps_hold_auto_tail4_cover_answer_seq against each of them, where the cell
@@ -2583,12 +2588,15 @@ A2A_TWOEND_VERSUS = (("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_route_oracle"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail_ack_data_spine"),
+                     ("reps_hold_auto_tail4_cover_dup", "reps_hold_auto_tail4_cover"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_dup"),
                      ("reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_repath", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_repath"))
 A2A_ANSWER_LOSS_EVENTS = ("answer_loss_covered", "answer_route_lost", "answer_probe", "answer_route_hold",
-                          "answer_route_release", "answer_set_probe", "answer_set_replace", "answer_repath")
+                          "answer_route_release", "answer_set_probe", "answer_set_replace", "answer_repath",
+                          "answer_loss_duplicate", "timeout_loss_data")
 A2A_TWOEND_READINGS = (*A2A_ANSWER_LOSS_EVENTS, "answer_route_lost_by_spine", "sender_hold_reading",
                        "healthy_sender_hold_reading", "answer_hold_reading", "healthy_answer_hold_reading")
 # The stage whose runs --with-root reads.
@@ -2728,9 +2736,9 @@ def twoend_markdown(cells: list[dict]) -> str:
         "| answer losses covered | answer route lost | by route spine "
         "| sender route holds: correct, false, released, at end "
         "| receiver answer holds: correct, false, released, at end | probe answers "
-        "| set probes, replaced | repaths "
+        "| set probes, replaced | repaths | timed out: duplicate answer losses, data losses "
         f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
-        "|---" * 19 + "|",
+        "|---" * 20 + "|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -2749,7 +2757,9 @@ def twoend_markdown(cells: list[dict]) -> str:
                 f"| {answer_holds(answer, 'sender')} | {answer_holds(answer, 'receiver')} "
                 f"| {_counted(entry['answer_probe'])} "
                 f"| {_counted(entry['answer_set_probe'])}, {_counted(entry['answer_set_replace'])} "
-                f"| {_counted(entry['answer_repath'])} | {_rto_run(entry)} |"
+                f"| {_counted(entry['answer_repath'])} "
+                f"| {_counted(entry['answer_loss_duplicate'])}, {_counted(entry['timeout_loss_data'])} "
+                f"| {_rto_run(entry)} |"
             )
     lines.append("")
     for cell in cells:

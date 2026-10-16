@@ -835,6 +835,7 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail4_cover": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_answer_seq": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_dup": "reps_hold_auto",
                       "reps_hold_auto_tail_ack_cover": "reps_hold_auto",
                       "reps_hold_leaf_tail_ack_cover": "reps_hold_auto",
                       "reps_flow_hold_tail_ack_cover": "reps_flow_hold",
@@ -860,12 +861,17 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
 #   loss_unit       link_failures[].loss_unit: byte on every gray failure with
 #                   an error_rate, a packet of s bytes lost with
 #                   1 - (1 - r)^s and a full data frame at the condition's rate
+#   rtt_sample      network.congestion_control.rtt_sample: karn, NSCC's round
+#                   trips by Karn's rule, none from an answer to a sequence sent
+#                   more than once, each at least the pair's base RTT, so that
+#                   a late answer to an earlier send never sets the window's
+#                   base RTT and MaxWnd below the path's
 # Loss thresholds (from the healthy sends per spine per interval) and compute
 # gaps (from the healthy burst) depend on it, so a run on it reads its
 # calibration from the cells a2a_cell_name names with its payload
 # (<group>-<size>-p4096) and its compute gap from A2A_PAYLOAD_COMPUTE_NS.
 A2A_FIXTURE_4K: dict[str, Any] = {"payload_bytes": 4096, "path_state": "connection", "window_state": "connection",
-                                  "dataset_splits": 1, "loss_unit": "byte"}
+                                  "dataset_splits": 1, "loss_unit": "byte", "rtt_sample": "karn"}
 A2A_PAYLOAD_4K = A2A_FIXTURE_4K["payload_bytes"]
 # Every group and size a run names: the gate's (A2A_GROUPS, A2A_SIZES and
 # A2A_ITERATIONS), which the earlier stages run, and those the sweep adds:
@@ -1104,15 +1110,22 @@ A2A_DOWNLINK_SPRAY_ARMS = ("reps_hold_auto_tail4", "reps_hold_auto_tail_ack", *A
 # the receivers, which leave it out of their draw but for a probe answer per
 # millisecond until no sender holds it (reps_hold_auto_tail4_cover_answer_seq);
 # that with A2A_ACKROUTE_ORACLE (reps_hold_auto_tail4_cover_route_oracle);
+# reps_hold_auto_tail4_cover with its receivers flagging an answer to a
+# sequence they held already and its senders telling a timed-out send's loss
+# only at its resend's answer, none where that answer is flagged
+# (A2A_DUPLICATE_REPORT: load_balancing duplicate_report, written as
+# SPRAY_DUPLICATE_REPORT on): reps_hold_auto_tail4_cover_dup;
 # a2a_ackroute_4k's control, reps_hold_auto_tail_ack_data_spine; and
 # reps_tail.
 A2A_TWOEND_STAGE = "a2a_twoend_4k"
 A2A_COVERAGE_FIRST = {"coverage_first": True}
 A2A_ANSWER_PATH_SEQ = {"answer_path_seq": True}
+A2A_DUPLICATE_REPORT = {"duplicate_report": True}
 # The coverage-first arms and the keys each adds to reps_hold_auto_tail4_cover.
 A2A_TWOEND_COVER_ARMS = {"reps_hold_auto_tail4_cover": {},
                          "reps_hold_auto_tail4_cover_answer_seq": A2A_ANSWER_PATH_SEQ,
-                         "reps_hold_auto_tail4_cover_route_oracle": A2A_ACKROUTE_ORACLE}
+                         "reps_hold_auto_tail4_cover_route_oracle": A2A_ACKROUTE_ORACLE,
+                         "reps_hold_auto_tail4_cover_dup": A2A_DUPLICATE_REPORT}
 A2A_TWOEND_ARMS = ("reps_hold_auto_tail4", *A2A_TWOEND_COVER_ARMS, *A2A_ACKROUTE_DATA_SPINE, "reps_tail")
 # a2a_twoend_base_4k: a2a_twoend_4k's cells, healthy pairs and seeds under
 # two arms of reps_hold_auto_tail4_cover whose receivers route the answers per
@@ -1225,6 +1238,8 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
         network["load_balancing"] = {**network["load_balancing"], "path_state": fixture["path_state"]}
     if "window_state" in fixture:
         network["congestion_control"] = {**network["congestion_control"], "window_state": fixture["window_state"]}
+    if "rtt_sample" in fixture:
+        network["congestion_control"] = {**network["congestion_control"], "rtt_sample": fixture["rtt_sample"]}
     if "dataset_splits" in fixture:
         document["workload"]["dataset_splits"] = fixture["dataset_splits"]
     if "loss_unit" in fixture:

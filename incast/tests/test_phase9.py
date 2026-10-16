@@ -70,7 +70,7 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135,
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126},
         )
         self.assertEqual(
@@ -84,7 +84,7 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135,
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
@@ -897,7 +897,8 @@ class Fixture(unittest.TestCase):
                                                 if (key != "path_state" or uniform)
                                                 and (key != "dataset_splits" or all_to_all)})
                 self.assertEqual(network["packet_payload_bytes"], 4096)
-                self.assertEqual(network["congestion_control"], {"mode": "nscc", "window_state": "connection"})
+                self.assertEqual(network["congestion_control"],
+                                 {"mode": "nscc", "window_state": "connection", "rtt_sample": "karn"})
                 self.assertEqual(network["load_balancing"].get("path_state"), "connection" if uniform else None)
                 self.assertEqual(document["workload"].get("dataset_splits"), 1 if all_to_all else None)
                 for failure in network["link_failures"]:
@@ -1477,15 +1478,15 @@ class TwoEnd(unittest.TestCase):
     def test_runs_and_settings(self):
         stage = "a2a_twoend_4k"
         runs = profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
-        # 18 faulted cells and 3 healthy pairs by 6 arms by 3 seeds.
-        self.assertEqual(len(runs), (18 + 3) * 6 * 3)
+        # 18 faulted cells and 3 healthy pairs by 7 arms by 3 seeds.
+        self.assertEqual(len(runs), (18 + 3) * 7 * 3)
         ackroute = profiles.a2a_stage_runs("a2a_ackroute_4k", self.calibration, self.tuning)
         self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
                          {(r["group"], r["size"], r["condition"]) for r in ackroute})
         self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
                          ["reps_hold_auto_tail4", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_answer_seq",
-                          "reps_hold_auto_tail4_cover_route_oracle", "reps_hold_auto_tail_ack_data_spine",
-                          "reps_tail"])
+                          "reps_hold_auto_tail4_cover_route_oracle", "reps_hold_auto_tail4_cover_dup",
+                          "reps_hold_auto_tail_ack_data_spine", "reps_tail"])
         self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
         self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
         # a2a_ackroute_4k's arms as there.
@@ -1498,6 +1499,8 @@ class TwoEnd(unittest.TestCase):
                          {**cover, "answer_path_seq": True})
         self.assertEqual(self.balancing(stage, "reps_hold_auto_tail4_cover_route_oracle"),
                          {**cover, "ack_route_oracle": True})
+        self.assertEqual(self.balancing(stage, "reps_hold_auto_tail4_cover_dup"),
+                         {**cover, "duplicate_report": True})
         self.assertEqual(reference["ack_route"], "spray")
         # The decode cell and EP64 2 MiB on their own calibration.
         two = self.balancing(stage, "reps_hold_auto_tail4_cover_answer_seq", "ep64", "2m", "loss1e3_down")
@@ -1614,9 +1617,9 @@ class TwoEnd(unittest.TestCase):
                 "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail_ack_data_spine"})
         self.assertIn("| ep64 | 256k | blackhole_up | reps_hold_auto_tail4_cover_answer_seq | 0.1 (3) "
                       "| reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4 | - | 3, 3 | 3, 3 | 0, 0 "
-                      "| 120 | 18 | 3:15, 5:3 | 3, 3, 3, 3 | 6, 3, 3, 6 | 6 | -, - | - | - |", markdown)
+                      "| 120 | 18 | 3:15, 5:3 | 3, 3, 3, 3 | 6, 3, 3, 6 | 6 | -, - | - | -, - | - |", markdown)
         self.assertIn("| reps_tail | 0.5 (3) | reps_hold_auto_tail4 beats reps_tail | - | -, - | -, - | -, - | - | - "
-                      "| - | -, -, -, - | -, -, -, - | - | -, - | - | - |", markdown)
+                      "| - | -, -, -, - | -, -, -, - | - | -, - | - | -, - | - |", markdown)
         self.assertIn("- ep64 256k blackhole_up reps_hold_auto_tail4_cover_answer_seq s301: receiver answer holds: "
                       "leaf 0 spine 3 (false): 1 receivers from 1.4 us, 1 holds, 0 released, 1 at end; "
                       "leaf 1 spine 3 (correct): 2 receivers from 1.1 us, 2 holds, 1 released, 1 at end", markdown)
@@ -1707,8 +1710,8 @@ class TwoEndBase(unittest.TestCase):
             "reps_hold_auto_tail4_cover_answer_seq against reps_hold_auto_tail4_cover_repath":
                 "reps_hold_auto_tail4_cover_answer_seq beats reps_hold_auto_tail4_cover_repath"})
         self.assertIn("| reps_hold_auto_tail4_cover_reverse_set | 0.2 (3) ", markdown)
-        self.assertIn("| - | 90, 12 | - | - |", markdown)
-        self.assertIn("| - | -, - | 21 | - |", markdown)
+        self.assertIn("| - | 90, 12 | - | -, - | - |", markdown)
+        self.assertIn("| - | -, - | 21 | -, - | - |", markdown)
 
 
 class NoAck(unittest.TestCase):
