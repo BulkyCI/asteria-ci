@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k, a2a_downlink_spray_4k, a2a_twoend_4k, a2a_hostlink_s_4k, a2a_twoend_base_4k)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k, a2a_downlink_spray_4k, a2a_twoend_4k, a2a_hostlink_s_4k, a2a_twoend_base_4k, a2a_twoend_retract_4k)
         required: true
         type: string
       record_filter:
@@ -392,6 +392,14 @@ jobs:
             --stage a2a_twoend_base_4k "${with[@]}" --markdown results/a2a_twoend_base_4k_answers.md \
             > results/a2a_twoend_base_4k_answers.json
           cat results/a2a_twoend_base_4k_answers.md >> "$GITHUB_STEP_SUMMARY"
+        fi
+        # The timed-out sends' losses taken back at a flagged answer, beside
+        # the stage's own coverage-first arms.
+        if [[ ",${STAGES// /}," == *,a2a_twoend_retract_4k,* ]]; then
+          python3 incast/analyze.py a2a_twoend --runs results/runs.json --out-root results \
+            --stage a2a_twoend_retract_4k --markdown results/a2a_twoend_retract_4k_answers.md \
+            > results/a2a_twoend_retract_4k_answers.json
+          cat results/a2a_twoend_retract_4k_answers.md >> "$GITHUB_STEP_SUMMARY"
         fi
         # Under a lossy host access link every spine hold is false: where the
         # holds and the senders' losses fall.

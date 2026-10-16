@@ -71,7 +71,7 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -85,7 +85,7 @@ class Stages(unittest.TestCase):
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
-             "a2a_twoend_base_4k": 126},
+             "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1654,6 +1654,28 @@ class TwoEndBase(unittest.TestCase):
                            ("reps_hold_auto_tail4_cover_repath", "repath")):
             self.assertEqual(self.balancing(stage, arm, "loss1e2_down"), {**cover, "ack_route": route})
 
+    def test_retract_runs_and_settings(self):
+        stage = "a2a_twoend_retract_4k"
+        runs = profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
+        # 18 faulted cells and 3 healthy pairs by 3 arms by 3 seeds.
+        self.assertEqual(len(runs), (18 + 3) * 3 * 3)
+        twoend = profiles.a2a_stage_runs("a2a_twoend_4k", self.calibration, self.tuning)
+        self.assertEqual({(r["group"], r["size"], r["condition"], r["seed"]) for r in runs},
+                         {(r["group"], r["size"], r["condition"], r["seed"]) for r in twoend})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_answer_seq",
+                          "reps_hold_auto_tail4_cover_retract"])
+        # The coverage-first arms are a2a_twoend_4k's, run by run.
+        by_key = {r["key"].split("-", 1)[1]: r for r in twoend}
+        for run in runs:
+            if run["arm"] != "reps_hold_auto_tail4_cover_retract":
+                other = by_key[run["key"].split("-", 1)[1]]
+                self.assertEqual({**profiles.a2a_stage_profile(run, self.calibration), "name": None},
+                                 {**profiles.a2a_stage_profile(other, self.calibration), "name": None})
+        cover = self.balancing("a2a_twoend_4k", "reps_hold_auto_tail4_cover", "loss1e2_down")
+        self.assertEqual(self.balancing(stage, "reps_hold_auto_tail4_cover_retract", "loss1e2_down"),
+                         {**cover, "duplicate_report": "retract"})
+
     def test_read_with_twoend(self):
         onset = analyze.DEGRADE_AT_NS
         costs = {("a2a_twoend_4k", "reps_hold_auto_tail4_cover"): [300, 310, 320],
@@ -2035,7 +2057,8 @@ class CopyDeadline(unittest.TestCase):
         # Only the coverage-first arms select it.
         cover = {"a2a_twoend_4k": set(profiles.A2A_TWOEND_COVER_ARMS),
                  "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS),
-                 "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS)}
+                 "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS),
+                 "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibration, tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

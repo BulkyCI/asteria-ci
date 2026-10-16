@@ -516,6 +516,11 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           with its answers routed per connection, on
 #                           a2a_twoend_4k's cells and healthy pairs, seeds
 #                           301-303
+#   a2a_twoend_retract_4k   the A2A_TWOEND_RETRACT_ARMS, the coverage-first arm,
+#                           that with answer path sequences, and that with a
+#                           timed-out send's loss taken back at a flagged
+#                           answer, on a2a_twoend_4k's cells and healthy
+#                           pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -836,6 +841,7 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail4_cover_answer_seq": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_dup": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_retract": "reps_hold_auto",
                       "reps_hold_auto_tail_ack_cover": "reps_hold_auto",
                       "reps_hold_leaf_tail_ack_cover": "reps_hold_auto",
                       "reps_flow_hold_tail_ack_cover": "reps_flow_hold",
@@ -1139,6 +1145,22 @@ A2A_TWOEND_ARMS = ("reps_hold_auto_tail4", *A2A_TWOEND_COVER_ARMS, *A2A_ACKROUTE
 A2A_TWOEND_BASE_STAGE = "a2a_twoend_base_4k"
 A2A_TWOEND_BASE_ARMS = {"reps_hold_auto_tail4_cover_reverse_set": {"ack_route": "reverse_set"},
                         "reps_hold_auto_tail4_cover_repath": {"ack_route": "repath"}}
+# a2a_twoend_retract_4k: a2a_twoend_4k's cells, healthy pairs and seeds under
+# reps_hold_auto_tail4_cover, reps_hold_auto_tail4_cover_answer_seq and,
+# beside reps_hold_auto_tail4_cover_dup, reps_hold_auto_tail4_cover_retract
+# (A2A_TWOEND_RETRACT_ARMS): reps_hold_auto_tail4_cover with its receivers
+# flagging an answer to a sequence they held already and its senders telling
+# each timed-out send's loss on its data spine at once, a sequence timed out
+# again counted again, and taking each back from the host's loss hold at the
+# flagged answer to the sequence, the hold it began graded again without it
+# (A2A_DUPLICATE_RETRACT: load_balancing duplicate_report retract, written as
+# SPRAY_DUPLICATE_REPORT retract). The stage's own coverage-first arms are
+# a2a_twoend_4k's, so that the three are read on one build.
+A2A_TWOEND_RETRACT_STAGE = "a2a_twoend_retract_4k"
+A2A_DUPLICATE_RETRACT = {"duplicate_report": "retract"}
+A2A_TWOEND_RETRACT_ARMS = {"reps_hold_auto_tail4_cover": {},
+                           "reps_hold_auto_tail4_cover_answer_seq": A2A_ANSWER_PATH_SEQ,
+                           "reps_hold_auto_tail4_cover_retract": A2A_DUPLICATE_RETRACT}
 # a2a_noack_4k: the loss-hold arms of the 4096-byte stages without
 # ack_loss_rtts, tail recovery at tail_loss_rtts 4 as in them: each no-ack arm
 # is its ack arm's setting less ack_loss_rtts (A2A_NOACK_ARMS), named by
@@ -1204,7 +1226,7 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
                                    A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
-                                   A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE)}
+                                   A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE, A2A_TWOEND_RETRACT_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1535,6 +1557,13 @@ def a2a_twoend_base_settings(tuning: dict[str, Any] | None) -> dict[str, dict[st
     return {arm: {**cover, **keys} for arm, keys in A2A_TWOEND_BASE_ARMS.items()}
 
 
+def a2a_twoend_retract_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_twoend_retract_4k arm's setting: a2a_twoend_4k's
+    reps_hold_auto_tail4_cover with its keys (A2A_TWOEND_RETRACT_ARMS)."""
+    cover = a2a_twoend_settings(tuning)["reps_hold_auto_tail4_cover"]
+    return {arm: {**cover, **keys} for arm, keys in A2A_TWOEND_RETRACT_ARMS.items()}
+
+
 def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_hostlink_s_4k arm's setting: its a2a_hostlink_4k arm's
     (A2A_HOSTLINK_COVER_ARMS) with A2A_COVERAGE_FIRST, through
@@ -1598,6 +1627,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_TWOEND_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_ARMS),
         A2A_HOSTLINK_COVER_STAGE: (A2A_HOSTLINK_CELLS, tuple(A2A_HOSTLINK_COVER_ARMS)),
         A2A_TWOEND_BASE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_BASE_ARMS)),
+        A2A_TWOEND_RETRACT_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_RETRACT_ARMS)),
     }[stage]
 
 
@@ -1752,6 +1782,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_twoend_settings(tuning) if stage == A2A_TWOEND_STAGE
                     else a2a_hostlink_cover_settings(tuning) if stage == A2A_HOSTLINK_COVER_STAGE
                     else a2a_twoend_base_settings(tuning) if stage == A2A_TWOEND_BASE_STAGE
+                    else a2a_twoend_retract_settings(tuning) if stage == A2A_TWOEND_RETRACT_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
