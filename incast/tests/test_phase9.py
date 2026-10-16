@@ -2319,6 +2319,15 @@ class Wide(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"\['ep64-256k-p4096-w128', 'ep64-2m-p4096-w128'\]"):
             profiles.a2a_stage_runs("a2a_wide128_4k", lacking, self.tuning)
 
+    def test_committed_calibration(self):
+        # The committed calibration holds the 32-spine wide-leaf cells, so the
+        # comparison at 32 plans on it alone; 128 and 256 still lack theirs.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_wide32_4k", committed, self.tuning)), 258)
+        for stage in ("a2a_wide128_4k", "a2a_wide256_4k"):
+            with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
+                profiles.a2a_stage_runs(stage, committed, self.tuning)
+
     @measured_4k()
     def test_overdue_repair(self):
         # The stage's one overdue repair, on every arm: none until it is
