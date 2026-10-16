@@ -35,6 +35,15 @@ class Runs(unittest.TestCase):
         )
 
 
+class Group(unittest.TestCase):
+    def test_members(self):
+        self.assertEqual(summarize.all_to_all_group({"group": "all"}, 4, 2), [0, 1, 2, 3])
+        self.assertEqual(summarize.all_to_all_group({"group": {"leaves": [1]}}, 4, 2), [2, 3])
+        # The first hosts of each leaf.
+        self.assertEqual(summarize.all_to_all_group({"group": {"leaves": [0, 1], "hosts": 1}}, 8, 4),
+                         [0, 4])
+
+
 class Timing(unittest.TestCase):
     def timing(self, rows, iterations=3, group=(0, 1), collectives=1):
         with tempfile.TemporaryDirectory() as directory:

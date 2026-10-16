@@ -200,9 +200,13 @@ def receiving_hosts(workload: dict, hosts_per_leaf: int) -> tuple[list[int], set
 
 
 def all_to_all_group(workload: dict, hosts: int, hosts_per_leaf: int) -> list[int]:
+    """The all-to-all's members: every host, those of the group's leaves, or
+    with the group's hosts the first that many of each."""
     if workload["group"] == "all":
         return list(range(hosts))
-    return [h for h in range(hosts) if h // hosts_per_leaf in workload["group"]["leaves"]]
+    first = workload["group"].get("hosts", hosts_per_leaf)
+    return [h for h in range(hosts)
+            if h // hosts_per_leaf in workload["group"]["leaves"] and h % hosts_per_leaf < first]
 
 
 def nearest_rank(values: list[int], q: float) -> int:
