@@ -33,7 +33,8 @@
                                                      answers' routing, and the answers lost per spine
     analyze.py a2a_noack --runs RUNS.json... --out-root DIR [--stage S] [--ack-root DIR...] [--markdown FILE]
                                                      each loss-hold arm without ack_loss_rtts against its ack arm
-    analyze.py a2a_hostlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+    analyze.py a2a_hostlink --runs RUNS.json... --out-root DIR [--stage S] [--with-root DIR... [--with-stage S]]
+                            [--markdown FILE]
                                                      a2a_candidates with the false sender holds under a lossy
                                                      host link and the losses toward its leaf per spine
     analyze.py a2a_downlink_spray --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
@@ -67,7 +68,7 @@ a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
 a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k,
-a2a_downlink_spray_4k and a2a_twoend_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_downlink_spray_4k, a2a_twoend_4k and a2a_hostlink_s_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -303,6 +304,21 @@ ns3/spine_losses.csv, or for a run of another condition):
 * lost_toward_faulted_leaf_by_spine and lost_by_spine: per spine, the lost
   column summed over the rows toward the faulted host's leaf, and over
   every row, how the access link's losses spread over the spines.
+
+Each faulted run also gives answer_loss_covered, the sends a loss rule
+found covered and counted as answer losses (summary.json's transport row
+answer_loss_covered:control, None without it, as in a run without
+coverage_first); a2a_hostlink_s_4k's runs are read with --stage
+a2a_hostlink_s_4k. Per cell, versus
+gives the seed-rule verdict on cost of each coverage-first arm of
+a2a_hostlink_s_4k against the a2a_hostlink_4k arm it adds the key to,
+where the cell has both. --with-root adds the runs of one stage
+(--with-stage, a2a_hostlink_4k by default) of other tabulated out roots
+(runs.json beside the run directories), each read from its own root and
+costed against its own healthy pair, so that a2a_hostlink_s_4k's runs,
+read with a2a_hostlink_4k's dispatches, share its cells; the workflow,
+which tabulates one dispatch, passes the dispatch's own root when it ran
+both stages.
 
 a2a_reaction reads one stage's runs alone (--stage, a2a_reaction_4k by
 default) and gives per faulted run, over the trace rows reaction_ns and
@@ -2173,6 +2189,13 @@ A2A_HOSTLINK_REFERENCE = "reps_tail"
 A2A_HOST_PREFIX = "host"
 A2A_FAULT_HOST = 9
 A2A_HOSTLINK_BUCKETS = ("toward_faulted_leaf", "toward_other_leaves", "toward_every_leaf")
+# profiles.py's A2A_HOSTLINK_COVER_ARMS: each coverage-first arm of
+# a2a_hostlink_s_4k and the a2a_hostlink_4k arm it adds the key to, against
+# which it is read on cost.
+A2A_HOSTLINK_COVER_ARMS = {f"{arm}_cover": arm for arm in ("reps_hold_auto_tail_ack", "reps_hold_leaf_tail_ack",
+                                                            "reps_flow_hold_tail_ack")}
+# The stage whose runs --with-root reads.
+A2A_HOSTLINK_WITH_STAGE = "a2a_hostlink_4k"
 
 
 def host_link_condition(condition: str) -> bool:
@@ -2230,24 +2253,28 @@ def a2a_hostlink(rows: list[dict], out_root: Path) -> list[dict]:
     """a2a_candidates against reps_tail with the host-link measures (see the
     module docstring)."""
     by_key = {r["key"]: r for r in rows}
+    roots = _run_roots(rows, out_root)
     measured = {}
     for row in a2a_costs(rows):
-        directory = out_root / row["key"]
+        directory = roots[row["key"]] / row["key"]
         healthy = by_key.get(row["healthy_key"])
         route = (row.get("setting") or {}).get("ack_route", "data_spine")
         measured[row["key"]] = {
             "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
                                                        route),
             "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
-                out_root / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", route),
+                roots[healthy["key"]] / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", route),
             "host_link": (host_link_reading(directory / "ns3" / "spine_losses.csv")
                           if host_link_condition(row["condition"]) else None),
+            "answer_loss_covered": answer_losses(directory)["answer_loss_covered"],
         }
     cells = a2a_candidates(rows, out_root, A2A_HOSTLINK_REFERENCE)
     for cell in cells:
         for entry in cell["arms"].values():
-            for name in ("sender_hold_reading", "healthy_sender_hold_reading", "host_link"):
+            for name in ("sender_hold_reading", "healthy_sender_hold_reading", "host_link", "answer_loss_covered"):
                 entry[name] = [measured[k][name] for k in entry["keys"]]
+        cell["versus"] = {f"{a} against {b}": _versus(cell["arms"], a, b)
+                          for a, b in A2A_HOSTLINK_COVER_ARMS.items() if a in cell["arms"] and b in cell["arms"]}
     return cells
 
 
@@ -2262,13 +2289,13 @@ def _bucket(readings, name: str) -> str:
 
 
 def hostlink_markdown(cells: list[dict]) -> str:
-    """A row per cell and arm."""
+    """A row per cell and arm, and each cell's verdicts."""
     lines = [
         "| group | size | condition | arm | cost mean us (seeds) | vs reps_tail | false holds, rows "
         "| toward the faulted leaf: holds, rows (series) | toward other leaves | toward every leaf "
-        "| healthy false holds, rows | lost toward the faulted leaf | lost "
+        "| healthy false holds, rows | lost toward the faulted leaf | lost | answer losses covered "
         f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
-        "|---" * 14 + "|",
+        "|---" * 15 + "|",
     ]
     for cell in cells:
         for label, entry in cell["arms"].items():
@@ -2282,8 +2309,13 @@ def hostlink_markdown(cells: list[dict]) -> str:
                 + "".join(f"| {_bucket(host, name)} " for name in A2A_HOSTLINK_BUCKETS)
                 + f"| {_summed(healthy, 'false_holds')}, {_summed(healthy, 'false_held_rows')} "
                 f"| {_per_spine([h and h['lost_toward_faulted_leaf_by_spine'] for h in host])} "
-                f"| {_per_spine([h and h['lost_by_spine'] for h in host])} | {_rto_run(entry)} |"
+                f"| {_per_spine([h and h['lost_by_spine'] for h in host])} "
+                f"| {_counted(entry['answer_loss_covered'])} | {_rto_run(entry)} |"
             )
+    lines.append("")
+    for cell in cells:
+        for name, value in cell["versus"].items():
+            lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {name}: {value or 'unreadable'}")
     return "\n".join(lines) + "\n"
 
 
@@ -2948,6 +2980,9 @@ def main() -> int:
             x.add_argument("--with-root", type=Path)
             x.add_argument("--with-stage",
                            default=A2A_ACKROUTE_WITH_STAGE if name == "a2a_ackroute" else A2A_TWOEND_WITH_STAGE)
+        if name == "a2a_hostlink":
+            x.add_argument("--with-root", type=Path, nargs="*", default=[])
+            x.add_argument("--with-stage", default=A2A_HOSTLINK_WITH_STAGE)
         if name == "a2a_noack":
             x.add_argument("--ack-root", type=Path, nargs="*", default=[])
         if name == "a2a_sweep":
@@ -3038,7 +3073,10 @@ def main() -> int:
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_hostlink":
-        cells = a2a_hostlink(a2a_rows(arguments.runs, arguments.out_root, arguments.stage), arguments.out_root)
+        rows = a2a_rows(arguments.runs, arguments.out_root, arguments.stage)
+        for root in arguments.with_root:
+            rows += a2a_root_rows(root, arguments.with_stage)
+        cells = a2a_hostlink(rows, arguments.out_root)
         if arguments.markdown:
             arguments.markdown.write_text(hostlink_markdown(cells))
         print(json.dumps(cells, indent=1))

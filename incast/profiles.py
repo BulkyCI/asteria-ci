@@ -509,6 +509,9 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           and the answers' path sequences, on
 #                           a2a_ackroute_4k's cells and healthy pairs, seeds
 #                           301-303
+#   a2a_hostlink_s_4k       a2a_hostlink_4k's loss-hold arms with the
+#                           sender's coverage first (A2A_HOSTLINK_COVER_ARMS)
+#                           on its cells and healthy pairs, seeds 301-303
 #
 # a2a_calibration.json (read when present) maps a scope (switch_queue,
 # per_connection, per_receiver: the pooled pass) and then a group and size
@@ -827,7 +830,10 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail4_rx_closed": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_answer_seq": "reps_hold_auto",
-                      "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto"}
+                      "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto",
+                      "reps_hold_auto_tail_ack_cover": "reps_hold_auto",
+                      "reps_hold_leaf_tail_ack_cover": "reps_hold_auto",
+                      "reps_flow_hold_tail_ack_cover": "reps_flow_hold"}
 # The settled fixture. The stages named *_4k and the ring's run on it, where
 # every stage above runs on the generator's defaults; a stage takes it from
 # A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
@@ -1119,8 +1125,8 @@ A2A_NOACK_SOURCES = ("a2a_tail_ack_4k", "a2a_sweep_4k", "a2a_decode_4k")
 # duplicate declared lost only past tail_loss_rtts base RTTs since they were
 # sent, whatever their data's acknowledgement, rather than at their data's
 # acknowledgement past one base RTT. A stage selects it by passing its
-# settings through a2a_copy_deadline, as a2a_twoend_4k's coverage-first arms
-# do.
+# settings through a2a_copy_deadline, as the coverage-first arms of
+# a2a_twoend_4k and a2a_hostlink_s_4k do.
 A2A_COPY_DEADLINE = {"copy_expiry": "deadline"}
 # a2a_hostlink_4k: one host's access link lossy from the onset, no spine
 # faulted: a gray loss at 1e-2 or 1e-3 (A2A_LOSS_RATES) on the link of host 9
@@ -1138,6 +1144,13 @@ A2A_HOSTLINK_CONDITIONS = ("hostloss1e2_up", "hostloss1e3_up", "hostloss1e2_down
 A2A_HOSTLINK_CELLS = tuple((group, size, condition) for group, size in (("ep64", "256k"), ("ep64", "2m"), A2A_DECODE)
                            for condition in A2A_HOSTLINK_CONDITIONS)
 A2A_HOSTLINK_ARMS = A2A_HOLD_ARMS_4K + ("reps_tail", "uniform_tail")
+# a2a_hostlink_s_4k: a2a_hostlink_4k's cells, healthy pairs and seeds under
+# its loss-hold arms with coverage_first (A2A_COVERAGE_FIRST) and copy_expiry
+# deadline (A2A_COPY_DEADLINE), every answer routed over its data's spine:
+# each arm is its a2a_hostlink_4k arm's setting (A2A_HOSTLINK_COVER_ARMS)
+# with both, so that its runs share a2a_hostlink_4k's cells.
+A2A_HOSTLINK_COVER_STAGE = "a2a_hostlink_s_4k"
+A2A_HOSTLINK_COVER_ARMS = {f"{arm}_cover": arm for arm in A2A_HOLD_ARMS_4K}
 # The ring's stages: ar_parity_probe_4k, one healthy uniform_tail run, seed
 # 301, which reads its healthy step time; ar_parity_calibration_4k,
 # a2a_calibration's per_receiver pass on it; and ar_parity_4k, the
@@ -1159,7 +1172,8 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_DECODE_CALIBRATION_STAGE, A2A_DECODE_STAGE, A2A_REACTION_STAGE,
                                    A2A_RING_PROBE_STAGE, A2A_RING_CALIBRATION_STAGE, A2A_RING_STAGE,
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
-                                   A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE)}
+                                   A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
+                                   A2A_HOSTLINK_COVER_STAGE)}
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1481,6 +1495,14 @@ def a2a_twoend_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, An
     return {arm: settings[arm] for arm in A2A_TWOEND_ARMS}
 
 
+def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_hostlink_s_4k arm's setting: its a2a_hostlink_4k arm's
+    (A2A_HOSTLINK_COVER_ARMS) with A2A_COVERAGE_FIRST, through
+    a2a_copy_deadline."""
+    base = a2a_tail_ack_settings(tuning, tuple(A2A_HOSTLINK_COVER_ARMS.values()))
+    return a2a_copy_deadline({arm: {**base[of], **A2A_COVERAGE_FIRST} for arm, of in A2A_HOSTLINK_COVER_ARMS.items()})
+
+
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """settings with A2A_COPY_DEADLINE on every setting whose copies it
     expires, those under sentinel_mode duplicate; the others as given."""
@@ -1534,6 +1556,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_ACKROUTE_FWD_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_ACKROUTE_FWD_ARMS)),
         A2A_DOWNLINK_SPRAY_STAGE: (A2A_DOWNLINK_SPRAY_CELLS, A2A_DOWNLINK_SPRAY_ARMS),
         A2A_TWOEND_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_ARMS),
+        A2A_HOSTLINK_COVER_STAGE: (A2A_HOSTLINK_CELLS, tuple(A2A_HOSTLINK_COVER_ARMS)),
     }[stage]
 
 
@@ -1686,6 +1709,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_ackroute_fwd_settings(tuning) if stage == A2A_ACKROUTE_FWD_STAGE
                     else a2a_downlink_spray_settings(tuning) if stage == A2A_DOWNLINK_SPRAY_STAGE
                     else a2a_twoend_settings(tuning) if stage == A2A_TWOEND_STAGE
+                    else a2a_hostlink_cover_settings(tuning) if stage == A2A_HOSTLINK_COVER_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)

@@ -70,7 +70,7 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378},
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135},
         )
         self.assertEqual(
             self.counts(CALIBRATION, TUNING),
@@ -83,7 +83,7 @@ class Stages(unittest.TestCase):
              "a2a_decode_4k": 108, "a2a_reaction_4k": 36, "ar_parity_probe_4k": 1,
              "ar_parity_calibration_4k": 3, "ar_parity_4k": 36, "a2a_ackroute_4k": 441,
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
-             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378},
+             "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 378, "a2a_hostlink_s_4k": 135},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
         # 2 cells by 6 arms by 3 seeds, and 2 healthy pairs by 6 arms by 3
@@ -1838,9 +1838,91 @@ class HostLink(unittest.TestCase):
         markdown = analyze.hostlink_markdown([cell])
         self.assertIn("| ep64 | 256k | hostloss1e2_down | reps_hold_auto_tail_ack | 0.3 (3) "
                       "| reps_hold_auto_tail_ack beats reps_tail | 6, 6 | 3, 3 (3) | 3, 3 (3) | 0, 0 (0) | 0, 0 "
-                      "| 3:6, 4:9 | 3:6, 4:9, 6:3 | - |", markdown)
-        self.assertIn("| reps_tail | 0.4 (3) | - | -, - | - | - | - | -, - | - | - | - |", markdown)
-        self.assertIn("|---" * 14 + "|\n", markdown)
+                      "| 3:6, 4:9 | 3:6, 4:9, 6:3 | - | - |", markdown)
+        self.assertIn("| reps_tail | 0.4 (3) | - | -, - | - | - | - | -, - | - | - | - | - |", markdown)
+        self.assertIn("|---" * 15 + "|\n", markdown)
+        self.assertEqual(cell["versus"], {})
+
+    def test_cover_runs_and_settings(self):
+        stage = "a2a_hostlink_s_4k"
+        runs = profiles.a2a_stage_runs(stage, self.calibration, self.tuning)
+        # 12 cells and 3 healthy pairs by 3 arms by 3 seeds.
+        self.assertEqual(len(runs), (12 + 3) * 3 * 3)
+        hostlink = profiles.a2a_stage_runs("a2a_hostlink_4k", self.calibration, self.tuning)
+        self.assertEqual({(r["group"], r["size"], r["condition"], r["seed"]) for r in runs},
+                         {(r["group"], r["size"], r["condition"], r["seed"]) for r in hostlink})
+        self.assertEqual(list(dict.fromkeys(r["arm"] for r in runs)),
+                         ["reps_hold_auto_tail_ack_cover", "reps_hold_leaf_tail_ack_cover",
+                          "reps_flow_hold_tail_ack_cover"])
+        self.assertEqual([r["fixture"] for r in runs], [profiles.A2A_FIXTURE_4K] * len(runs))
+        # Each arm its a2a_hostlink_4k arm's run but for the stage, the arm
+        # and the two keys.
+        theirs = {r["key"]: r for r in hostlink}
+        for r in runs:
+            of = profiles.A2A_HOSTLINK_COVER_ARMS[r["arm"]]
+            key = r["key"].replace(stage, "a2a_hostlink_4k", 1).replace(f"-{r['arm']}-", f"-{of}-")
+            mine = profiles.a2a_stage_profile(r, self.calibration)
+            other = profiles.a2a_stage_profile(theirs[key], self.calibration)
+            self.assertEqual(mine["network"]["load_balancing"],
+                             {**other["network"]["load_balancing"], "coverage_first": True,
+                              "copy_expiry": "deadline"})
+            self.assertNotIn("ack_route", mine["network"]["load_balancing"])
+            mine["network"]["load_balancing"] = other["network"]["load_balancing"]
+            self.assertEqual(mine["network"], other["network"])
+            self.assertEqual((r["compute_ns"], r["iterations"]), (theirs[key]["compute_ns"], theirs[key]["iterations"]))
+
+    def test_cover_analyzer_with_roots(self):
+        onset = analyze.DEGRADE_AT_NS
+        costs = {("a2a_hostlink_4k", "reps_hold_auto_tail_ack"): [300, 310, 320],
+                 ("a2a_hostlink_4k", "reps_tail"): [400, 420, 440],
+                 ("a2a_hostlink_s_4k", "reps_hold_auto_tail_ack_cover"): [100, 110, 120]}
+        with tempfile.TemporaryDirectory() as directory:
+            roots = {"a2a_hostlink_4k": Path(directory) / "hostlink", "a2a_hostlink_s_4k": Path(directory) / "s"}
+            runs = {stage: [] for stage in roots}
+            for (stage, arm), values in costs.items():
+                setting = {"coverage_first": True} if arm.endswith("_cover") else None
+                for seed, cost in zip((301, 302, 303), values):
+                    for condition, extra in (("healthy", 0), ("hostloss1e2_up", cost)):
+                        r = {**run(arm, "ep64", "256k", condition, seed, stage, setting),
+                             "fixture": profiles.A2A_FIXTURE_4K}
+                        runs[stage].append(r)
+                        d = roots[stage] / r["key"]
+                        (d / "ns3").mkdir(parents=True)
+                        (d / "ns3" / "spine_losses.csv").write_text(
+                            "time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
+                            + (f"{onset + 1000},0,1,3,10,2,0\n" if condition != "healthy" else ""))
+                        transport = ({"answer_loss_covered:control": {"count": 5, "bytes": 0}}
+                                     if setting and condition != "healthy" else {})
+                        timing = {"complete": True, "iteration_completion_ns": {"1": 1000 + extra, "2": 1000 + extra},
+                                  "iteration_start_ns": {"1": 0, "2": onset}}
+                        (d / "summary.json").write_text(json.dumps({"all_to_all": timing, "transport": transport}))
+            for stage, root in roots.items():
+                (root / "runs.json").write_text(json.dumps(runs[stage]))
+            markdown_path = Path(directory) / "s.md"
+            subprocess.run(
+                [sys.executable, str(Path(analyze.__file__)), "a2a_hostlink", "--runs",
+                 str(roots["a2a_hostlink_s_4k"] / "runs.json"), "--out-root", str(roots["a2a_hostlink_s_4k"]),
+                 "--stage", "a2a_hostlink_s_4k", "--with-root", str(roots["a2a_hostlink_4k"]),
+                 "--markdown", str(markdown_path)],
+                check=True, capture_output=True,
+            )
+            markdown = markdown_path.read_text()
+            rows = (analyze.a2a_rows([roots["a2a_hostlink_s_4k"] / "runs.json"], roots["a2a_hostlink_s_4k"],
+                                     "a2a_hostlink_s_4k")
+                    + analyze.a2a_root_rows(roots["a2a_hostlink_4k"], "a2a_hostlink_4k"))
+            (cell,) = analyze.a2a_hostlink(rows, roots["a2a_hostlink_s_4k"])
+        cover = cell["arms"]["reps_hold_auto_tail_ack_cover"]
+        self.assertEqual(cover["answer_loss_covered"], [5] * 3)
+        self.assertEqual(cover["sender_hold_reading"],
+                         [{"correct_holds": 0, "false_holds": 1, "correct_held_rows": 0, "false_held_rows": 1}] * 3)
+        self.assertEqual(cell["arms"]["reps_hold_auto_tail_ack"]["answer_loss_covered"], [None] * 3)
+        self.assertEqual(cell["versus"], {"reps_hold_auto_tail_ack_cover against reps_hold_auto_tail_ack":
+                                          "reps_hold_auto_tail_ack_cover beats reps_hold_auto_tail_ack"})
+        self.assertIn("| ep64 | 256k | hostloss1e2_up | reps_hold_auto_tail_ack_cover | 0.1 (3) "
+                      "| reps_hold_auto_tail_ack_cover beats reps_tail | 3, 3 | 3, 3 (3) | 0, 0 (0) | 0, 0 (0) "
+                      "| 0, 0 | 3:6 | 3:6 | 15 | - |", markdown)
+        self.assertIn("- ep64 256k hostloss1e2_up: reps_hold_auto_tail_ack_cover against reps_hold_auto_tail_ack: "
+                      "reps_hold_auto_tail_ack_cover beats reps_hold_auto_tail_ack", markdown)
 
 
 class CopyDeadline(unittest.TestCase):
@@ -1859,11 +1941,13 @@ class CopyDeadline(unittest.TestCase):
         r = {**r, "setting": deadline["reps_hold_auto_tail_ack"]}
         balancing = profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
         self.assertEqual((balancing["sentinel_mode"], balancing["copy_expiry"]), ("duplicate", "deadline"))
-        # Only a2a_twoend_4k's coverage-first arms select it.
+        # Only the coverage-first arms select it.
+        cover = {"a2a_twoend_4k": set(profiles.A2A_TWOEND_COVER_ARMS),
+                 "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibration, tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
-                             set(profiles.A2A_TWOEND_COVER_ARMS) if stage == "a2a_twoend_4k" else set(), stage)
+                             cover.get(stage, set()), stage)
 
 
 class Decode(unittest.TestCase):
