@@ -41,6 +41,22 @@ reasons = [line.strip() for line in open(log, errors="replace") if "Simulation s
 summary["simulator_stop"] = reasons[-1] if reasons else None
 json.dump(summary, open(path, "w"), indent=1)
 PY
+    # A run of a sparse hold trace (manifest physical_topology
+    # sparse_hold_trace) keeps its hold traces zstd-compressed, as
+    # traces.py reads them.
+    "$python" - "$out" <<'PY'
+import json, sys
+from pathlib import Path
+import zstandard
+run = Path(sys.argv[1])
+if json.loads((run / "manifest.json").read_text())["physical_topology"].get("sparse_hold_trace"):
+    for name in ("spine_losses.csv", "receiver_holds.csv"):
+        path = run / "ns3" / name
+        if path.exists():
+            with path.open("rb") as source, path.with_name(name + ".zst").open("wb") as target:
+                zstandard.ZstdCompressor(level=10).copy_stream(source, target)
+            path.unlink()
+PY
     rm -rf "$out/workload"
     echo "$key: simulator status $status, ${wall}s"
     exit 0

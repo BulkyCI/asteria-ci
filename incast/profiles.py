@@ -838,6 +838,7 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_auto_tail_ack_rx_closed": "reps_hold_auto",
                       "reps_hold_auto_tail4_rx_closed": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_rx": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_answer_seq": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_route_oracle": "reps_hold_auto",
                       "reps_hold_auto_tail4_cover_dup": "reps_hold_auto",
@@ -1263,6 +1264,80 @@ A2A_SPINES_PROBE_STAGES = {f"a2a_spines{spines}_probe_4k": spines for spines in 
 A2A_SPINES_CALIBRATION_STAGES = {f"a2a_spines{spines}_calibration_4k": spines for spines in A2A_SPINES}
 A2A_SPINES_COMPUTE_NS: dict[int, dict[tuple[str, str], int]] = {spines: {} for spines in A2A_SPINES}
 A2A_SPINES_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {spines: () for spines in A2A_SPINES}
+# The wide-leaf fixtures (A2A_WIDE_FIXTURE): the settled fixture on a fabric
+# of P spines and P hosts per leaf (A2A_WIDE), every link at 400 Gb/s, the
+# EP64 job on the first A2A_WIDE_JOB_HOSTS hosts of each of the
+# A2A_WIDE_LEAVES leaves and every other host a background sender. A run on
+# one carries, beyond A2A_FIXTURE_4K:
+#   wide               P: network.spine_count and network.hosts_per_leaf P,
+#                      and parallelism.dp the fabric's 8 P hosts
+#   buffer_size_mb     network.fabric.buffer_size_mb: 2 MB for each of a
+#                      leaf's 2 P ports, as the 16-port leaf has 32 MB at
+#                      P = 8; the backend gives every switch the one pool
+#   job_hosts          workload.group: the first 8 hosts of every leaf, for
+#                      a run whose group is every host
+#   background         workload.background: leaf_shift at 350 Gb/s
+#                      (A2A_WIDE_BACKGROUND), each other host sending one
+#                      message of a job host's bytes to the other leaves with
+#                      each all-to-all collective
+#   sparse_hold_trace  network.sparse_hold_trace: true, for a run that writes
+#                      the sender loss trace (a2a_traces_spine_loss), as the
+#                      generator requires
+# Every link is a 400 Gb/s one, so the base RTT, the retransmission timeout
+# and the loss intervals are the 8-spine fabric's at every P. At P = 8 the
+# fixture is A2A_FIXTURE_4K: its leaves have no other host.
+A2A_WIDE = (8, 32, 128, 256)
+A2A_WIDE_LEAVES = 8
+A2A_WIDE_JOB_HOSTS = 8
+A2A_WIDE_BACKGROUND = {"pattern": "leaf_shift", "rate": "350Gbps"}
+A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
+                           **({} if wide == A2A_WIDE_JOB_HOSTS else {
+                               "buffer_size_mb": 4 * wide, "job_hosts": A2A_WIDE_JOB_HOSTS,
+                               "background": A2A_WIDE_BACKGROUND, "sparse_hold_trace": True})}
+                    for wide in A2A_WIDE}
+# Per P, on EP64 at 256 KiB and 2 MiB (A2A_WIDE_PAIRS), every stage at
+# P = 8's measured compute gaps (A2A_PAYLOAD_COMPUTE_NS), which a member
+# whose healthy span is within 1% of P = 8's takes:
+# - a2a_wide<P>_validity_4k (P above 8): healthy uniform_tail at seed 301,
+#   A2A_WIDE_VALIDITY_ITERATIONS iterations, with the port counters every
+#   A2A_WIDE_PORT_COUNTER_NS and the switch queues' maxima
+#   (network.port_counter_interval_ns), which analyze.py a2a_wide_validity
+#   reads: the trims, the collective span against P = 8's, the uplinks'
+#   load and the queues against their thresholds. It is the member's probe.
+# - a2a_wide<P>_calibration_4k: a2a_calibration_4k's per_receiver pass on
+#   the pairs. analyze.py a2a_calibrate names the cells
+#   <group>-<size>-p4096-w<P> (a2a_cell_name).
+# - a2a_wide<P>_4k: the pairs under loss 1e-3 up and down, loss 1e-2 down,
+#   blackhole up and a multi-fault draw at loss 1e-3 and at 1e-2
+#   (A2A_WIDE_CONDITIONS), each with its healthy pair, seeds 301-303, at
+#   A2A_RUN_ITERATIONS, every answer on a spine its receiver draws
+#   (A2A_ACKROUTE). The arms (A2A_WIDE_ARMS): reps_tail and uniform_tail;
+#   reps_hold_auto_tail4_cover, a2a_twoend_4k's; reps_hold_auto_tail4_cover_rx,
+#   that with the receiver's hold (A2A_RECEIVER_HOLD), which also counts as
+#   missing the sends a tail repair request shows unanswered
+#   (receiver_tail_missing) and reads a flow's late packets against its
+#   removed queue pair (A2A_STRAY_CLOSED); and reps_oracle_tail_fwd,
+#   a2a_ackroute_fwd_4k's, whose oracle reads the data's own hops.
+# A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
+# from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
+# drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
+# run of the condition at one P, the same fraction at every P.
+A2A_WIDE_PAIRS = (("ep64", "256k"), ("ep64", "2m"))
+A2A_WIDE_VALIDITY_ITERATIONS = 2
+A2A_WIDE_PORT_COUNTER_NS = 50_000
+A2A_MULTI_PREFIX = "multi"
+A2A_MULTI_FRACTION = 0.02
+A2A_MULTI_SEED = 1
+A2A_WIDE_CONDITIONS = ("loss1e3_up", "loss1e3_down", "loss1e2_down", "blackhole_up", "multi_loss1e3",
+                       "multi_loss1e2")
+A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
+                       for condition in A2A_WIDE_CONDITIONS)
+A2A_WIDE_RECEIVER = {**A2A_RECEIVER_HOLD, "receiver_tail_missing": True, **A2A_STRAY_CLOSED}
+A2A_WIDE_ARMS = ("reps_tail", "uniform_tail", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
+                 "reps_oracle_tail_fwd")
+A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
+A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
+A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1272,7 +1347,8 @@ A2A_PROBE_STAGES = {A2A_PROBE_4K_STAGE: A2A_PROBE_4K_COMPUTE_NS, A2A_DECODE_PROB
                        for stage in A2A_SPINES_PROBE_STAGES}}
 A2A_CALIBRATION_STAGES_4K = {A2A_CALIBRATION_4K_STAGE: A2A_CALIBRATION_4K_CELLS,
                              A2A_DECODE_CALIBRATION_STAGE: (A2A_DECODE,), A2A_RING_CALIBRATION_STAGE: (A2A_RING,),
-                             **{stage: A2A_SPINES_PAIRS for stage in A2A_SPINES_CALIBRATION_STAGES}}
+                             **{stage: A2A_SPINES_PAIRS for stage in A2A_SPINES_CALIBRATION_STAGES},
+                             **{stage: A2A_WIDE_PAIRS for stage in A2A_WIDE_CALIBRATION_STAGES}}
 A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                      for stage in (A2A_PROBE_4K_STAGE, A2A_CALIBRATION_4K_STAGE, A2A_TAIL_ACK_4K_STAGE,
                                    A2A_SWEEP_STAGE, A2A_DOWNLINK_STAGE, A2A_DECODE_PROBE_STAGE,
@@ -1284,17 +1360,24 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
 A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
                           for stage, spines in stages.items()})
+A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
+                          for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES)
+                          for stage, wide in stages.items()})
+A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
+                          for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
               *A2A_STAGE_FIXTURE)
 
 
-def a2a_cell_name(group: str, size: str, payload: int | None = None, spines: int | None = None) -> str:
-    """<group>-<size>, -p<payload> for a run with a packet payload, and
-    -s<spines> for one on a path-count fixture."""
+def a2a_cell_name(group: str, size: str, payload: int | None = None, spines: int | None = None,
+                  wide: int | None = None) -> str:
+    """<group>-<size>, -p<payload> for a run with a packet payload, -s<spines>
+    for one on a path-count fixture and -w<wide> for one on a wide-leaf
+    fixture."""
     return (f"{group}-{size}" + ("" if payload is None else f"-p{payload}")
-            + ("" if spines is None else f"-s{spines}"))
+            + ("" if spines is None else f"-s{spines}") + ("" if wide is None else f"-w{wide}"))
 
 
 def a2a_fixture(stage: str, arm: str, group: str, size: str) -> dict[str, Any] | None:
@@ -1334,6 +1417,20 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
             network[key] = fixture[key]
     if "port_rate_thresholds" in fixture:
         network["switch"] = {**network["switch"], "port_rate_thresholds": fixture["port_rate_thresholds"]}
+    if "wide" in fixture:
+        network["spine_count"] = network["hosts_per_leaf"] = fixture["wide"]
+        document["parallelism"] = {**document["parallelism"], "dp": A2A_WIDE_LEAVES * fixture["wide"]}
+    if "buffer_size_mb" in fixture:
+        network["fabric"] = {**network["fabric"], "buffer_size_mb": fixture["buffer_size_mb"]}
+    if "job_hosts" in fixture and document["workload"].get("group") == "all":
+        document["workload"]["group"] = {"leaves": list(range(A2A_WIDE_LEAVES)), "hosts": fixture["job_hosts"]}
+    if "background" in fixture and document["workload"].get("kind") == "all_to_all":
+        document["workload"]["background"] = dict(fixture["background"])
+    if "sparse_hold_trace" in fixture and a2a_traces_spine_loss(network["load_balancing"]):
+        network["sparse_hold_trace"] = fixture["sparse_hold_trace"]
+    if "port_counter_interval_ns" in fixture:
+        network["port_counter_interval_ns"] = fixture["port_counter_interval_ns"]
+
     if "base_rtt_ns" in fixture:
         rtt = fixture["base_rtt_ns"]
         balancing = network["load_balancing"]
@@ -1343,6 +1440,17 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
         network["load_balancing"] = {**balancing, **{key: balancing[key] // BASE_RTT_NS * rtt
                                                      for key in A2A_BASE_RTT_KEYS if key in balancing}}
         network["transport_recovery"] = {**network["transport_recovery"], "retransmission_timeout_ns": 10 * rtt}
+
+
+def a2a_traces_spine_loss(balancing: dict[str, Any]) -> bool:
+    """Whether a run of the load balancing writes the sender loss trace, as
+    the generator reads it: the loss hold of reps_hold and mrc_hold, and
+    spray_policy's host-wide pool with loss thresholds outside the
+    switch_queue cost source."""
+    if balancing.get("mode") == "spray_uniform":
+        return balancing.get("selector") in ("reps_hold", "mrc_hold")
+    return (balancing.get("mode") == "spray_policy" and "loss_thresholds" in balancing
+            and balancing.get("sender_pool_weight", 0) > 0 and balancing.get("grade_cost_source") != "switch_queue")
 
 
 def a2a_headline(calibration: dict[str, Any] | None) -> tuple[str, str, str]:
@@ -1366,6 +1474,8 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
         return []
     if condition.startswith(A2A_HOST_PREFIX):
         return a2a_host_fault(condition)
+    if condition.startswith(A2A_MULTI_PREFIX):
+        return a2a_multi_fault(condition)
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
     if condition == "structural":
         return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
@@ -1395,6 +1505,17 @@ def a2a_host_fault(condition: str) -> list[dict[str, Any]]:
              "host": A2A_FAULT_HOST, "direction": direction}]
 
 
+def a2a_multi_fault(condition: str) -> list[dict[str, Any]]:
+    """The link_failures of a multi-fault condition, multi_<loss kind>: a gray
+    loss at the kind's rate from the onset on A2A_MULTI_FRACTION of the
+    leaf-spine link directions, drawn by A2A_MULTI_SEED."""
+    loss = condition[len(A2A_MULTI_PREFIX) + 1:]
+    if not condition.startswith(f"{A2A_MULTI_PREFIX}_") or loss not in A2A_LOSS_RATES:
+        raise ValueError(f"unknown condition {condition}")
+    return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
+             "draw": {"fraction": A2A_MULTI_FRACTION, "seed": A2A_MULTI_SEED}}]
+
+
 def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
     """The link_failures of a2a_rs3's flapping link: leaf 0's uplink to
     spine 3 at its error rate for on_ns, repeat times, period_ns apart."""
@@ -1411,11 +1532,12 @@ def _a2a_loss_thresholds(entry: dict[str, Any], interval_ns: int) -> list[float]
 
 
 def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] | None,
-                  setting: dict[str, Any] | None, payload: int | None = None) -> dict[str, Any]:
+                  setting: dict[str, Any] | None, payload: int | None = None,
+                  wide: int | None = None) -> dict[str, Any]:
     """An arm's load balancing: the t_ stages' graded settings (edge window
     penalty 0, edge_freeze off, estimator_interval_samples 0, gain 0.25)
-    plus this phase's calibrated thresholds at the run's payload and the
-    loss grade."""
+    plus this phase's calibrated thresholds at the run's payload (and
+    wide-leaf fixture) and the loss grade."""
     import transient
 
     if arm in ("uniform",) + A2A_FIXED_ARMS:
@@ -1426,7 +1548,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return {"mode": "spray_uniform", "selector": "reps_spine"}
     if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
         # The setting is the transport keys alone.
-        return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None, payload),
+        return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None, payload, wide),
                 **(setting or {})}
     if (arm in A2A_REPS_HOLD_ARMS or arm in A2A_RECEIVER_ARMS or arm in A2A_TRICKLE_ARMS
             or arm in A2A_TRANSPORT_ARMS):
@@ -1439,7 +1561,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
                 else A2A_TRICKLE_ARMS.get(arm, A2A_TRANSPORT_ARMS.get(arm, arm)))
         selector, _ = A2A_REPS_HOLD_ARMS[base]
         setting = dict(setting or {})
-        entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size, payload), {})
+        entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size, payload, wide=wide), {})
         return {
             "mode": "spray_uniform",
             "selector": selector,
@@ -1645,6 +1767,24 @@ def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict
     return a2a_copy_deadline({arm: {**base[of], **A2A_COVERAGE_FIRST} for arm, of in A2A_HOSTLINK_COVER_ARMS.items()})
 
 
+def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_wide<P>_4k arm's setting, every answer on a spine its
+    receiver draws (A2A_ACKROUTE): reps_tail's of a2a_ackroute_4k,
+    uniform_tail's of a2a_tail_ack with A2A_ACKROUTE,
+    reps_hold_auto_tail4_cover's of a2a_twoend_4k and with A2A_WIDE_RECEIVER
+    for reps_hold_auto_tail4_cover_rx, and reps_oracle_tail_fwd's of
+    a2a_ackroute_fwd_4k."""
+    cover = a2a_twoend_settings(tuning)["reps_hold_auto_tail4_cover"]
+    settings = {
+        "reps_tail": a2a_ackroute_settings(tuning)["reps_tail"],
+        "uniform_tail": {**a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"], **A2A_ACKROUTE},
+        "reps_hold_auto_tail4_cover": cover,
+        "reps_hold_auto_tail4_cover_rx": {**cover, **A2A_WIDE_RECEIVER},
+        "reps_oracle_tail_fwd": a2a_ackroute_fwd_settings(tuning)["reps_oracle_tail_fwd"],
+    }
+    return {arm: settings[arm] for arm in A2A_WIDE_ARMS}
+
+
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """settings with A2A_COPY_DEADLINE on every setting whose copies it
     expires, those under sentinel_mode duplicate; the others as given."""
@@ -1701,6 +1841,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_HOSTLINK_COVER_STAGE: (A2A_HOSTLINK_CELLS, tuple(A2A_HOSTLINK_COVER_ARMS)),
         A2A_TWOEND_BASE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_BASE_ARMS)),
         A2A_TWOEND_RETRACT_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_RETRACT_ARMS)),
+        **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
     }[stage]
 
 
@@ -1740,6 +1881,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
     out: list[dict[str, Any]] = []
     payload = (A2A_STAGE_FIXTURE.get(stage) or {}).get("payload_bytes")
     spines = (A2A_STAGE_FIXTURE.get(stage) or {}).get("spine_count")
+    wide = (A2A_STAGE_FIXTURE.get(stage) or {}).get("wide")
     compute = (A2A_COMPUTE_NS if payload is None else A2A_SPINES_COMPUTE_NS[spines] if spines is not None
                else A2A_PAYLOAD_COMPUTE_NS[payload])
     measured = (A2A_SPINES_COMPUTE_MEASURED[spines] if spines is not None
@@ -1769,7 +1911,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         )
 
     def calibrated(scope, group, size):
-        return a2a_cell_name(group, size, payload) in (calibration or {}).get(scope, {})
+        return a2a_cell_name(group, size, payload, wide=wide) in (calibration or {}).get(scope, {})
 
     def require_measured(pairs):
         provisional = [a2a_cell_name(group, size) for group, size in pairs if (group, size) not in measured]
@@ -1838,6 +1980,12 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
+    elif stage in A2A_WIDE_VALIDITY_STAGES:
+        require_measured(A2A_WIDE_PAIRS)
+        setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
+        for group, size in A2A_WIDE_PAIRS:
+            add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
+                iterations=A2A_WIDE_VALIDITY_ITERATIONS)
     elif stage in A2A_PROBE_STAGES:
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
         for (group, size), compute_ns in A2A_PROBE_STAGES[stage].items():
@@ -1851,7 +1999,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         cells, arms = a2a_faulted_4k(stage)
         pairs = tuple(dict.fromkeys((group, size) for group, size, _ in cells))
         require_measured(pairs)
-        uncalibrated = [a2a_cell_name(group, size, payload) for group, size in pairs
+        uncalibrated = [a2a_cell_name(group, size, payload, wide=wide) for group, size in pairs
                         if group not in A2A_ONE_LEAF_GROUPS and not calibrated("per_receiver", group, size)]
         if uncalibrated:
             raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
@@ -1864,6 +2012,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_twoend_base_settings(tuning) if stage == A2A_TWOEND_BASE_STAGE
                     else a2a_twoend_retract_settings(tuning) if stage == A2A_TWOEND_RETRACT_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
+                    else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], settings.items()):
@@ -1908,7 +2057,7 @@ def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -
     document = profile(
         run["key"], 64, "healthy",
         a2a_balancing(run["arm"], group, size, calibration, run["setting"],
-                      run.get("fixture", {}).get("payload_bytes")),
+                      run.get("fixture", {}).get("payload_bytes"), run.get("fixture", {}).get("wide")),
     )
     document["steps"] = run["iterations"]
     if (group, size) == A2A_RING:

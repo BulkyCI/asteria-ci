@@ -44,6 +44,9 @@
                           [--markdown FILE]
                                                      a2a_candidates with the answer losses, the sender holds
                                                      under spray and both ends' answer holds
+    analyze.py a2a_wide_validity --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     a wide-leaf member's trims, collective span against
+                                                     P = 8's, uplink load and queues per run
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -74,7 +77,9 @@ and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
   the end of the first sender loss interval ending after it in which spine
-  3's share of the sends falls below 1/16, from ns3/spine_losses.csv. With
+  3's share of the sends falls below half an even share over the run's
+  spines (1/16 at 8; manifest.json physical_topology spine_count), from
+  ns3/spine_losses.csv, its hosts' leaves at the run's hosts per leaf. With
   a destination_leaf column (leaf and auto scopes), or a destination column
   (pair scope, the destination host's node id, read as its leaf), the sends
   read are those that cross a spine toward the faulted link: for an _up
@@ -86,7 +91,8 @@ and these measures per faulted run:
   hosts of leaf 0 for an _up fault, of the hosts off leaf 1 for a _down
   fault and of every host for structural, toward any destination
   (share_basis "all"). Intervals are the run's loss_interval_ns. None when the run
-  writes no trace, as under the uniform draw, reps_oracle and reps_spine
+  writes no trace, as under the uniform draw, reps_oracle and reps_spine, or
+  under a multi-fault condition (multi_<loss kind>), which faults no one spine
   (a2a_tail's uniform_tail and reps_tail among them; ns3/spine_arrivals.csv holds
   cumulative counters only at the link events, so it gives no share over
   time), or the share never falls below 1/16.
@@ -165,6 +171,30 @@ the hosts are busy 60 percent of the period; for a decode layer exchange
 (a run with combine_bytes), the rest of the A2A_LAYER_PERIOD_NS period
 after it, rounded up to a whole microsecond. Both are None while the run is
 incomplete.
+
+a2a_wide_validity reads a wide-leaf member's validity stage (--stage,
+a2a_wide32_validity_4k by default) and gives each healthy run its
+collective spans against a2a_probe_4k's median iteration at P = 8 on the
+pair (A2A_WIDE_REFERENCE_NS) and the deviations; its trimmed data packets
+(the trim_ events of the data plane) over the data packets its flows sent
+(flow_events.csv data_attempted_bytes over the payload); the mean load of
+the leaves' uplinks to the spines (bytes sent over 400 Gb/s, between the
+first and last port counter snapshot inside each communication window and
+each gap between iterations); and per port kind (leaf_down toward a host,
+leaf_up toward a spine, spine) and data queue the deepest queue
+switch_queues.csv recorded, the ports above kmin, above kmax and at the
+static egress threshold, and the packets the shared buffer's check and the
+static threshold refused. The member is admitted at the pair when every
+span is within A2A_WIDE_SPAN_TOLERANCE (1%) of P = 8's and under
+A2A_WIDE_TRIM_LIMIT (0.1%) of its data packets are trimmed.
+
+The hold readings (reaction_ns, receiver_reaction_ns, the hold readings of
+a2a_ackroute and the others, and a2a_calibrate's interval sums) read a
+sparse hold trace as written, not rebuilt dense (traces.py): sums over its
+rows, and a series' grade or hold carried from its last row through every
+closed interval of its group, as the dense trace has it, so that a sparse
+run reads as its dense form would. Each run's traces are read in a process
+of their own (A2A_READ_PROCESSES, the machine's processors by default).
 
 a2a_sweep reads one stage's runs alone (--stage, a2a_sweep_4k by default;
 a2a_tail_ack_4k runs the same arms) and gives each (group, size, condition)
@@ -464,9 +494,11 @@ sequence, sender, sender_port) group.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import csv
 import json
 import math
+import os
 import statistics
 from collections import defaultdict, deque
 from pathlib import Path
@@ -1188,6 +1220,9 @@ def gate_reps_markdown(rows: list[dict]) -> str:
 A2A_SHARE_LIMIT = 1 / 16
 A2A_EARLY_WINDOW_NS = 500_000
 A2A_HOSTS_PER_LEAF_OF_TRACE = 8
+# profiles.py's A2A_MULTI_PREFIX: a condition multi_<loss kind> fails a drawn
+# set of link directions.
+A2A_MULTI_PREFIX = "multi"
 A2A_DEFAULT_LOSS_INTERVAL_NS = 2 * BASE_RTT_NS
 # The runs' retransmission timeout (profiles.py's retransmission_timeout_ns)
 # and NCCL's InfiniBand retry count, against which rto_run is read: a queue
@@ -1202,15 +1237,31 @@ def fault_onset_ns(condition: str) -> int:
     return 0 if condition == "structural" else DEGRADE_AT_NS
 
 
-def faulted_share_rows(condition: str, columns):
+def run_fabric(directory: Path) -> tuple[int, int]:
+    """A run's hosts per leaf and spines, from its manifest.json
+    (physical_topology); A2A_HOSTS_PER_LEAF_OF_TRACE and SPINES without
+    one."""
+    path = directory / "manifest.json"
+    if not path.is_file():
+        return A2A_HOSTS_PER_LEAF_OF_TRACE, SPINES
+    topology = json.loads(path.read_text())["physical_topology"]
+    return topology["hosts_per_leaf"], topology.get("spine_count", SPINES)
+
+
+def multi_condition(condition: str) -> bool:
+    """Whether condition fails a drawn set of link directions (profiles.py
+    A2A_MULTI_PREFIX), no one spine."""
+    return condition.startswith(f"{A2A_MULTI_PREFIX}_")
+
+
+def faulted_share_rows(condition: str, columns, hosts: int = A2A_HOSTS_PER_LEAF_OF_TRACE):
     """The trace rows that read the faulted link's spine share, and the
     basis: "remote" when the trace's columns name a row's destination leaf
     (sends toward a leaf other than the sender's), "all" otherwise (every
     destination). The destination leaf is the destination_leaf column (hold
     scopes leaf and auto), or the leaf of the destination column's host
     node id (hold scope pair; hosts are the first node ids, in leaf
-    order)."""
-    hosts = A2A_HOSTS_PER_LEAF_OF_TRACE
+    order), at hosts hosts per leaf."""
 
     def leaf(row):
         return int(row["rank"]) // hosts
@@ -1235,13 +1286,15 @@ def share_series(directory: Path, condition: str, interval_ns: int, spine: int =
     """Per sender loss interval index, the sends of faulted_share_rows'
     rows and those on the spine, and the basis; None without a trace."""
     path = directory / "ns3" / "spine_losses.csv"
-    if not path.exists():
+    if not traces.exists(path):
         return None
     totals: dict[int, int] = defaultdict(int)
     faulted: dict[int, int] = defaultdict(int)
-    with traces.open_trace(path) as handle:
+    hosts, _ = run_fabric(directory)
+    # Its counts summed, from the rows as written (traces).
+    with traces.open_rows(path) as handle:
         reader = csv.DictReader(handle)
-        keep, basis = faulted_share_rows(condition, reader.fieldnames or ())
+        keep, basis = faulted_share_rows(condition, reader.fieldnames or (), hosts)
         for row in reader:
             if not keep(row):
                 continue
@@ -1252,16 +1305,18 @@ def share_series(directory: Path, condition: str, interval_ns: int, spine: int =
     return totals, faulted, basis
 
 
-def first_below(totals: dict, faulted: dict, interval_ns: int, start: int, end: int | None) -> int | None:
+def first_below(totals: dict, faulted: dict, interval_ns: int, start: int, end: int | None,
+                limit: float = A2A_SHARE_LIMIT) -> int | None:
     """From start to the end of the first interval with sends ending after
-    start (and by end) whose spine share is below A2A_SHARE_LIMIT."""
+    start (and by end) whose spine share is below limit (A2A_SHARE_LIMIT,
+    half of an even share over 8 spines, unless given)."""
     for index in sorted(totals):
         last = (index + 1) * interval_ns
         if last <= start or not totals[index]:
             continue
         if end is not None and last > end:
             break
-        if faulted[index] / totals[index] < A2A_SHARE_LIMIT:
+        if faulted[index] / totals[index] < limit:
             return last - start
     return None
 
@@ -1301,28 +1356,59 @@ def first_window_above(totals: dict, faulted: dict, interval_ns: int, start: int
 
 def reaction(directory: Path, condition: str, interval_ns: int, spine: int = DEGRADED_SPINE) -> dict:
     """reaction_ns (see the module docstring) and the rows' basis."""
-    series = None if host_link_condition(condition) else share_series(directory, condition, interval_ns, spine)
+    series = (None if host_link_condition(condition) or multi_condition(condition)
+              else share_series(directory, condition, interval_ns, spine))
     if series is None:
         return {"reaction_ns": None, "share_basis": None}
     totals, faulted, basis = series
-    return {"reaction_ns": first_below(totals, faulted, interval_ns, fault_onset_ns(condition), None),
+    _, spines = run_fabric(directory)
+    return {"reaction_ns": first_below(totals, faulted, interval_ns, fault_onset_ns(condition), None,
+                                       1 / (2 * spines)),
             "share_basis": basis}
 
 
 def receiver_reaction(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> dict:
     """receiver_reaction_ns (see the module docstring) and the rows' basis."""
     path = directory / "ns3" / "receiver_holds.csv"
-    if not path.exists() or host_link_condition(condition):
+    if not traces.exists(path) or host_link_condition(condition) or multi_condition(condition):
         return {"receiver_reaction_ns": None, "receiver_basis": None}
-    keep, basis = receiver_share_rows(condition)
+    keep, basis = receiver_share_rows(condition, run_fabric(directory)[0])
     onset = fault_onset_ns(condition)
-    ends = []
-    with path.open() as handle:
-        for row in csv.DictReader(handle):
-            end = int(row["time_ns"])
-            if end > onset and int(row["spine"]) == spine and row["hold"] != "none" and keep(row):
-                ends.append(end)
-    return {"receiver_reaction_ns": min(ends) - onset if ends else None, "receiver_basis": basis}
+    end = _first_held(path, lambda row: row["hold"] != "none", keep, spine, onset)
+    return {"receiver_reaction_ns": None if end is None else end - onset, "receiver_basis": basis}
+
+
+def _first_held(path: Path, held, keep, spine: int, after: int, lost: dict[int, int] | None = None) -> int | None:
+    """The first close after after of an interval of a hold trace, dense or
+    sparse, at which a series on spine of a group keep takes is held (held
+    true of its last row), read by interval (traces.intervals); with lost,
+    those series' lost column summed per close into it."""
+    first = None
+    if not traces.is_sparse(path):
+        with traces.open_rows(path) as handle:
+            for row in csv.DictReader(handle):
+                if int(row["spine"]) != spine or not keep(row):
+                    continue
+                end = int(row["time_ns"])
+                if lost is not None:
+                    lost[end] = lost.get(end, 0) + int(row["lost"])
+                if held(row) and end > after and (first is None or end < first):
+                    first = end
+        return first
+    holding: dict[tuple[str, ...], bool] = {}
+    with traces.open_rows(path) as handle:
+        for group, rows in traces.intervals(csv.DictReader(handle)):
+            if not keep(rows[0]):
+                continue
+            for row in rows:
+                if int(row["spine"]) == spine:
+                    holding[group[1:]] = held(row)
+                    if lost is not None:
+                        lost[int(row["time_ns"])] = lost.get(int(row["time_ns"]), 0) + int(row["lost"])
+            end = int(group[0])
+            if end > after and holding.get(group[1:]) and (first is None or end < first):
+                first = end
+    return first
 
 
 def rto_counts(directory: Path) -> dict:
@@ -1416,15 +1502,12 @@ def a2a_candidates(rows: list[dict], out_root: Path, reference: str | None = Non
     arm's reaction_ns and early_cost_ns per seed and their means over the
     seeds that have one."""
     roots = _run_roots(rows, out_root)
-    measured = {}
+    jobs = []
     for row in a2a_costs(rows):
         interval = (row.get("setting") or {}).get("loss_interval_ns", A2A_DEFAULT_LOSS_INTERVAL_NS)
-        directory = roots[row["key"]] / row["key"]
         healthy = None if row["healthy_key"] is None else roots[row["healthy_key"]] / row["healthy_key"]
-        measured[row["key"]] = {**reaction(directory, row["condition"], interval),
-                                **receiver_reaction(directory, row["condition"]),
-                                **rto_counts(directory),
-                                "early_cost_ns": early_cost(directory, healthy, row["condition"])}
+        jobs.append((row["key"], roots[row["key"]] / row["key"], healthy, row["condition"], interval))
+    measured = dict(_in_parallel(_candidate_measures, jobs))
     cells = a2a_cost_cells(rows, reference)
     for cell in cells:
         for entry in cell["arms"].values():
@@ -1443,6 +1526,24 @@ def a2a_candidates(rows: list[dict], out_root: Path, reference: str | None = Non
             for basis in ("share_basis", "receiver_basis"):
                 entry[basis] = next((measured[k][basis] for k in entry["keys"] if measured[k][basis]), None)
     return cells
+
+
+def _candidate_measures(key: str, directory: Path, healthy: Path | None, condition: str,
+                        interval: int) -> tuple[str, dict]:
+    """A faulted run's a2a_candidates measures, by its key."""
+    return key, {**reaction(directory, condition, interval), **receiver_reaction(directory, condition),
+                 **rto_counts(directory), "early_cost_ns": early_cost(directory, healthy, condition)}
+
+
+def _in_parallel(function, jobs: list[tuple]) -> list:
+    """function of each job's arguments, in the jobs' order, over
+    A2A_READ_PROCESSES processes (the machine's processors unless the
+    environment sets it), since each run's traces are read on their own."""
+    processes = int(os.environ.get("A2A_READ_PROCESSES", 0)) or os.cpu_count() or 1
+    if processes < 2 or len(jobs) < 2:
+        return [function(*job) for job in jobs]
+    with concurrent.futures.ProcessPoolExecutor(max_workers=processes) as pool:
+        return list(pool.map(function, *zip(*jobs)))
 
 
 def _count(value) -> str:
@@ -1669,6 +1770,144 @@ def a2a_compute_gaps(runs_files, out_root: Path, stage: str) -> list[dict]:
     return out
 
 
+# The wide-leaf members' validity: profiles.py's a2a_wide<P>_validity_4k.
+
+# a2a_probe_4k's median iteration completion per pair at P = 8 (run
+# 38792714034), the span a wide-leaf member's must come within
+# A2A_WIDE_SPAN_TOLERANCE of.
+A2A_WIDE_REFERENCE_NS = {("ep64", "2m"): 2_723_900, ("ep64", "256k"): 353_400}
+A2A_WIDE_SPAN_TOLERANCE = 0.01
+A2A_WIDE_TRIM_LIMIT = 0.001
+# Every wide-leaf link's rate.
+A2A_WIDE_LINK_BPS = 400e9
+
+
+def _uplink_loads(path: Path, hosts: int, leaves: int, windows: list[tuple[int, int]]) -> list[float | None]:
+    """Per window (start, end), the mean over the leaves' uplinks of the bytes
+    each sent between the port counters' first and last snapshot inside it,
+    over A2A_WIDE_LINK_BPS; None for a window with fewer than two."""
+    samples: dict[int, dict[tuple[int, int], int]] = defaultdict(dict)
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            switch, neighbour = int(row["switch"]), int(row["neighbour"])
+            if hosts <= switch < hosts + leaves and neighbour >= hosts + leaves:
+                samples[int(row["time_ns"])][(switch, neighbour)] = int(row["tx_bytes"])
+    times = sorted(samples)
+    loads: list[float | None] = []
+    for start, end in windows:
+        inside = [t for t in times if start <= t <= end]
+        if len(inside) < 2:
+            loads.append(None)
+            continue
+        first, last = inside[0], inside[-1]
+        values = [(sent - samples[first].get(link, 0)) * 8 / ((last - first) * 1e-9) / A2A_WIDE_LINK_BPS
+                  for link, sent in samples[last].items()]
+        loads.append(sum(values) / len(values))
+    return loads
+
+
+def _switch_queues(path: Path, ports: Path, hosts: int, leaves: int) -> dict:
+    """Per port kind (leaf_down toward a host, leaf_up toward a spine, spine)
+    and data queue, from switch_queues.csv's last rows: the ports, the most
+    bytes one held, the ports above kmin, above kmax and at the static
+    egress threshold, and the packets the shared buffer's check and the
+    static threshold refused."""
+    neighbours = {}
+    with ports.open() as handle:
+        for row in csv.DictReader(handle):
+            neighbours.setdefault((int(row["switch"]), int(row["port"])), int(row["neighbour"]))
+    latest: dict[tuple[int, int, int], dict] = {}
+    with path.open() as handle:
+        for row in csv.DictReader(handle):
+            latest[(int(row["switch"]), int(row["port"]), int(row["queue"]))] = row
+    kinds: dict[str, dict] = {}
+    for (switch, port, queue), row in sorted(latest.items()):
+        kind = ("spine" if switch >= hosts + leaves
+                else "leaf_down" if neighbours.get((switch, port), hosts) < hosts else "leaf_up")
+        held = int(row["max_bytes"])
+        entry = kinds.setdefault(f"{kind}_q{queue}", {"ports": 0, "max_bytes": 0, "over_kmin": 0, "over_kmax": 0,
+                                                     "at_threshold": 0, "shared_refused": 0,
+                                                     "threshold_refused": 0, "egress_threshold_bytes": set()})
+        entry["ports"] += 1
+        entry["max_bytes"] = max(entry["max_bytes"], held)
+        entry["over_kmin"] += held > int(row["kmin_bytes"])
+        entry["over_kmax"] += held > int(row["kmax_bytes"])
+        entry["at_threshold"] += held >= int(row["egress_threshold_bytes"])
+        entry["shared_refused"] += int(row["shared_refused"])
+        entry["threshold_refused"] += int(row["threshold_refused"])
+        entry["egress_threshold_bytes"].add(int(row["egress_threshold_bytes"]))
+    for entry in kinds.values():
+        entry["egress_threshold_bytes"] = sorted(entry["egress_threshold_bytes"])
+    return kinds
+
+
+def a2a_wide_validity(runs_files, out_root: Path, stage: str) -> list[dict]:
+    """Per run of the stage with a summary (see the module docstring): its
+    collective spans against P = 8's, trimmed fraction, uplink loads, switch
+    queues and whether the member is admitted at the pair."""
+    out = []
+    for run in _listed_runs(runs_files):
+        directory = out_root / run["key"]
+        if run["stage"] != stage or not (directory / "summary.json").exists():
+            continue
+        summary = json.loads((directory / "summary.json").read_text())
+        timing = summary.get("all_to_all") or {}
+        order = sorted(timing.get("iteration_completion_ns", {}), key=int)
+        spans = [timing["iteration_completion_ns"][i] for i in order]
+        starts = [timing["iteration_start_ns"][i] for i in order]
+        reference = A2A_WIDE_REFERENCE_NS[(run["group"], run["size"])]
+        deviations = [span / reference - 1 for span in spans]
+        payload = (run.get("fixture") or {}).get("payload_bytes", A2A_DEFAULT_PAYLOAD_BYTES)
+        attempted = 0
+        with (directory / "telemetry" / "flow_events.csv").open() as handle:
+            for row in csv.DictReader(handle):
+                attempted += int(row["data_attempted_bytes"])
+        packets = attempted // payload
+        trims = sum(value["count"] for name, value in summary.get("transport", {}).items()
+                    if name.startswith("trim_") and name.endswith(":data"))
+        hosts_per_leaf, _ = run_fabric(directory)
+        hosts = json.loads((directory / "manifest.json").read_text())["ranks"]
+        leaves = hosts // hosts_per_leaf
+        ports = directory / "ns3" / "port_counters.csv"
+        windows = [(start, start + span) for start, span in zip(starts, spans)]
+        gaps = [(start + span, following) for start, span, following in zip(starts, spans, starts[1:])]
+        queues = directory / "ns3" / "switch_queues.csv"
+        within = bool(spans) and timing.get("complete") and all(abs(d) <= A2A_WIDE_SPAN_TOLERANCE for d in deviations)
+        trimmed = trims / packets if packets else None
+        out.append({
+            "key": run["key"], "group": run["group"], "size": run["size"],
+            "wide": (run.get("fixture") or {}).get("wide"),
+            "iterations": run["iterations"], "iterations_completed": timing.get("iterations_completed"),
+            "spans_ns": spans, "reference_ns": reference, "span_deviations": deviations,
+            "data_packets": packets, "trimmed_packets": trims, "trimmed_fraction": trimmed,
+            "uplink_load_communication": _uplink_loads(ports, hosts, leaves, windows) if ports.exists() else None,
+            "uplink_load_gap": _uplink_loads(ports, hosts, leaves, gaps) if ports.exists() else None,
+            "queues": _switch_queues(queues, ports, hosts, leaves) if queues.exists() and ports.exists() else None,
+            "admitted": bool(within and trimmed is not None and trimmed < A2A_WIDE_TRIM_LIMIT),
+        })
+    return out
+
+
+def wide_validity_markdown(rows: list[dict]) -> str:
+    def percent(values) -> str:
+        return "-" if values is None else ", ".join("-" if v is None else f"{v * 100:.1f}%" for v in values)
+
+    lines = ["| P | group | size | iterations | spans us (vs P = 8) | trimmed | uplink load, communication | "
+             "uplink load, gap | deepest queue B (kind) | refused | admitted |", "|---" * 11 + "|"]
+    for row in rows:
+        queues = row["queues"] or {}
+        deepest = max(queues.items(), key=lambda item: item[1]["max_bytes"], default=None)
+        refused = sum(q["shared_refused"] + q["threshold_refused"] for q in queues.values()) if queues else None
+        spans = ", ".join(f"{s / 1000:,.1f} ({d * 100:+.2f}%)" for s, d in zip(row["spans_ns"], row["span_deviations"]))
+        queue = "-" if deepest is None else f"{deepest[1]['max_bytes']:,} ({deepest[0]})"
+        lines.append(
+            f"| {row['wide']} | {row['group']} | {row['size']} | {row['iterations_completed']} of {row['iterations']} "
+            f"| {spans or '-'} | {row['trimmed_packets']:,} of {row['data_packets']:,} "
+            f"| {percent(row['uplink_load_communication'])} | {percent(row['uplink_load_gap'])} "
+            f"| {queue} | {'-' if refused is None else refused} | {'yes' if row['admitted'] else 'no'} |")
+    return "\n".join(lines) + "\n"
+
+
 def compute_gaps_markdown(rows: list[dict]) -> str:
     def value(v) -> str:
         return "-" if v is None else str(v)
@@ -1701,11 +1940,11 @@ def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> 
     """The losses the sender loss trace counts on the spine over
     faulted_share_rows' rows; None without a trace."""
     path = directory / "ns3" / "spine_losses.csv"
-    if not path.exists():
+    if not traces.exists(path):
         return None
-    with traces.open_trace(path) as handle:
+    with traces.open_rows(path) as handle:
         reader = csv.DictReader(handle)
-        keep, _ = faulted_share_rows(condition, reader.fieldnames or ())
+        keep, _ = faulted_share_rows(condition, reader.fieldnames or (), run_fabric(directory)[0])
         return sum(int(row["lost"]) for row in reader if int(row["spine"]) == spine and keep(row))
 
 
@@ -1882,12 +2121,14 @@ def spine_holds(path: Path, held) -> dict | None:
     """Per spine of a hold trace, its hold intervals (rows for which held
     is true) and its lost column summed (see the module docstring); None
     without the file."""
-    if not path.exists():
+    if not traces.exists(path):
         return None
     holds: dict[int, int] = defaultdict(int)
     lost: dict[int, int] = defaultdict(int)
     holding: dict[tuple, bool] = {}
-    with traces.open_trace(path) as handle:
+    # A hold starts at a row written, and the lost column sums: the rows as
+    # written (traces).
+    with traces.open_rows(path) as handle:
         reader = csv.DictReader(handle)
         series = [column for column in reader.fieldnames or ()
                   if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
@@ -2074,32 +2315,66 @@ def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | No
     (grade 0) correct_hold takes for correct and the others, and
     correct_held_rows and false_held_rows, the rows that hold, each taken
     alike; None without the file (see the module docstring)."""
-    if not path.exists():
+    if not traces.exists(path):
         return None
     links, hosts_per_leaf = run_faults(path.parent.parent, condition)
+
+    def kind(row):
+        if "destination_leaf" in row:
+            destination = int(row["destination_leaf"])
+        elif "destination" in row:
+            destination = int(row["destination"]) // hosts_per_leaf
+        else:
+            destination = None
+        return "correct" if correct_hold(ack_route, condition, int(row["rank"]) // hosts_per_leaf,
+                                         destination, int(row["spine"]), links) else "false"
+
+    return _hold_counts(path, lambda row: row["grade"] == "0", kind)
+
+
+def _hold_counts(path: Path, held, kind) -> dict:
+    """<kind>_holds, the rows at which a series of a hold trace turns held
+    (held true of its row, not of its last), and <kind>_held_rows, the rows
+    held, each series taken by kind of its row, "correct" or "false". A
+    sparse trace is read by closed interval of a group (traces.intervals),
+    its rows held those of its series held as the interval closes, their
+    rows written or not, as the dense trace gives them."""
     counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
-    holding: dict[tuple, bool] = {}
-    with traces.open_trace(path) as handle:
-        reader = csv.DictReader(handle)
-        series = [column for column in reader.fieldnames or ()
-                  if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
-        for row in reader:
-            if "destination_leaf" in row:
-                destination = int(row["destination_leaf"])
-            elif "destination" in row:
-                destination = int(row["destination"]) // hosts_per_leaf
-            else:
-                destination = None
-            correct = correct_hold(ack_route, condition, int(row["rank"]) // hosts_per_leaf,
-                                   destination, int(row["spine"]), links)
-            kind = "correct" if correct else "false"
-            key = tuple(row[c] for c in series)
-            now = row["grade"] == "0"
-            if now:
-                counts[f"{kind}_held_rows"] += 1
-                if not holding.get(key):
-                    counts[f"{kind}_holds"] += 1
-            holding[key] = now
+    if not traces.is_sparse(path):
+        holding_row: dict[tuple, bool] = {}
+        with traces.open_rows(path) as handle:
+            reader = csv.DictReader(handle)
+            series = [column for column in reader.fieldnames or ()
+                      if column != "time_ns" and column not in traces.VALUE_COLUMNS]
+            for row in reader:
+                label = kind(row)
+                key = tuple(row[c] for c in series)
+                now = held(row)
+                if now:
+                    counts[f"{label}_held_rows"] += 1
+                    if not holding_row.get(key):
+                        counts[f"{label}_holds"] += 1
+                holding_row[key] = now
+        return counts
+    holding: dict[tuple[str, ...], bool] = {}
+    kinds: dict[tuple[str, ...], str] = {}
+    held_now: dict[tuple[str, ...], dict[str, int]] = defaultdict(lambda: {"correct": 0, "false": 0})
+    with traces.open_rows(path) as handle:
+        for group, rows in traces.intervals(csv.DictReader(handle)):
+            members = held_now[group[1:]]
+            for row in rows:
+                series = (*group[1:], row["spine"])
+                label = kinds.get(series)
+                if label is None:
+                    label = kinds[series] = kind(row)
+                now, before = held(row), holding.get(series, False)
+                if now and not before:
+                    counts[f"{label}_holds"] += 1
+                if now != before:
+                    members[label] += 1 if now else -1
+                holding[series] = now
+            for label, held_series in members.items():
+                counts[f"{label}_held_rows"] += held_series
     return counts
 
 
@@ -2127,18 +2402,13 @@ def a2a_ackroute(rows: list[dict], out_root: Path, ack_route: str | None = None)
 
     by_key = {r["key"]: r for r in rows}
     roots = _run_roots(rows, out_root)
-    measured = {}
+    jobs = []
     for row in a2a_costs(rows):
-        directory = roots[row["key"]] / row["key"]
         healthy = by_key.get(row["healthy_key"])
-        measured[row["key"]] = {
-            **answer_drops(directory),
-            "ack_route": routing(row),
-            "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", row["condition"],
-                                                       routing(row)),
-            "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
-                roots[healthy["key"]] / healthy["key"] / "ns3" / "spine_losses.csv", "healthy", routing(healthy)),
-        }
+        jobs.append((row["key"], roots[row["key"]] / row["key"], row["condition"], routing(row),
+                     None if healthy is None else roots[healthy["key"]] / healthy["key"],
+                     None if healthy is None else routing(healthy)))
+    measured = dict(_in_parallel(_ackroute_measures, jobs))
     cells = a2a_candidates(rows, out_root, A2A_ACKROUTE_REFERENCE)
     for cell in cells:
         for entry in cell["arms"].values():
@@ -2148,6 +2418,18 @@ def a2a_ackroute(rows: list[dict], out_root: Path, ack_route: str | None = None)
         cell["versus"] = {f"{a} against {b}": _versus(cell["arms"], a, b) for a, b in A2A_ACKROUTE_VERSUS
                           if a in cell["arms"] and b in cell["arms"]}
     return cells
+
+
+def _ackroute_measures(key: str, directory: Path, condition: str, route: str, healthy: Path | None,
+                       healthy_route: str | None) -> tuple[str, dict]:
+    """A faulted run's a2a_ackroute measures, by its key."""
+    return key, {
+        **answer_drops(directory),
+        "ack_route": route,
+        "sender_hold_reading": sender_hold_reading(directory / "ns3" / "spine_losses.csv", condition, route),
+        "healthy_sender_hold_reading": None if healthy is None else sender_hold_reading(
+            healthy / "ns3" / "spine_losses.csv", "healthy", healthy_route),
+    }
 
 
 def _summed(readings, name: str) -> str:
@@ -2275,7 +2557,7 @@ def host_link_reading(path: Path, host: int = A2A_FAULT_HOST) -> dict | None:
     """The sender holds of ns3/spine_losses.csv under a fault of host's link
     and the losses toward host's leaf (see the module docstring); None
     without the file."""
-    if not path.exists():
+    if not traces.exists(path):
         return None
     faulted_leaf = host // A2A_HOSTS_PER_LEAF_OF_TRACE
     series: dict[tuple, dict[str, int]] = {}
@@ -2393,37 +2675,32 @@ A2A_REACTION_MEASURES = ("sender_hold_ns", "sender_lost_before", "receiver_hold_
                          "lead_ns", "lead_iterations")
 
 
-def receiver_share_rows(condition: str):
+def receiver_share_rows(condition: str, hosts: int = A2A_HOSTS_PER_LEAF_OF_TRACE):
     """The receiver hold trace's rows of the faulted link, and their basis
-    (see receiver_reaction_ns in the module docstring)."""
+    (see receiver_reaction_ns in the module docstring), at hosts hosts per
+    leaf."""
     if condition == "structural":
         return (lambda row: True), "every row"
     if condition.endswith("_up"):
         return (lambda row: int(row["sender_leaf"]) == 0), "sender_leaf 0"
-    return (lambda row: int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE == 1), "receivers on leaf 1"
+    return (lambda row: int(row["rank"]) // hosts == 1), "receivers on leaf 1"
 
 
 def first_hold(directory: Path, condition: str, receiver: bool, spine: int = DEGRADED_SPINE) -> tuple:
     """The end's hold time from the onset and the losses its rows counted
     up to it (see the module docstring); (None, None) without a hold."""
     path = directory / "ns3" / ("receiver_holds.csv" if receiver else "spine_losses.csv")
-    if not path.exists():
+    if not traces.exists(path) or multi_condition(condition):
         return None, None
     onset = fault_onset_ns(condition)
-    lost: dict[int, int] = defaultdict(int)
-    first = None
-    with traces.open_trace(path) as handle:
-        reader = csv.DictReader(handle)
-        keep, _ = (receiver_share_rows(condition) if receiver
-                   else faulted_share_rows(condition, reader.fieldnames or ()))
-        for row in reader:
-            if int(row["spine"]) != spine or not keep(row):
-                continue
-            end = int(row["time_ns"])
-            lost[end] += int(row["lost"])
-            held = row["hold"] != "none" if receiver else row["grade"] == "0"
-            if held and end > onset and (first is None or end < first):
-                first = end
+    lost: dict[int, int] = {}
+    hosts, _ = run_fabric(directory)
+    with traces.open_rows(path) as handle:
+        columns = csv.DictReader(handle).fieldnames or ()
+    keep, _ = (receiver_share_rows(condition, hosts) if receiver
+               else faulted_share_rows(condition, columns, hosts))
+    first = _first_held(path, (lambda row: row["hold"] != "none") if receiver else (lambda row: row["grade"] == "0"),
+                        keep, spine, onset, lost)
     if first is None:
         return None, None
     return first - onset, sum(count for end, count in lost.items() if end <= first)
@@ -2532,27 +2809,12 @@ def receiver_hold_reading(path: Path, condition: str) -> dict | None:
     the receiver hold trace (hold not none), as sender_hold_reading counts
     the sender's, each row taken by correct_receiver_hold; None without the
     file."""
-    if not path.exists():
+    if not traces.exists(path):
         return None
     links, hosts_per_leaf = run_faults(path.parent.parent, condition)
-    counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
-    holding: dict[tuple, bool] = {}
-    with path.open() as handle:
-        reader = csv.DictReader(handle)
-        series = [column for column in reader.fieldnames or ()
-                  if column not in ("time_ns", "arrivals", "lost", "hold")]
-        for row in reader:
-            correct = correct_receiver_hold(condition, int(row["rank"]) // hosts_per_leaf,
-                                            int(row["sender_leaf"]), int(row["spine"]), links)
-            kind = "correct" if correct else "false"
-            key = tuple(row[c] for c in series)
-            now = row["hold"] != "none"
-            if now:
-                counts[f"{kind}_held_rows"] += 1
-                if not holding.get(key):
-                    counts[f"{kind}_holds"] += 1
-            holding[key] = now
-    return counts
+    return _hold_counts(path, lambda row: row["hold"] != "none", lambda row: "correct" if correct_receiver_hold(
+        condition, int(row["rank"]) // hosts_per_leaf, int(row["sender_leaf"]), int(row["spine"]), links)
+        else "false")
 
 
 def a2a_downlink_spray(rows: list[dict], out_root: Path) -> list[dict]:
@@ -2853,9 +3115,13 @@ def twoend_markdown(cells: list[dict]) -> str:
 # count, its cells named -s<spines>, its candidate loss intervals in its
 # fabric's base RTTs (the run's fixture base_rtt_ns).
 A2A_SPINES = (8, 32, 128, 256)
+# profiles.py's A2A_WIDE: a wide-leaf fixture's calibration pass per P, its
+# cells named -w<P>.
+A2A_WIDE = (8, 32, 128, 256)
 A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k",
                           "a2a_decode_calibration_4k", "ar_parity_calibration_4k",
-                          *(f"a2a_spines{spines}_calibration_4k" for spines in A2A_SPINES))
+                          *(f"a2a_spines{spines}_calibration_4k" for spines in A2A_SPINES),
+                          *(f"a2a_wide{wide}_calibration_4k" for wide in A2A_WIDE))
 A2A_SCOPE_OF_ARM = {
     "graded_switch_queue": "switch_queue",
     "graded_per_connection": "per_connection",
@@ -2901,11 +3167,14 @@ def loss_thresholds(first_p99: float, sent_counts: list[int], count_floor: bool 
 def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], list[int]]:
     """The sender loss trace (two-base-RTT rows of time_ns, rank, spine, sent,
     lost) summed into intervals of interval_ns, aligned at 0 as the pool's
-    are: {(rank, interval index, spine): [sent, lost]}, where a row ending
-    at time t belongs to the interval ending at or after it."""
+    are: {(rank, interval index, spine): [sent, lost]} for each cell with a
+    send or a loss, where a row ending at time t belongs to the interval
+    ending at or after it; from the rows as written (traces)."""
     sums: dict[tuple[int, int, int], list[int]] = defaultdict(lambda: [0, 0])
-    with traces.open_trace(run / "ns3" / "spine_losses.csv") as handle:
+    with traces.open_rows(run / "ns3" / "spine_losses.csv") as handle:
         for row in csv.DictReader(handle):
+            if row["sent"] == "0" and row["lost"] == "0":
+                continue
             cell = sums[(int(row["rank"]), (int(row["time_ns"]) - 1) // interval_ns, int(row["spine"]))]
             cell[0] += int(row["sent"])
             cell[1] += int(row["lost"])
@@ -2964,9 +3233,10 @@ def headline(runs: list[Path], spine: int = DEGRADED_SPINE) -> dict:
 def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
     """a2a_calibration.json from the healthy calibration runs that have a
     summary, merged into existing: per scope and (group, size), named
-    <group>-<size>-p<payload> for runs on a fixture with a packet payload, and
+    <group>-<size>-p<payload> for runs on a fixture with a packet payload,
     -s<spines> after it for runs on a path-count fixture, whose candidate
-    loss intervals are 2, 10 and 40 of its base RTTs, the Phase 8
+    loss intervals are 2, 10 and 40 of its base RTTs, and -w<P> for runs on
+    a wide-leaf fixture, the Phase 8
     congestion (and, but for switch_queue, trim) thresholds of thresholds(),
     and loss_thresholds. The pooled pass's are a map from each candidate
     interval to its list, from its sender loss trace; per_connection takes
@@ -2984,12 +3254,13 @@ def a2a_calibrate(runs_files, out_root: Path, existing: dict) -> dict:
             fixture = run.get("fixture") or {}
             payload = fixture.get("payload_bytes")
             spines = fixture.get("spine_count")
+            wide = fixture.get("wide")
             cell = (f"{run['group']}-{run['size']}" + ("" if payload is None else f"-p{payload}")
-                    + ("" if spines is None else f"-s{spines}"))
+                    + ("" if spines is None else f"-s{spines}") + ("" if wide is None else f"-w{wide}"))
             groups[(A2A_SCOPE_OF_ARM[run["arm"]], cell)].append(directory)
             base_rtts[cell] = fixture.get("base_rtt_ns", BASE_RTT_NS)
     result = {key: (dict(value) if isinstance(value, dict) else value) for key, value in existing.items()}
-    traced = {cell: [d for d in dirs if (d / "ns3" / "spine_losses.csv").exists()]
+    traced = {cell: [d for d in dirs if traces.exists(d / "ns3" / "spine_losses.csv")]
               for (scope, cell), dirs in groups.items() if scope == "per_receiver"}
     for (scope, cell), directories in sorted(groups.items()):
         switch = scope == "switch_queue"
@@ -3051,13 +3322,14 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend"):
+                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend",
+                 "a2a_wide_validity"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
                                              "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink",
-                                             "a2a_downlink_spray", "a2a_twoend")
+                                             "a2a_downlink_spray", "a2a_twoend", "a2a_wide_validity")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -3069,12 +3341,13 @@ def main() -> int:
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
-                    "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend"):
+                    "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray", "a2a_twoend",
+                    "a2a_wide_validity"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
                       "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k",
                       "a2a_hostlink": "a2a_hostlink_4k", "a2a_downlink_spray": "a2a_downlink_spray_4k",
-                      "a2a_twoend": "a2a_twoend_4k"}
+                      "a2a_twoend": "a2a_twoend_4k", "a2a_wide_validity": "a2a_wide32_validity_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
@@ -3190,6 +3463,12 @@ def main() -> int:
         if arguments.markdown:
             arguments.markdown.write_text(sweep_markdown(cells))
         print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_wide_validity":
+        rows = a2a_wide_validity(arguments.runs, arguments.out_root, arguments.stage)
+        if arguments.markdown:
+            arguments.markdown.write_text(wide_validity_markdown(rows))
+        print(json.dumps(rows, indent=1))
         return 0
     if arguments.command == "a2a_compute_gaps":
         rows = a2a_compute_gaps(arguments.runs, arguments.out_root, arguments.stage)

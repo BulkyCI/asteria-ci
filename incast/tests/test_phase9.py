@@ -39,7 +39,13 @@ def measured_4k():
 # Per P, the probe's 2 pairs at seed 301 and the calibration's at seeds
 # 101-103.
 SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128, 256)},
-                 **{f"a2a_spines{spines}_calibration_4k": 6 for spines in (8, 32, 128, 256)}}
+                 **{f"a2a_spines{spines}_calibration_4k": 6 for spines in (8, 32, 128, 256)},
+                 # Per P, the wide-leaf validity run of each pair (P above 8),
+                 # the calibration's 2 pairs at 3 seeds, and the comparison's
+                 # 2 pairs by 7 conditions by 5 arms by 3 seeds.
+                 **{f"a2a_wide{wide}_validity_4k": 2 for wide in (32, 128, 256)},
+                 **{f"a2a_wide{wide}_calibration_4k": 6 for wide in (8, 32, 128, 256)},
+                 **{f"a2a_wide{wide}_4k": 210 for wide in (8, 32, 128, 256)}}
 
 
 def measured_spines():
@@ -61,8 +67,9 @@ def calibrated_4k(calibration):
     """calibration with an empty per_receiver entry at 4096 B for every
     (group, size) off one leaf that a 4096-byte stage runs and calibration
     lacks, as those stages require."""
-    entries = {profiles.a2a_cell_name(group, size, profiles.A2A_PAYLOAD_4K): {}
-               for pairs in profiles.A2A_CALIBRATION_STAGES_4K.values() for group, size in pairs}
+    entries = {profiles.a2a_cell_name(group, size, profiles.A2A_PAYLOAD_4K,
+                                      wide=profiles.A2A_WIDE_CALIBRATION_STAGES.get(stage)): {}
+               for stage, pairs in profiles.A2A_CALIBRATION_STAGES_4K.items() for group, size in pairs}
     calibration = calibration or {}
     return {**calibration, "per_receiver": {**entries, **calibration.get("per_receiver", {})}}
 
@@ -2184,6 +2191,137 @@ class Spines(unittest.TestCase):
             profiles.a2a_settle(document, profiles.A2A_SPINES_FIXTURE[32])
 
 
+class Wide(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        committed = json.loads((here / "a2a_calibration.json").read_text())
+        # Each wide-leaf cell takes the 4096-byte cell's thresholds.
+        self.calibration = {**committed, "per_receiver": {
+            **committed["per_receiver"],
+            **{f"{group}-{size}-p4096-w{wide}": committed["per_receiver"][f"{group}-{size}-p4096"]
+               for group, size in profiles.A2A_WIDE_PAIRS for wide in profiles.A2A_WIDE}}}
+
+    def test_fixtures(self):
+        self.assertEqual(profiles.A2A_WIDE_FIXTURE[8], {**profiles.A2A_FIXTURE_4K, "wide": 8})
+        for wide in (32, 128, 256):
+            self.assertEqual(profiles.A2A_WIDE_FIXTURE[wide],
+                             {**profiles.A2A_FIXTURE_4K, "wide": wide, "buffer_size_mb": 4 * wide, "job_hosts": 8,
+                              "background": {"pattern": "leaf_shift", "rate": "350Gbps"},
+                              "sparse_hold_trace": True})
+        self.assertNotIn("a2a_wide8_validity_4k", profiles.A2A_STAGES)
+
+    @measured_4k()
+    def test_eight_is_the_settled_fixture(self):
+        # At P = 8 a run's profile is the settled fixture's run of the same
+        # arm, cell and seed in a2a_twoend_4k or a2a_ackroute_fwd_4k, but
+        # for its name.
+        def profiles_of(stage):
+            return {r["key"].split("-", 1)[1]: profiles.a2a_stage_profile(r, self.calibration)
+                    for r in profiles.a2a_stage_runs(stage, self.calibration, self.tuning)}
+
+        wide = profiles_of("a2a_wide8_4k")
+        compared = 0
+        for stage in ("a2a_twoend_4k", "a2a_ackroute_fwd_4k"):
+            for key, document in profiles_of(stage).items():
+                if key in wide:
+                    self.assertEqual({**wide[key], "name": document["name"]}, document, key)
+                    compared += 1
+        # reps_hold_auto_tail4_cover and reps_tail of a2a_twoend_4k and
+        # reps_oracle_tail_fwd of a2a_ackroute_fwd_4k, on 4 conditions and
+        # the healthy pair of 2 sizes at 3 seeds.
+        self.assertEqual(compared, 3 * 5 * 2 * 3)
+
+    @measured_4k()
+    def test_members(self):
+        runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+        self.assertEqual(len(runs), 210)
+        self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_WIDE_ARMS))
+        self.assertEqual({(r["size"], r["compute_ns"], r["iterations"]) for r in runs},
+                         {("256k", 236_000, 40), ("2m", 1_816_000, 12)})
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, self.calibration)
+            network, workload = document["network"], document["workload"]
+            self.assertEqual((network["spine_count"], network["hosts_per_leaf"], document["parallelism"]["dp"]),
+                             (32, 32, 256))
+            self.assertEqual(network["fabric"]["buffer_size_mb"], 128)
+            self.assertEqual(network["link_rate"], "400Gbps")
+            self.assertNotIn("spine_link_rate", network)
+            self.assertEqual(network["transport_recovery"]["retransmission_timeout_ns"], 10 * profiles.BASE_RTT_NS)
+            self.assertEqual(workload["group"], {"leaves": list(range(8)), "hosts": 8})
+            self.assertEqual(workload["background"], {"pattern": "leaf_shift", "rate": "350Gbps"})
+            hold = network["load_balancing"].get("selector") == "reps_hold"
+            self.assertEqual(network.get("sparse_hold_trace"), True if hold else None)
+            self.assertNotIn("port_counter_interval_ns", network)
+            self.assertEqual(network["load_balancing"]["ack_route"], "spray")
+            if r["arm"] == "reps_hold_auto_tail4_cover" and r["size"] == "2m":
+                self.assertEqual(network["load_balancing"]["loss_thresholds"],
+                                 self.calibration["per_receiver"]["ep64-2m-p4096-w32"]["loss_thresholds"]["24648"])
+
+    @measured_4k()
+    def test_validity(self):
+        for stage, wide in profiles.A2A_WIDE_VALIDITY_STAGES.items():
+            runs = profiles.a2a_stage_runs(stage, None, self.tuning)
+            self.assertEqual([(r["size"], r["arm"], r["condition"], r["seed"], r["iterations"], r["compute_ns"])
+                              for r in runs],
+                             [("256k", "uniform_tail", "healthy", 301, 2, 236_000),
+                              ("2m", "uniform_tail", "healthy", 301, 2, 1_816_000)])
+            network = profiles.a2a_stage_profile(runs[1], None)["network"]
+            self.assertEqual((network["spine_count"], network["port_counter_interval_ns"]), (wide, 50_000))
+            self.assertNotIn("sparse_hold_trace", network)
+
+    @measured_4k()
+    def test_arms(self):
+        settings = profiles.a2a_wide_settings(self.tuning)
+        cover = profiles.a2a_twoend_settings(self.tuning)["reps_hold_auto_tail4_cover"]
+        self.assertEqual(settings["reps_hold_auto_tail4_cover"], cover)
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_rx"],
+                         {**cover, "path_seq": True, "receiver_hold": True, "receiver_hold_clean": 1024,
+                          "receiver_tail_missing": True, "stray_path_seq": "closed"})
+        self.assertEqual(settings["reps_oracle_tail_fwd"],
+                         profiles.a2a_ackroute_fwd_settings(self.tuning)["reps_oracle_tail_fwd"])
+        self.assertEqual({arm: setting["ack_route"] for arm, setting in settings.items()},
+                         {arm: "spray" for arm in profiles.A2A_WIDE_ARMS})
+        # The comparison reads its own P's calibration cells.
+        lacking = {**self.calibration, "per_receiver": {
+            k: v for k, v in self.calibration["per_receiver"].items() if not k.endswith("-w128")}}
+        with self.assertRaisesRegex(ValueError, r"\['ep64-256k-p4096-w128', 'ep64-2m-p4096-w128'\]"):
+            profiles.a2a_stage_runs("a2a_wide128_4k", lacking, self.tuning)
+
+    def test_multi_fault(self):
+        self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
+                         [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
+                           "draw": {"fraction": 0.02, "seed": 1}}])
+        for condition in ("multi_blackhole", "multi", "multiloss1e3"):
+            with self.assertRaisesRegex(ValueError, "unknown condition"):
+                profiles.a2a_fault(condition)
+        self.assertTrue(analyze.multi_condition("multi_loss1e3"))
+        self.assertFalse(analyze.multi_condition("loss1e3_up"))
+
+    def test_reactions_read_the_runs_fabric(self):
+        # 32 hosts per leaf and 32 spines: host 20 is on leaf 0, host 40 on
+        # leaf 1, and only a share under 1/64 reads as the reaction, 0.03 not.
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            (run_dir / "ns3").mkdir()
+            (run_dir / "manifest.json").write_text(json.dumps(
+                {"ranks": 256, "physical_topology": {"hosts_per_leaf": 32, "spine_count": 32}, "link_failures": []}))
+            interval = 2 * profiles.BASE_RTT_NS
+            onset = profiles.DEGRADE_AT_NS
+            first = onset // interval + 1
+            rows = [f"{(first + 1) * interval},0,1,3,100,0,3", f"{(first + 1) * interval},40,0,3,100,0,3",
+                    f"{(first + 2) * interval},0,1,3,3,0,3", f"{(first + 2) * interval},20,1,4,97,0,3",
+                    f"{(first + 3) * interval},0,1,3,1,0,3", f"{(first + 3) * interval},20,1,4,99,0,3"]
+            (run_dir / "ns3" / "spine_losses.csv").write_text(
+                "time_ns,rank,destination_leaf,spine,sent,lost,grade\n" + "\n".join(rows) + "\n")
+            self.assertEqual(analyze.run_fabric(run_dir), (32, 32))
+            reaction = analyze.reaction(run_dir, "loss1e3_up", interval)
+            self.assertEqual(reaction, {"reaction_ns": (first + 3) * interval - onset, "share_basis": "remote"})
+            self.assertEqual(analyze.reaction(run_dir, "multi_loss1e3", interval),
+                             {"reaction_ns": None, "share_basis": None})
+        self.assertEqual(analyze.run_fabric(Path(directory)), (8, 8))
+
+
 class CopyDeadline(unittest.TestCase):
     @measured_spines()
     @spines_gaps()
@@ -2206,9 +2344,11 @@ class CopyDeadline(unittest.TestCase):
         cover = {"a2a_twoend_4k": set(profiles.A2A_TWOEND_COVER_ARMS),
                  "a2a_hostlink_s_4k": set(profiles.A2A_HOSTLINK_COVER_ARMS),
                  "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS),
-                 "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS)}
+                 "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS),
+                 **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx"}
+                    for stage in profiles.A2A_WIDE_STAGES}}
         for stage in profiles.A2A_STAGES:
-            runs = profiles.a2a_stage_runs(stage, calibration, tuning)
+            runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
                              cover.get(stage, set()), stage)
 
@@ -3097,6 +3237,17 @@ class A2aCalibrate(unittest.TestCase):
         for spines, rtt in profiles.A2A_SPINES_BASE_RTT_NS.items():
             cell = result["per_receiver"][f"ep64-2m-p4096-s{spines}"]
             self.assertEqual(sorted(cell["loss_thresholds"], key=int), [str(n * rtt) for n in (2, 10, 40)])
+
+    def test_wide_cells(self):
+        # A wide-leaf fixture's cells by P, at the 8-spine fabric's loss
+        # intervals.
+        runs = [({**run("graded_per_receiver_mix", "ep64", "256k", "healthy", 101, stage),
+                  "fixture": profiles.A2A_WIDE_FIXTURE[wide]}, self.reports(0.03, 0.02), self.losses(50))
+                for stage, wide in profiles.A2A_WIDE_CALIBRATION_STAGES.items()]
+        result = self.calibrate(runs)
+        for wide in profiles.A2A_WIDE:
+            cell = result["per_receiver"][f"ep64-256k-p4096-w{wide}"]
+            self.assertEqual(sorted(cell["loss_thresholds"], key=int), ["24648", "123240", "492960"])
 
     def test_one_loss_grades_0(self):
         # A zero p99: (f/4, f/2, f), rounded down so one loss reaches f.
