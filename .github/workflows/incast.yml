@@ -43,6 +43,11 @@ on:
         required: false
         default: 60
         type: number
+      max_parallel:
+        description: Shards provisioned and run at once
+        required: false
+        default: 64
+        type: number
 
 permissions:
   contents: read
@@ -168,7 +173,7 @@ jobs:
     permissions: {}
     strategy:
       fail-fast: false
-      max-parallel: 64
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     steps:
@@ -196,7 +201,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.run_timeout_minutes) }}
     strategy:
       fail-fast: false
-      max-parallel: 64
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:

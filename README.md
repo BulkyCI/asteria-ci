@@ -78,7 +78,9 @@ measures `summarize.py` writes to `transients.json`. `t_comparison` needs
 `python3 -m unittest discover incast/tests`. Dispatch `.github/workflows/incast.yml` with a comma-separated
 list of stages; `simulation_timeout_seconds`, `run_timeout_minutes` and
 `collect_timeout_minutes` (6 h, 12 h and 60 min by default) lift the limits of
-one simulation, a shard's job and the tabulating job for long runs.
+one simulation, a shard's job and the tabulating job for long runs, and
+`max_parallel` (64 by default) sets how many shards are provisioned and run
+at once.
 
 The asteria commit under test is `incast/asteria.ref`.
 
