@@ -36,6 +36,9 @@
     analyze.py a2a_hostlink --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
                                                      a2a_candidates with the false sender holds under a lossy
                                                      host link and the losses toward its leaf per spine
+    analyze.py a2a_downlink_spray --runs RUNS.json... --out-root DIR [--stage S] [--markdown FILE]
+                                                     each end's first hold, the losses before it, the tail
+                                                     counts and the correct and false holds of both ends
     analyze.py a2a_calibrate --runs RUNS.json... --out-root DIR [--into FILE]
                                                      Phase 9 thresholds per scope and (group, size);
                                                      FILE defaults to incast/a2a_calibration.json
@@ -59,7 +62,8 @@ seeds with a known cost).
 a2a_candidates gives every arm of the runs given (all stages unless
 --stage; the workflow tabulates a2a_candidates, a2a_receiver, a2a_tail,
 a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_tail_ack_4k,
-a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k and a2a_ackroute_fwd_4k each so) per cell its per-seed and mean primary and tail cost,
+a2a_sweep_4k, a2a_decode_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k and
+a2a_downlink_spray_4k each so) per cell its per-seed and mean primary and tail cost,
 and these measures per faulted run:
 
 * reaction_ns: from the fault's onset (100 base RTTs; 0 for structural) to
@@ -315,6 +319,33 @@ receiver_reaction_ns read on spine 3:
 Per cell, receiver_lead_ns and receiver_lead_iterations set the receiver
 arm's receiver_hold_ns against the sender arm's sender_hold_ns on each
 seed.
+
+a2a_downlink_spray reads one stage's runs alone (--stage,
+a2a_downlink_spray_4k by default), whose faults are on the downlink from
+spine 3 to leaf 1 and whose answers take spines their receivers draw, and
+gives a2a_candidates' table, with verdicts against reps_tail, and per
+faulted run:
+
+* sender_hold_ns, sender_lost_before, receiver_hold_ns and
+  receiver_lost_before as a2a_reaction gives them: the first hold of spine
+  3 toward leaf 1 by the senders off leaf 1, and by the receivers on leaf 1,
+  and the losses their rows counted up to it;
+* receiver_tail_missing_by_spine and receiver_tail_missing_late_by_spine as
+  a2a_downlink gives them;
+* sender_hold_reading as a2a_ackroute gives it, under the run's setting's
+  ack_route, and receiver_hold_reading, the same of the receiver hold trace
+  (hold not none), a series being a receiver (rank), a sender leaf and a
+  spine: a receiver's hold of spine 3 for a sender leaf other than its own
+  is correct when the receiver is on leaf 1 (_down: the data crosses the
+  downlink) or the sender leaf is 0 (_up: the uplink), and every other
+  hold, and every hold in a healthy run, is false;
+* healthy_sender_hold_reading and healthy_receiver_hold_reading: the same
+  of the paired healthy run.
+
+Per cell, versus gives the seed-rule verdict on cost of each receiver arm
+against its sender arm, of the receiver arm without ack_loss_rtts against
+the one with it, and of reps_hold_auto_tail_ack against
+reps_hold_auto_tail4, where the cell has both arms.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -2319,6 +2350,142 @@ def reaction_markdown(cells: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The downlink stage under spray: a2a_downlink's and a2a_reaction's readings
+# of every arm, and both ends' correct and false holds.
+
+# Each receiver arm against its sender arm, the receiver arm without
+# ack_loss_rtts against the one with it, and the sender arm with
+# ack_loss_rtts against the one without, on cost.
+A2A_DOWNLINK_SPRAY_VERSUS = (("reps_hold_auto_tail_ack_rx_closed", "reps_hold_auto_tail_ack"),
+                             ("reps_hold_auto_tail4_rx_closed", "reps_hold_auto_tail4"),
+                             ("reps_hold_auto_tail4_rx_closed", "reps_hold_auto_tail_ack_rx_closed"),
+                             ("reps_hold_auto_tail_ack", "reps_hold_auto_tail4"))
+A2A_DOWNLINK_SPRAY_FIRST = ("sender_hold_ns", "sender_lost_before", "receiver_hold_ns", "receiver_lost_before")
+A2A_DOWNLINK_SPRAY_READINGS = ("ack_route", "receiver_tail_missing_by_spine", "receiver_tail_missing_late_by_spine",
+                               "sender_hold_reading", "receiver_hold_reading", "healthy_sender_hold_reading",
+                               "healthy_receiver_hold_reading")
+
+
+def correct_receiver_hold(condition: str, receiver_leaf: int, sender_leaf: int, spine: int) -> bool:
+    """Whether a receiver on receiver_leaf holding spine for the senders of
+    sender_leaf holds what the fault of condition degrades (see the module
+    docstring)."""
+    if (condition == "healthy" or host_link_condition(condition) or spine != DEGRADED_SPINE
+            or sender_leaf == receiver_leaf):
+        return False
+    direction = condition.rpartition("_")[2]
+    if direction not in A2A_FAULT_LEAF:
+        raise ValueError(f"condition {condition!r} names no faulted direction")
+    leaf = A2A_FAULT_LEAF[direction]
+    return sender_leaf == leaf if direction == "up" else receiver_leaf == leaf
+
+
+def receiver_hold_reading(path: Path, condition: str) -> dict | None:
+    """correct_holds, false_holds, correct_held_rows and false_held_rows of
+    the receiver hold trace (hold not none), as sender_hold_reading counts
+    the sender's, each row taken by correct_receiver_hold; None without the
+    file."""
+    if not path.exists():
+        return None
+    counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
+    holding: dict[tuple, bool] = {}
+    with path.open() as handle:
+        reader = csv.DictReader(handle)
+        series = [column for column in reader.fieldnames or ()
+                  if column not in ("time_ns", "arrivals", "lost", "hold")]
+        for row in reader:
+            correct = correct_receiver_hold(condition, int(row["rank"]) // A2A_HOSTS_PER_LEAF_OF_TRACE,
+                                            int(row["sender_leaf"]), int(row["spine"]))
+            kind = "correct" if correct else "false"
+            key = tuple(row[c] for c in series)
+            now = row["hold"] != "none"
+            if now:
+                counts[f"{kind}_held_rows"] += 1
+                if not holding.get(key):
+                    counts[f"{kind}_holds"] += 1
+            holding[key] = now
+    return counts
+
+
+def a2a_downlink_spray(rows: list[dict], out_root: Path) -> list[dict]:
+    """a2a_candidates against reps_tail with each end's first hold, the tail
+    counts and both ends' hold readings (see the module docstring)."""
+    by_key = {r["key"]: r for r in rows}
+    measured = {}
+    for row in a2a_costs(rows):
+        directory = out_root / row["key"]
+        healthy = by_key.get(row["healthy_key"])
+        route = (row.get("setting") or {}).get("ack_route", "data_spine")
+        sender = first_hold(directory, row["condition"], False)
+        receiver = first_hold(directory, row["condition"], True)
+
+        def readings(run_directory, condition):
+            return (sender_hold_reading(run_directory / "ns3" / "spine_losses.csv", condition, route),
+                    receiver_hold_reading(run_directory / "ns3" / "receiver_holds.csv", condition))
+
+        faulted = readings(directory, row["condition"])
+        paired = (None, None) if healthy is None else readings(out_root / healthy["key"], "healthy")
+        measured[row["key"]] = {
+            **receiver_tail_counts(directory), "ack_route": route,
+            "sender_hold_ns": sender[0], "sender_lost_before": sender[1],
+            "receiver_hold_ns": receiver[0], "receiver_lost_before": receiver[1],
+            "sender_hold_reading": faulted[0], "receiver_hold_reading": faulted[1],
+            "healthy_sender_hold_reading": paired[0], "healthy_receiver_hold_reading": paired[1],
+        }
+    cells = a2a_candidates(rows, out_root, A2A_DOWNLINK_REFERENCE)
+    for cell in cells:
+        for entry in cell["arms"].values():
+            for name in A2A_DOWNLINK_SPRAY_FIRST + A2A_DOWNLINK_SPRAY_READINGS:
+                entry[name] = [measured[k][name] for k in entry["keys"]]
+            for name in A2A_DOWNLINK_SPRAY_FIRST:
+                entry[f"{name}_mean"] = _mean(entry[name])
+        cell["versus"] = {f"{a} against {b}": _versus(cell["arms"], a, b) for a, b in A2A_DOWNLINK_SPRAY_VERSUS
+                          if a in cell["arms"] and b in cell["arms"]}
+    return cells
+
+
+def downlink_spray_markdown(cells: list[dict]) -> str:
+    """A row per cell and arm, and each cell's verdicts."""
+    def seeds(values, form):
+        return ", ".join("-" if v is None else format(v, form) for v in values) or "-"
+
+    def us(values):
+        return seeds([None if v is None else v / 1000 for v in values], ".1f")
+
+    def holds(readings, kind):
+        return f"{_summed(readings, f'{kind}_holds')}, {_summed(readings, f'{kind}_held_rows')}"
+
+    lines = [
+        "| group | size | condition | arm | cost mean us (seeds) | vs reps_tail | sender hold us (seeds) "
+        "| sender lost before | receiver hold us (seeds) | receiver lost before | receiver tail missing | late "
+        "| sender correct holds, rows | sender false holds, rows | receiver correct holds, rows "
+        "| receiver false holds, rows | healthy false holds, rows: sender; receiver "
+        f"| longest RTO run (seeds over {A2A_RTO_RUN_LIMIT}) |",
+        "|---" * 18 + "|",
+    ]
+    for cell in cells:
+        for label, entry in cell["arms"].items():
+            sender, receiver = entry["sender_hold_reading"], entry["receiver_hold_reading"]
+            lines.append(
+                f"| {cell['group']} | {cell['size']} | {cell['condition']} | {label} "
+                f"| {_us(entry['cost_ns_mean'])} ({len(entry['seeds'])}) "
+                f"| {entry.get('versus_reference_cost') or '-'} "
+                f"| {us(entry['sender_hold_ns'])} | {seeds(entry['sender_lost_before'], 'd')} "
+                f"| {us(entry['receiver_hold_ns'])} | {seeds(entry['receiver_lost_before'], 'd')} "
+                f"| {_per_spine(entry['receiver_tail_missing_by_spine'])} "
+                f"| {_per_spine(entry['receiver_tail_missing_late_by_spine'])} "
+                f"| {holds(sender, 'correct')} | {holds(sender, 'false')} "
+                f"| {holds(receiver, 'correct')} | {holds(receiver, 'false')} "
+                f"| {holds(entry['healthy_sender_hold_reading'], 'false')}; "
+                f"{holds(entry['healthy_receiver_hold_reading'], 'false')} | {_rto_run(entry)} |"
+            )
+    lines.append("")
+    for cell in cells:
+        for name, value in cell["versus"].items():
+            lines.append(f"- {cell['group']} {cell['size']} {cell['condition']}: {name}: {value or 'unreadable'}")
+    return "\n".join(lines) + "\n"
+
+
 # Phase 9 calibration: thresholds per scope and (group, size) from the
 # healthy runs of a2a_oracle_calibration, a2a_calibration,
 # a2a_calibration_4k, a2a_decode_calibration_4k and
@@ -2513,12 +2680,13 @@ def main() -> int:
     i.add_argument("--runs", type=Path)
     for name in ("calibrate", "gains", "select", "cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps",
                  "a2a_candidates", "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink"):
+                 "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray"):
         x = sub.add_parser(name)
         x.add_argument("--runs", type=Path, required=True,
                        nargs="+" if name in ("cost", "a2a_gate", "a2a_calibrate", "a2a_gate_reps", "a2a_candidates",
                                              "a2a_cycles", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink",
-                                             "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink")
+                                             "a2a_reaction", "a2a_ackroute", "a2a_noack", "a2a_hostlink",
+                                             "a2a_downlink_spray")
                        else None)
         x.add_argument("--out-root", type=Path, required=True)
         if name in ("calibrate", "gains"):
@@ -2530,11 +2698,11 @@ def main() -> int:
         if name == "a2a_gate":
             x.add_argument("--json", action="store_true")
         if name in ("a2a_gate_reps", "a2a_compute_gaps", "a2a_sweep", "a2a_downlink", "a2a_reaction",
-                    "a2a_ackroute", "a2a_noack", "a2a_hostlink"):
+                    "a2a_ackroute", "a2a_noack", "a2a_hostlink", "a2a_downlink_spray"):
             stages = {"a2a_compute_gaps": "a2a_probe_4k", "a2a_sweep": "a2a_sweep_4k",
                       "a2a_downlink": "a2a_downlink_4k", "a2a_reaction": "a2a_reaction_4k",
                       "a2a_ackroute": "a2a_ackroute_4k", "a2a_noack": "a2a_noack_4k",
-                      "a2a_hostlink": "a2a_hostlink_4k"}
+                      "a2a_hostlink": "a2a_hostlink_4k", "a2a_downlink_spray": "a2a_downlink_spray_4k"}
             x.add_argument("--stage", default=stages.get(name, name))
             x.add_argument("--markdown", type=Path)
         if name == "a2a_ackroute":
@@ -2612,6 +2780,13 @@ def main() -> int:
                           a2a_ack_rows(arguments.ack_root))
         if arguments.markdown:
             arguments.markdown.write_text(noack_markdown(cells))
+        print(json.dumps(cells, indent=1))
+        return 0
+    if arguments.command == "a2a_downlink_spray":
+        cells = a2a_downlink_spray(a2a_rows(arguments.runs, arguments.out_root, arguments.stage),
+                                   arguments.out_root)
+        if arguments.markdown:
+            arguments.markdown.write_text(downlink_spray_markdown(cells))
         print(json.dumps(cells, indent=1))
         return 0
     if arguments.command == "a2a_hostlink":
