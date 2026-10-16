@@ -1420,6 +1420,28 @@ class HostLink(unittest.TestCase):
         self.assertIn("|---" * 14 + "|\n", markdown)
 
 
+class CopyDeadline(unittest.TestCase):
+    def test_plumbing(self):
+        here = Path(profiles.__file__).parent
+        tuning = json.loads((here / "a2a_tuning.json").read_text())
+        calibration = json.loads((here / "a2a_calibration.json").read_text())
+        settings = profiles.a2a_tail_ack_settings(tuning, profiles.A2A_ARMS_4K)
+        deadline = profiles.a2a_copy_deadline(settings)
+        for arm in profiles.A2A_ARMS_4K:
+            hold = arm in profiles.A2A_HOLD_ARMS_4K
+            self.assertEqual(settings[arm].get("sentinel_mode") == "duplicate", hold)
+            self.assertEqual(deadline[arm], {**settings[arm], "copy_expiry": "deadline"} if hold else settings[arm])
+        (r,) = [r for r in profiles.a2a_stage_runs("a2a_tail_ack_4k", calibration, tuning)
+                if r["key"] == "a2a_tail_ack_4k-ep64-256k-loss1e2_up-reps_hold_auto_tail_ack-s301"]
+        r = {**r, "setting": deadline["reps_hold_auto_tail_ack"]}
+        balancing = profiles.a2a_stage_profile(r, calibration)["network"]["load_balancing"]
+        self.assertEqual((balancing["sentinel_mode"], balancing["copy_expiry"]), ("duplicate", "deadline"))
+        # No stage selects it.
+        for stage in profiles.A2A_STAGES:
+            runs = profiles.a2a_stage_runs(stage, calibration, tuning)
+            self.assertFalse(any("copy_expiry" in (r["setting"] or {}) for r in runs), stage)
+
+
 class Decode(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent

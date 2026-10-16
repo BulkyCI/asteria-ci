@@ -1034,6 +1034,13 @@ A2A_NOACK_STAGE = "a2a_noack_4k"
 A2A_NOACK_ARMS = {"reps_hold_auto_tail4": "reps_hold_auto_tail_ack", "reps_hold_leaf_tail4": "reps_hold_leaf_tail_ack",
                   "reps_flow_hold_tail4": "reps_flow_hold_tail_ack"}
 A2A_NOACK_SOURCES = ("a2a_tail_ack_4k", "a2a_sweep_4k", "a2a_decode_4k")
+# copy_expiry deadline (A2A_COPY_DEADLINE: load_balancing copy_expiry, written
+# as SPRAY_COPY_EXPIRY): a loss-hold arm's copies under sentinel_mode
+# duplicate declared lost only past tail_loss_rtts base RTTs since they were
+# sent, whatever their data's acknowledgement, rather than at their data's
+# acknowledgement past one base RTT. A stage selects it by passing its
+# settings through a2a_copy_deadline; no stage does yet.
+A2A_COPY_DEADLINE = {"copy_expiry": "deadline"}
 # a2a_hostlink_4k: one host's access link lossy from the onset, no spine
 # faulted: a gray loss at 1e-2 or 1e-3 (A2A_LOSS_RATES) on the link of host 9
 # (A2A_FAULT_HOST, the second host of leaf 1, the leaf of the down cells'
@@ -1355,6 +1362,13 @@ def a2a_ackroute_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, 
     for arm, of in A2A_ACKROUTE_DATA_SPINE.items():
         settings[arm] = {**base[of], "ack_route": "data_spine"}
     return {arm: settings[arm] for arm in A2A_ACKROUTE_ARMS}
+
+
+def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """settings with A2A_COPY_DEADLINE on every setting whose copies it
+    expires, those under sentinel_mode duplicate; the others as given."""
+    return {arm: {**setting, **A2A_COPY_DEADLINE} if setting.get("sentinel_mode") == "duplicate" else setting
+            for arm, setting in settings.items()}
 
 
 def a2a_noack_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
