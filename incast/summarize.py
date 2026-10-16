@@ -72,6 +72,8 @@ import json
 import math
 from pathlib import Path
 
+import traces
+
 BASE_RTT_NS = 12_324
 WINDOW_NS = 2 * BASE_RTT_NS
 RUN_LENGTH = 5
@@ -265,7 +267,7 @@ def spine_losses(path: Path, spine: int | None, onset_ns: int | None) -> dict:
     DETECTION_COUNTS; never, for no spine."""
     totals: dict[int, list[int]] = {}
     lost_at: dict[int, int] = {}
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         for row in csv.DictReader(handle):
             s = int(row["spine"])
             lost = int(row["lost"])

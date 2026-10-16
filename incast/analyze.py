@@ -467,6 +467,8 @@ import statistics
 from collections import defaultdict, deque
 from pathlib import Path
 
+import traces
+
 TOP_GRADE = 3
 BASE_RTT_NS = 12_324
 DEGRADE_AT_NS = 100 * BASE_RTT_NS
@@ -1233,7 +1235,7 @@ def share_series(directory: Path, condition: str, interval_ns: int, spine: int =
         return None
     totals: dict[int, int] = defaultdict(int)
     faulted: dict[int, int] = defaultdict(int)
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         keep, basis = faulted_share_rows(condition, reader.fieldnames or ())
         for row in reader:
@@ -1697,7 +1699,7 @@ def spine_lost(directory: Path, condition: str, spine: int = DEGRADED_SPINE) -> 
     path = directory / "ns3" / "spine_losses.csv"
     if not path.exists():
         return None
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         keep, _ = faulted_share_rows(condition, reader.fieldnames or ())
         return sum(int(row["lost"]) for row in reader if int(row["spine"]) == spine and keep(row))
@@ -1881,7 +1883,7 @@ def spine_holds(path: Path, held) -> dict | None:
     holds: dict[int, int] = defaultdict(int)
     lost: dict[int, int] = defaultdict(int)
     holding: dict[tuple, bool] = {}
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         series = [column for column in reader.fieldnames or ()
                   if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
@@ -2031,7 +2033,7 @@ def sender_hold_reading(path: Path, condition: str, ack_route: str) -> dict | No
         return None
     counts = {"correct_holds": 0, "false_holds": 0, "correct_held_rows": 0, "false_held_rows": 0}
     holding: dict[tuple, bool] = {}
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         series = [column for column in reader.fieldnames or ()
                   if column not in ("time_ns", "sent", "arrivals", "lost", "grade", "hold")]
@@ -2234,7 +2236,7 @@ def host_link_reading(path: Path, host: int = A2A_FAULT_HOST) -> dict | None:
     holding: dict[tuple, bool] = {}
     lost: dict[int, int] = defaultdict(int)
     lost_toward: dict[int, int] = defaultdict(int)
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             if "destination_leaf" in row:
@@ -2364,7 +2366,7 @@ def first_hold(directory: Path, condition: str, receiver: bool, spine: int = DEG
     onset = fault_onset_ns(condition)
     lost: dict[int, int] = defaultdict(int)
     first = None
-    with path.open() as handle:
+    with traces.open_trace(path) as handle:
         reader = csv.DictReader(handle)
         keep, _ = (receiver_share_rows(condition) if receiver
                    else faulted_share_rows(condition, reader.fieldnames or ()))
@@ -2852,7 +2854,7 @@ def interval_losses(run: Path, interval_ns: int) -> dict[tuple[int, int, int], l
     are: {(rank, interval index, spine): [sent, lost]}, where a row ending
     at time t belongs to the interval ending at or after it."""
     sums: dict[tuple[int, int, int], list[int]] = defaultdict(lambda: [0, 0])
-    with (run / "ns3" / "spine_losses.csv").open() as handle:
+    with traces.open_trace(run / "ns3" / "spine_losses.csv") as handle:
         for row in csv.DictReader(handle):
             cell = sums[(int(row["rank"]), (int(row["time_ns"]) - 1) // interval_ns, int(row["spine"]))]
             cell[0] += int(row["sent"])
