@@ -1403,7 +1403,8 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   reps_hold_auto_tail4_cover_rx, reps_hold_auto_tail4_cover_reverse_set
 #   and reps_hold_auto_tail4_cover_reverse_set_rx (A2A_WIDE_SEEDS_ARMS) on
 #   the two multi-fault draws of both pairs, and of the first two on 256 KiB
-#   loss 1e-2 down (A2A_WIDE_SEEDS_CELLS, A2A_WIDE_SEEDS_ARM_CONDITIONS),
+#   loss 1e-2 and 1e-3 down (A2A_WIDE_SEEDS_CELLS,
+#   A2A_WIDE_SEEDS_ARM_CONDITIONS),
 #   each with its healthy pairs, at a2a_wide<P>_4k's settings: each run's
 #   profile is that stage's run of its arm and cell but for its name.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
@@ -1436,7 +1437,8 @@ A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_SEEDS_ARMS = ("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
                        "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_reverse_set_rx")
 A2A_WIDE_SEEDS_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
-                             for condition in ("multi_loss1e3", "multi_loss1e2")) + (("ep64", "256k", "loss1e2_down"),)
+                             for condition in ("multi_loss1e3", "multi_loss1e2")) + (
+    ("ep64", "256k", "loss1e2_down"), ("ep64", "256k", "loss1e3_down"))
 A2A_WIDE_SEEDS_ARM_CONDITIONS = {arm: ("multi_loss1e3", "multi_loss1e2")
                                  for arm in ("reps_hold_auto_tail4_cover_reverse_set",
                                              "reps_hold_auto_tail4_cover_reverse_set_rx")}
