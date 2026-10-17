@@ -2401,10 +2401,17 @@ class Wide(unittest.TestCase):
             profiles.a2a_stage_runs("a2a_wide128_4k", lacking, self.tuning)
 
     def test_committed_calibration(self):
-        # The committed calibration holds the 32-spine wide-leaf cells, so the
-        # comparison at 32 plans on it alone; 128 and 256 still lack theirs.
+        # The committed calibration holds the 8- and 32-spine wide-leaf cells,
+        # so the comparisons at 8 and 32 plan on it alone; 128 and 256 still
+        # lack theirs. At 8 spines the pass is the settled fixture's, whose
+        # cells it repeats but for the runs read.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_wide32_4k", committed, self.tuning)), 342)
+        for stage in ("a2a_wide8_4k", "a2a_wide32_4k"):
+            self.assertEqual(len(profiles.a2a_stage_runs(stage, committed, self.tuning)), 342)
+        for group, size in profiles.A2A_WIDE_PAIRS:
+            wide, settled = (committed["per_receiver"][f"{group}-{size}-p4096{suffix}"] for suffix in ("-w8", ""))
+            self.assertEqual({k: v for k, v in wide.items() if k not in ("runs", "loss_runs")},
+                             {k: v for k, v in settled.items() if k not in ("runs", "loss_runs")})
         for stage in ("a2a_wide128_4k", "a2a_wide256_4k"):
             with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
                 profiles.a2a_stage_runs(stage, committed, self.tuning)
