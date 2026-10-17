@@ -465,11 +465,14 @@ against reps_hold_auto_tail4_cover, and of
 reps_hold_auto_tail4_cover_answer_seq against each of them, and of
 a2a_twoend_retract_4k's reps_hold_auto_tail4_cover_retract against
 reps_hold_auto_tail4_cover and reps_hold_auto_tail4_cover_dup and of
-reps_hold_auto_tail4_cover_answer_seq against it, where the cell has both
-arms. --with-root adds one stage's runs (--with-stage, a2a_twoend_4k
-by default) of another tabulated out root, as a2a_ackroute's does, so that
-a2a_twoend_base_4k's runs, read with --stage a2a_twoend_base_4k, share
-a2a_twoend_4k's cells.
+reps_hold_auto_tail4_cover_answer_seq against it, and of
+reps_hold_auto_tail4_cover_answer_seq against a2a_twoend_rset_4k's
+reps_hold_auto_tail4_cover_reverse_set_2x4_answer and
+reps_hold_auto_tail4_cover_reverse_set_2x16_answer and of the first of those
+against the second, where the cell has both arms. --with-root adds one
+stage's runs (--with-stage, a2a_twoend_4k by default) of another tabulated
+out root, as a2a_ackroute's does, so that a2a_twoend_base_4k's runs, read
+with --stage a2a_twoend_base_4k, share a2a_twoend_4k's cells.
 
 Gain: per scope and K, the largest candidate gain at which at least 99
 percent of the healthy reports of every calibration seed give every spine
@@ -2918,7 +2921,9 @@ A2A_TWOEND_REFERENCE = "reps_hold_auto_tail4"
 # per-connection routes against the coverage-first arm and the arm with the
 # answers' path sequences against them; a2a_twoend_retract_4k's arm against
 # the coverage-first arm and a2a_twoend_4k's reps_hold_auto_tail4_cover_dup,
-# and the arm with the answers' path sequences against it, on cost.
+# and the arm with the answers' path sequences against it; and that arm
+# against a2a_twoend_rset_4k's reverse set at each of its two settings, and
+# the two settings against each other, on cost.
 A2A_TWOEND_VERSUS = (("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_route_oracle"),
@@ -2931,7 +2936,11 @@ A2A_TWOEND_VERSUS = (("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_repath"),
                      ("reps_hold_auto_tail4_cover_retract", "reps_hold_auto_tail4_cover"),
                      ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_retract"),
-                     ("reps_hold_auto_tail4_cover_retract", "reps_hold_auto_tail4_cover_dup"))
+                     ("reps_hold_auto_tail4_cover_retract", "reps_hold_auto_tail4_cover_dup"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set_2x4_answer"),
+                     ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set_2x16_answer"),
+                     ("reps_hold_auto_tail4_cover_reverse_set_2x4_answer",
+                      "reps_hold_auto_tail4_cover_reverse_set_2x16_answer"))
 A2A_ANSWER_LOSS_EVENTS = ("answer_loss_covered", "answer_route_lost", "answer_probe", "answer_route_hold",
                           "answer_route_release", "answer_set_probe", "answer_set_replace", "answer_repath",
                           "answer_loss_duplicate", "timeout_loss_data", "timeout_retract_release")
