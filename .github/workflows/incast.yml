@@ -48,6 +48,12 @@ on:
         required: false
         default: 64
         type: number
+      compiler_cache:
+        description: Restore the newest compiler cache, or build the runtime without one
+        required: false
+        default: restore
+        type: choice
+        options: [ restore, fresh ]
 
 permissions:
   contents: read
@@ -132,7 +138,7 @@ jobs:
         persist-credentials: false
 
     - name: Restore the compiler cache
-      if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
+      if: ${{ steps.bundle.outputs.cache-hit != 'true' && inputs.compiler_cache != 'fresh' }}
       uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/ccache
@@ -146,7 +152,39 @@ jobs:
       working-directory: asteria
       env:
         CCACHE_DIR: ${{ runner.temp }}/ccache
-      run: bash ci/dcs/build.sh x86-64-v3
+      # A runner shut down mid-build leaves only this step's streamed log,
+      # so the runner's state goes into it: once before the build, then
+      # every 10 s while the build runs.
+      run: |
+        echo "[runner] nproc $(nproc)"
+        free -m
+        df -h / "$RUNNER_TEMP"
+        if [[ -d "$CCACHE_DIR" ]]; then
+          echo "[runner] ccache $(du -sh "$CCACHE_DIR" | cut -f1) in $(find "$CCACHE_DIR" -type f | wc -l) files"
+          [[ -f "$CCACHE_DIR/ccache.conf" ]] && sed 's/^/[runner] ccache.conf /' "$CCACHE_DIR/ccache.conf"
+          find "$CCACHE_DIR" \( -name '*lock*' -o -name '*alive*' -o -name '*.tmp*' \) \
+            -printf '[runner] ccache %TY-%Tm-%Td %TH:%TM %s B %P\n' | head -50
+        else
+          echo "[runner] no compiler cache restored"
+        fi
+        sample() {
+          set +e
+          while :; do
+            echo "[runner] $(date -u +%H:%M:%S) load $(cut -d' ' -f1-3 /proc/loadavg)"
+            free -m | awk 'NR > 1 {print "[runner]   " $0}'
+            df -h / | awk 'NR > 1 {print "[runner]   disk " $3 " used, " $4 " free"}'
+            for kind in memory io cpu; do
+              [[ -r /proc/pressure/$kind ]] && echo "[runner]   psi $kind $(head -1 /proc/pressure/$kind)"
+            done
+            grep -E '^(oom_kill|pswpin|pswpout) ' /proc/vmstat | sed 's/^/[runner]   /'
+            ps -eo rss=,pcpu=,etimes=,args= --sort=-rss | head -5 | cut -c1-150 | sed 's/^/[runner]   /'
+            sleep 10
+          done
+        }
+        sample &
+        sampler=$!
+        trap 'kill "$sampler" 2>/dev/null || true' EXIT
+        bash ci/dcs/build.sh x86-64-v3
 
     - name: Save the runtime of this asteria commit
       if: ${{ steps.bundle.outputs.cache-hit != 'true' }}
