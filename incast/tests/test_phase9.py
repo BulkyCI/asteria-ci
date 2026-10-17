@@ -103,6 +103,7 @@ class Stages(unittest.TestCase):
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
+             "a2a_rset_sweep_4k": 63,
              **SPINES_COUNTS},
         )
         self.assertEqual(
@@ -118,6 +119,7 @@ class Stages(unittest.TestCase):
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
+             "a2a_rset_sweep_4k": 63,
              **SPINES_COUNTS},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
@@ -2194,6 +2196,39 @@ class Spines(unittest.TestCase):
             profiles.a2a_settle(document, profiles.A2A_SPINES_FIXTURE[32])
 
 
+class RsetSweep(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_runs(self):
+        # 7 settings on the 6 blackhole cells and their 3 healthy pairs, at
+        # seed 301, each a2a_twoend_base_4k's reverse set but for its keys.
+        runs = profiles.a2a_stage_runs("a2a_rset_sweep_4k", self.calibration, self.tuning)
+        self.assertEqual(len(runs), 7 * 9)
+        self.assertEqual({r["seed"] for r in runs}, {301})
+        self.assertEqual({r["condition"] for r in runs}, {"blackhole_up", "blackhole_down", "healthy"})
+        self.assertEqual({(r["group"], r["size"]) for r in runs},
+                         {("ep64", "256k"), ("ep64", "decode8"), ("ep64", "2m")})
+        base = {r["key"].split("-", 1)[1]: profiles.a2a_stage_profile(r, self.calibration)
+                for r in profiles.a2a_stage_runs("a2a_twoend_base_4k", self.calibration, self.tuning)
+                if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set"}
+        keys = ("ack_route_set_size", "ack_route_set_probe_rtts", "ack_route_set_reply")
+        settings = set()
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, self.calibration)
+            balancing = document["network"]["load_balancing"]
+            pair = base[r["key"].split("-", 1)[1].replace(r["arm"], "reps_hold_auto_tail4_cover_reverse_set")]
+            self.assertEqual({**document, "name": pair["name"],
+                              "network": {**document["network"], "load_balancing": {
+                                  k: v for k, v in balancing.items() if k not in keys}}}, pair, r["key"])
+            settings.add(tuple(balancing.get(k) for k in keys))
+        self.assertEqual(settings, {(None, None, None)} | {
+            (None if size == 2 else size, None if interval == 1 else interval, "answer")
+            for size in (2, 4) for interval in (1, 4, 16)})
+
+
 class Wide(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent
@@ -2427,7 +2462,8 @@ class CopyDeadline(unittest.TestCase):
                  **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
                             "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
                     for stage in profiles.A2A_WIDE_STAGES},
-                 "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"}}
+                 "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"},
+                 "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
