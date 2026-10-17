@@ -49,19 +49,6 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_wide{wide}_4k": 258 for wide in (8, 32, 128, 256)}}
 
 
-# The wide-leaf comparisons' reverse set, which a2a_stage_runs requires
-# chosen: as a2a_twoend_base_4k's, but where a test sets it.
-_wide_reverse_set = mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", "reps_hold_auto_tail4_cover_reverse_set")
-
-
-def setUpModule():
-    _wide_reverse_set.start()
-
-
-def tearDownModule():
-    _wide_reverse_set.stop()
-
-
 def measured_spines():
     """Every path-count stage's pair taken as measured, at its 8-spine
     4096-byte gap."""
@@ -2315,8 +2302,13 @@ class Wide(unittest.TestCase):
 
         wide = profiles_of("a2a_wide8_4k")
         compared = 0
-        for stage in ("a2a_twoend_4k", "a2a_ackroute_fwd_4k", "a2a_twoend_base_4k"):
+        for stage in ("a2a_twoend_4k", "a2a_ackroute_fwd_4k", "a2a_twoend_rset_4k"):
             for key, document in profiles_of(stage).items():
+                if stage == "a2a_twoend_rset_4k":
+                    # The reverse set at the comparison's setting alone.
+                    if f"-{profiles.A2A_WIDE_REVERSE_SET}-" not in key:
+                        continue
+                    key = key.replace(profiles.A2A_WIDE_REVERSE_SET, "reps_hold_auto_tail4_cover_reverse_set")
                 if key in wide:
                     self.assertEqual({**wide[key], "name": document["name"]}, document, key)
                     compared += 1
@@ -2324,8 +2316,8 @@ class Wide(unittest.TestCase):
         # reps_oracle_tail_fwd of a2a_ackroute_fwd_4k, on 4 conditions and
         # the healthy pair of 2 sizes at 3 seeds; and
         # reps_hold_auto_tail4_cover_answer_seq of a2a_twoend_4k and
-        # reps_hold_auto_tail4_cover_reverse_set of a2a_twoend_base_4k on
-        # blackhole up and the healthy pair.
+        # a2a_twoend_rset_4k's arm of A2A_WIDE_REVERSE_SET on blackhole up and
+        # the healthy pair.
         self.assertEqual(compared, 3 * 5 * 2 * 3 + 2 * 2 * 2 * 3)
 
     @measured_4k()
@@ -2386,7 +2378,8 @@ class Wide(unittest.TestCase):
         self.assertEqual(settings["reps_hold_auto_tail4_cover_answer_seq"],
                          profiles.a2a_twoend_settings(self.tuning)["reps_hold_auto_tail4_cover_answer_seq"])
         self.assertEqual(settings["reps_hold_auto_tail4_cover_reverse_set"],
-                         {**cover, "ack_route": "reverse_set"})
+                         {**cover, "ack_route": "reverse_set", "ack_route_set_probe_rtts": 4,
+                          "ack_route_set_reply": "answer"})
         self.assertEqual({arm: setting["ack_route"] for arm, setting in settings.items()},
                          {**{arm: "spray" for arm in profiles.A2A_WIDE_ARMS},
                           "reps_hold_auto_tail4_cover_reverse_set": "reverse_set"})
@@ -2435,19 +2428,27 @@ class Wide(unittest.TestCase):
         with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", None):
             with self.assertRaisesRegex(ValueError, "a2a_wide32_4k's reverse set is not chosen"):
                 profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
-        base = profiles.a2a_wide_settings(self.tuning)
-        chosen = "reps_hold_auto_tail4_cover_reverse_set_4x4_answer"
-        with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", chosen):
-            settings = profiles.a2a_wide_settings(self.tuning)
-            for arm, setting in settings.items():
-                self.assertEqual(setting, {**base[arm], **(profiles.A2A_RSET_SWEEP_ARMS[chosen]
-                                                           if arm == "reps_hold_auto_tail4_cover_reverse_set" else {})})
-            runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
-            for r in runs:
-                if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set":
+        # 2x4_answer, as committed: a set of 2 spines (the default, unwritten)
+        # probed once per 4 base RTTs, the replies queued as the answers are.
+        self.assertEqual(profiles.A2A_WIDE_REVERSE_SET, "reps_hold_auto_tail4_cover_reverse_set_2x4_answer")
+        with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", "reps_hold_auto_tail4_cover_reverse_set"):
+            base = profiles.a2a_wide_settings(self.tuning)
+        keys = ("ack_route_set_size", "ack_route_set_probe_rtts", "ack_route_set_reply")
+        for chosen, expected in (("reps_hold_auto_tail4_cover_reverse_set_2x4_answer", (None, 4, "answer")),
+                                 ("reps_hold_auto_tail4_cover_reverse_set_4x4_answer", (4, 4, "answer"))):
+            with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", chosen):
+                settings = profiles.a2a_wide_settings(self.tuning)
+                for arm, setting in settings.items():
+                    self.assertEqual(setting, {**base[arm], **(profiles.A2A_RSET_SWEEP_ARMS[chosen]
+                                                               if arm == "reps_hold_auto_tail4_cover_reverse_set"
+                                                               else {})})
+                runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+                self.assertEqual(len(runs), 258)
+                for r in runs:
                     balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
-                    self.assertEqual((balancing["ack_route_set_size"], balancing["ack_route_set_probe_rtts"],
-                                      balancing["ack_route_set_reply"]), (4, 4, "answer"))
+                    self.assertEqual(tuple(balancing.get(k) for k in keys),
+                                     expected if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set"
+                                     else (None, None, None), r["key"])
 
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
