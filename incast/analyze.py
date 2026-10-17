@@ -504,7 +504,11 @@ trim thresholds by the same rule. Each first threshold is capped at 0.25,
 so the third stays at most one, and the cap is flagged (capped,
 trim_capped). A report is one
 (time, rank, sequence) group, and under per_connection one (time, rank,
-sequence, sender, sender_port) group.
+sequence, sender, sender_port) group. The reports are read one at a time
+(report_deviations), since a run of many spines writes far more report rows
+than fit in memory, and the deviations are kept as counts of each value, as
+the backend writes the fractions to six places; the percentile is the one
+of the same values in order.
 """
 
 from __future__ import annotations
@@ -516,7 +520,7 @@ import json
 import math
 import os
 import statistics
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from pathlib import Path
 
 import traces
@@ -528,15 +532,67 @@ DEGRADED_SPINE = 3
 SPINES = 8
 
 
+def report_key(row: dict[str, str]) -> tuple:
+    return (row["time_ns"], row["rank"], row["sequence"], row.get("sender", ""),
+            row.get("sender_port", ""), row.get("source_leaf", ""))
+
+
 def reports(run: Path):
     groups: dict[tuple, list[dict[str, str]]] = defaultdict(list)
     with (run / "ns3" / "spine_reports.csv").open() as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            key = (row["time_ns"], row["rank"], row["sequence"], row.get("sender", ""),
-                   row.get("sender_port", ""), row.get("source_leaf", ""))
-            groups[key].append(row)
+            groups[report_key(row)].append(row)
     return groups
+
+
+class InterleavedReports(Exception):
+    pass
+
+
+def consecutive_reports(run: Path):
+    """reports()' groups one at a time, for a run whose report rows are
+    consecutive and in time order, as the backend writes them; raises
+    InterleavedReports at a row of a report already closed."""
+    time_ns, closed, key, rows = -1, set(), None, []
+    with (run / "ns3" / "spine_reports.csv").open() as handle:
+        for row in csv.DictReader(handle):
+            if report_key(row) == key:
+                rows.append(row)
+                continue
+            if rows:
+                yield rows
+            key, rows = report_key(row), [row]
+            if int(row["time_ns"]) != time_ns:
+                if int(row["time_ns"]) < time_ns:
+                    raise InterleavedReports(run)
+                time_ns, closed = int(row["time_ns"]), set()
+            if key in closed:
+                raise InterleavedReports(run)
+            closed.add(key)
+    if rows:
+        yield rows
+
+
+def report_deviations(run: Path, metrics: tuple[str, ...]) -> tuple[int, dict[str, Counter]]:
+    """The run's report count and, per metric, the count of each deviation
+    above the median spine of its report. The reports are read one at a
+    time, or, where the rows of a report are not consecutive, grouped whole
+    as reports() does."""
+    def count(groups):
+        deviations, read = {m: Counter() for m in metrics}, 0
+        for rows in groups:
+            read += 1
+            for metric in metrics:
+                values = [float(r[metric]) for r in rows]
+                median = statistics.median(values)
+                deviations[metric].update(max(0.0, v - median) for v in values)
+        return read, deviations
+
+    try:
+        return count(consecutive_reports(run))
+    except InterleavedReports:
+        return count(reports(run).values())
 
 
 def percentile(values: list[float], q: float) -> float:
@@ -556,17 +612,27 @@ def scaled_thresholds(first: float) -> tuple[bool, list[float]]:
     return capped, [round(first, 6), round(2 * first, 6), round(4 * first, 6)]
 
 
+def counted_percentile(counts: Counter, q: float) -> float:
+    """percentile() of the values counted, each as often as counted."""
+    total = sum(counts.values())
+    if not total:
+        return 0.0
+    index = min(total - 1, max(0, int(round(q * (total - 1)))))
+    for value in sorted(counts):
+        if index < counts[value]:
+            return value
+        index -= counts[value]
+
+
 def thresholds(runs: list[Path], metrics: tuple[str, ...]) -> dict:
-    deviations: dict[str, list[float]] = {m: [] for m in metrics}
+    deviations: dict[str, Counter] = {m: Counter() for m in metrics}
     count = 0
     for run in runs:
-        for rows in reports(run).values():
-            count += 1
-            for metric in metrics:
-                values = [float(r[metric]) for r in rows]
-                median = statistics.median(values)
-                deviations[metric].extend(max(0.0, v - median) for v in values)
-    p99 = {m: percentile(v, 0.99) for m, v in deviations.items()}
+        read, counted = report_deviations(run, metrics)
+        count += read
+        for metric in metrics:
+            deviations[metric].update(counted[metric])
+    p99 = {m: counted_percentile(v, 0.99) for m, v in deviations.items()}
     # The trimmed fraction has thresholds of its own; the others share one.
     capped, congestion = scaled_thresholds(max(v for m, v in p99.items() if m != "trim_fraction"))
     result = {
