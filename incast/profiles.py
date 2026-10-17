@@ -520,6 +520,10 @@ def a2a_profile(run: dict[str, Any], transient_calibration: dict[str, Any] | Non
 #                           sizes, probe intervals and reply queueing, on
 #                           a2a_twoend_4k's blackhole cells and healthy
 #                           pairs, seed 301
+#   a2a_twoend_rset_4k      the A2A_TWOEND_RSET_ARMS, the coverage-first arm
+#                           with answer path sequences and the reverse set at
+#                           two of its sweep settings, on a2a_twoend_4k's
+#                           cells and healthy pairs, seeds 301-303
 #   a2a_twoend_retract_4k   the A2A_TWOEND_RETRACT_ARMS, the coverage-first arm,
 #                           that with answer path sequences, and that with a
 #                           timed-out send's loss taken back at a flagged
@@ -1205,6 +1209,16 @@ A2A_RSET_SWEEP_ARMS = {"reps_hold_auto_tail4_cover_reverse_set": {},
 A2A_RSET_SWEEP_CELLS = tuple(cell for cell in A2A_ACKROUTE_CELLS if cell[2].startswith("blackhole"))
 A2A_RSET_SWEEP_SEEDS = (301,)
 A2A_TRANSPORT_ARMS.update({arm: "reps_hold_auto" for arm in A2A_RSET_SWEEP_ARMS})
+# a2a_twoend_rset_4k: a2a_twoend_4k's cells, healthy pairs and seeds under
+# a2a_twoend_4k's reps_hold_auto_tail4_cover_answer_seq and two of
+# a2a_rset_sweep_4k's arms, reps_hold_auto_tail4_cover_reverse_set_2x4_answer
+# and reps_hold_auto_tail4_cover_reverse_set_2x16_answer
+# (A2A_TWOEND_RSET_ARMS), none with the overdue repair, so that the three are
+# read on one build.
+A2A_TWOEND_RSET_STAGE = "a2a_twoend_rset_4k"
+A2A_TWOEND_RSET_ARMS = ("reps_hold_auto_tail4_cover_answer_seq",
+                        "reps_hold_auto_tail4_cover_reverse_set_2x4_answer",
+                        "reps_hold_auto_tail4_cover_reverse_set_2x16_answer")
 # a2a_noack_4k: the loss-hold arms of the 4096-byte stages without
 # ack_loss_rtts, tail recovery at tail_loss_rtts 4 as in them: each no-ack arm
 # is its ack arm's setting less ack_loss_rtts (A2A_NOACK_ARMS), named by
@@ -1419,7 +1433,7 @@ A2A_STAGE_FIXTURE = {stage: A2A_FIXTURE_4K
                                    A2A_ACKROUTE_STAGE, A2A_NOACK_STAGE, A2A_HOSTLINK_STAGE,
                                    A2A_ACKROUTE_FWD_STAGE, A2A_DOWNLINK_SPRAY_STAGE, A2A_TWOEND_STAGE,
                                    A2A_HOSTLINK_COVER_STAGE, A2A_TWOEND_BASE_STAGE, A2A_TWOEND_RETRACT_STAGE,
-                                   A2A_OVERDUE_STAGE, A2A_RSET_SWEEP_STAGE)}
+                                   A2A_OVERDUE_STAGE, A2A_RSET_SWEEP_STAGE, A2A_TWOEND_RSET_STAGE)}
 A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
                           for stage, spines in stages.items()})
@@ -1839,6 +1853,13 @@ def a2a_rset_sweep_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str
     return {arm: {**reverse_set, **keys} for arm, keys in A2A_RSET_SWEEP_ARMS.items()}
 
 
+def a2a_twoend_rset_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_twoend_rset_4k arm's setting: a2a_twoend_4k's or
+    a2a_rset_sweep_4k's (A2A_TWOEND_RSET_ARMS)."""
+    settings = {**a2a_twoend_settings(tuning), **a2a_rset_sweep_settings(tuning)}
+    return {arm: settings[arm] for arm in A2A_TWOEND_RSET_ARMS}
+
+
 def a2a_hostlink_cover_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_hostlink_s_4k arm's setting: its a2a_hostlink_4k arm's
     (A2A_HOSTLINK_COVER_ARMS) with A2A_COVERAGE_FIRST, through
@@ -1934,6 +1955,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_TWOEND_RETRACT_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_TWOEND_RETRACT_ARMS)),
         A2A_OVERDUE_STAGE: (A2A_ACKROUTE_CELLS, tuple(A2A_OVERDUE_ARMS)),
         A2A_RSET_SWEEP_STAGE: (A2A_RSET_SWEEP_CELLS, tuple(A2A_RSET_SWEEP_ARMS)),
+        A2A_TWOEND_RSET_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_RSET_ARMS),
         **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
     }[stage]
 
@@ -2114,6 +2136,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
                     else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE
                     else a2a_rset_sweep_settings(tuning) if stage == A2A_RSET_SWEEP_STAGE
+                    else a2a_twoend_rset_settings(tuning) if stage == A2A_TWOEND_RSET_STAGE
                     else a2a_tail_ack_settings(tuning, arms))
         _, shared = a2a_shared_4k(stage)
         # An arm a stage runs on some of its conditions only, and their

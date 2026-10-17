@@ -116,7 +116,7 @@ class Stages(unittest.TestCase):
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
-             "a2a_rset_sweep_4k": 63,
+             "a2a_rset_sweep_4k": 63, "a2a_twoend_rset_4k": 189,
              **SPINES_COUNTS},
         )
         self.assertEqual(
@@ -132,7 +132,7 @@ class Stages(unittest.TestCase):
              "a2a_noack_4k": 486, "a2a_hostlink_4k": 225, "a2a_ackroute_fwd_4k": 126,
              "a2a_downlink_spray_4k": 252, "a2a_twoend_4k": 441, "a2a_hostlink_s_4k": 135,
              "a2a_twoend_base_4k": 126, "a2a_twoend_retract_4k": 189, "a2a_overdue_4k": 378,
-             "a2a_rset_sweep_4k": 63,
+             "a2a_rset_sweep_4k": 63, "a2a_twoend_rset_4k": 189,
              **SPINES_COUNTS},
         )
         admitted = {**TUNING, "admitted": ["ep64-2m-loss1e2_up", "ep16-256k-structural"]}
@@ -2242,6 +2242,48 @@ class RsetSweep(unittest.TestCase):
             for size in (2, 4) for interval in (1, 4, 16)})
 
 
+class TwoendRset(unittest.TestCase):
+    def setUp(self):
+        here = Path(profiles.__file__).parent
+        self.tuning = json.loads((here / "a2a_tuning.json").read_text())
+        self.calibration = json.loads((here / "a2a_calibration.json").read_text())
+
+    def test_runs(self):
+        # 3 arms on a2a_twoend_4k's 18 cells and their 3 healthy pairs, seeds
+        # 301-303: a2a_twoend_4k's answer_seq arm as it is, and
+        # a2a_twoend_base_4k's reverse set with a sweep setting's keys, none
+        # with the overdue repair.
+        runs = profiles.a2a_stage_runs("a2a_twoend_rset_4k", self.calibration, self.tuning)
+        self.assertEqual(len(runs), 3 * 21 * 3)
+        self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_TWOEND_RSET_ARMS))
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual({(r["group"], r["size"], r["condition"]) for r in runs},
+                         set(profiles.a2a_read_cells_4k("a2a_twoend_4k")))
+        twoend = {r["key"].split("-", 1)[1]: profiles.a2a_stage_profile(r, self.calibration)
+                  for r in profiles.a2a_stage_runs("a2a_twoend_4k", self.calibration, self.tuning)
+                  if r["arm"] == "reps_hold_auto_tail4_cover_answer_seq"}
+        base = {r["key"].split("-", 1)[1]: profiles.a2a_stage_profile(r, self.calibration)
+                for r in profiles.a2a_stage_runs("a2a_twoend_base_4k", self.calibration, self.tuning)
+                if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set"}
+        keys = ("ack_route_set_size", "ack_route_set_probe_rtts", "ack_route_set_reply")
+        settings = {}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, self.calibration)
+            balancing = document["network"]["load_balancing"]
+            self.assertNotIn("overdue_repair", balancing, r["key"])
+            key = r["key"].split("-", 1)[1]
+            if r["arm"] == "reps_hold_auto_tail4_cover_answer_seq":
+                self.assertEqual({**document, "name": twoend[key]["name"]}, twoend[key], r["key"])
+                continue
+            pair = base[key.replace(r["arm"], "reps_hold_auto_tail4_cover_reverse_set")]
+            self.assertEqual({**document, "name": pair["name"],
+                              "network": {**document["network"], "load_balancing": {
+                                  k: v for k, v in balancing.items() if k not in keys}}}, pair, r["key"])
+            settings.setdefault(r["arm"], set()).add(tuple(balancing.get(k) for k in keys))
+        self.assertEqual(settings, {"reps_hold_auto_tail4_cover_reverse_set_2x4_answer": {(None, 4, "answer")},
+                                    "reps_hold_auto_tail4_cover_reverse_set_2x16_answer": {(None, 16, "answer")}})
+
+
 class Wide(unittest.TestCase):
     def setUp(self):
         here = Path(profiles.__file__).parent
@@ -2497,7 +2539,8 @@ class CopyDeadline(unittest.TestCase):
                             "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
                     for stage in profiles.A2A_WIDE_STAGES},
                  "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"},
-                 "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS)}
+                 "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS),
+                 "a2a_twoend_rset_4k": set(profiles.A2A_TWOEND_RSET_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
