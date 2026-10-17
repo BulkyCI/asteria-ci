@@ -1711,6 +1711,78 @@
     "a2a_wide8_calibration_4k-ep64-2m-healthy-graded_per_receiver_mix-s102",
     "a2a_wide8_calibration_4k-ep64-2m-healthy-graded_per_receiver_mix-s103"
    ]
+  },
+  "ep64-256k-p4096-w128": {
+   "reports": 1870579,
+   "p99_deviation": {
+    "mark_fraction": 1.0,
+    "trim_fraction": 0.039551
+   },
+   "capped": true,
+   "congestion_thresholds": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "trim_capped": false,
+   "trim_thresholds": [
+    0.039551,
+    0.079102,
+    0.158204
+   ],
+   "runs": [
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s103"
+   ],
+   "loss_thresholds": {
+    "24648": [
+     0.125,
+     0.25,
+     0.5
+    ],
+    "123240": [
+     0.027777,
+     0.055555,
+     0.111111
+    ],
+    "492960": [
+     0.01,
+     0.02,
+     0.04
+    ]
+   },
+   "loss_calibration": {
+    "24648": {
+     "p99": 0.0,
+     "median_sent": 2,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.5,
+     "floored": true,
+     "capped": false
+    },
+    "123240": {
+     "p99": 0.0,
+     "median_sent": 9,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.1111111111111111,
+     "floored": true,
+     "capped": false
+    },
+    "492960": {
+     "p99": 0.0,
+     "median_sent": 25.0,
+     "rule": "p99 zero: one loss grades 0",
+     "one_loss_fraction": 0.04,
+     "floored": true,
+     "capped": false
+    }
+   },
+   "loss_runs": [
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s101",
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s102",
+    "a2a_wide128_calibration_4k-ep64-256k-healthy-graded_per_receiver_mix-s103"
+   ]
   }
  },
  "headline": "ep64-256k-loss1e2_up",

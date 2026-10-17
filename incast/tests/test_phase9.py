@@ -2426,9 +2426,11 @@ class Wide(unittest.TestCase):
 
     def test_committed_calibration(self):
         # The committed calibration holds the 8- and 32-spine wide-leaf cells,
-        # so the comparisons at 8 and 32 plan on it alone; 128 and 256 still
-        # lack theirs. At 8 spines the pass is the settled fixture's, whose
-        # cells it repeats but for the runs read.
+        # so the comparisons at 8 and 32 plan on it alone, and the 128-spine
+        # 256 KiB cell, so the comparison at 128 plans its 256 KiB runs under
+        # a record filter; 128's 2 MiB cell and 256's are still missing. At 8
+        # spines the pass is the settled fixture's, whose cells it repeats but
+        # for the runs read.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         for stage in ("a2a_wide8_4k", "a2a_wide32_4k"):
             self.assertEqual(len(profiles.a2a_stage_runs(stage, committed, self.tuning)), 342)
@@ -2436,9 +2438,12 @@ class Wide(unittest.TestCase):
             wide, settled = (committed["per_receiver"][f"{group}-{size}-p4096{suffix}"] for suffix in ("-w8", ""))
             self.assertEqual({k: v for k, v in wide.items() if k not in ("runs", "loss_runs")},
                              {k: v for k, v in settled.items() if k not in ("runs", "loss_runs")})
-        for stage in ("a2a_wide128_4k", "a2a_wide256_4k"):
-            with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
-                profiles.a2a_stage_runs(stage, committed, self.tuning)
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_wide128_4k", committed, self.tuning,
+                                                     "^a2a_wide128_4k-ep64-256k-")), 171)
+        with self.assertRaisesRegex(ValueError, re.escape("no calibrated loss thresholds on ['ep64-2m-p4096-w128']")):
+            profiles.a2a_stage_runs("a2a_wide128_4k", committed, self.tuning)
+        with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
+            profiles.a2a_stage_runs("a2a_wide256_4k", committed, self.tuning)
 
     def test_record_filter_needs_the_pairs_it_selects(self):
         # Under a record filter a stage needs the calibrated loss thresholds
