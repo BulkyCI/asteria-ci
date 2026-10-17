@@ -97,7 +97,7 @@ jobs:
         for stage in "${stages[@]}"; do
           python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" "${args[@]}"
         done
-        python3 incast/shards.py profiles --filter "$RECORD_FILTER" \
+        python3 incast/shards.py profiles --filter="$RECORD_FILTER" \
           --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
         {
           echo "shards=$(cat profiles/shards.json)"
