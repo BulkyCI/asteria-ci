@@ -3,6 +3,7 @@ all-to-all cost pairing and the oracle-headroom gate."""
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -483,20 +484,26 @@ class Candidates(unittest.TestCase):
         self.assertEqual(by_arm["shared_floor1"]["sender_pool_weight"], 1.0)
 
     def test_record_filter_selects_the_hold_arms(self):
-        # The workflow's record_filter, passed to shards.py as --filter, on
-        # the run keys <stage>-<group>-<size>-<condition>-<arm>-s<seed>.
-        tuning = json.loads((Path(profiles.__file__).parent / "a2a_tuning.json").read_text())
-        calibration = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        # The workflow's record_filter, passed to profiles.py write as
+        # --filter, on the run keys <stage>-<group>-<size>-<condition>-<arm>-s<seed>;
+        # shards.py shards every run written.
+        here = Path(profiles.__file__).parent
+        tuning = json.loads((here / "a2a_tuning.json").read_text())
+        calibration = json.loads((here / "a2a_calibration.json").read_text())
         runs = profiles.a2a_stage_runs("a2a_candidates", calibration, tuning)
         hold = set(profiles.A2A_REPS_HOLD_ARMS)
         expression = "(" + "|".join(sorted(hold)) + ")-s[0-9]+$"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "a2a_candidates").mkdir()
-            (root / "a2a_candidates" / "runs.json").write_text(json.dumps(runs))
             subprocess.run(
-                [sys.executable, str(Path(profiles.__file__).parent / "shards.py"), str(root),
-                 "--filter", expression, "--runs-per-shard", "3", "--out", str(root / "shards.json")],
+                [sys.executable, str(here / "profiles.py"), "write", "--out", str(root / "a2a_candidates"),
+                 "--stage", "a2a_candidates", f"--filter={expression}",
+                 "--a2a-calibration", str(here / "a2a_calibration.json"), "--a2a-tuning", str(here / "a2a_tuning.json")],
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                [sys.executable, str(here / "shards.py"), str(root),
+                 "--runs-per-shard", "3", "--out", str(root / "shards.json")],
                 check=True,
             )
             keys = [k for shard in json.loads((root / "shards.json").read_text()) for k in shard["keys"].split()]
@@ -2433,6 +2440,32 @@ class Wide(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
                 profiles.a2a_stage_runs(stage, committed, self.tuning)
 
+    def test_record_filter_needs_the_pairs_it_selects(self):
+        # Under a record filter a stage needs the calibrated loss thresholds
+        # of the pairs it selects only: the 256-spine comparison's 256 KiB
+        # arms and cells, given the -w256 256 KiB cell alone, plan; a 2 MiB
+        # run among them refuses, naming that pair.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        calibration = {**committed, "per_receiver": {
+            **{k: v for k, v in committed["per_receiver"].items() if not k.endswith("-w256")},
+            "ep64-256k-p4096-w256": self.calibration["per_receiver"]["ep64-256k-p4096-w256"]}}
+        arms = "reps_hold_auto_tail4_cover(_rx|_reverse_set|_reverse_set_rx)?-s30[123]$"
+        two = "reps_hold_auto_tail4_cover(_rx)?-s30[123]$"
+        record_filter = (f"^a2a_wide256_4k-ep64-256k-(multi_loss1e3|multi_loss1e2|healthy)-{arms}"
+                         f"|^a2a_wide256_4k-ep64-256k-(loss1e2_down|loss1e3_down)-{two}")
+        runs = profiles.a2a_stage_runs("a2a_wide256_4k", calibration, self.tuning, record_filter)
+        self.assertEqual(len(runs), 48)
+        every = profiles.a2a_stage_runs("a2a_wide256_4k", self.calibration, self.tuning)
+        self.assertEqual(runs, [r for r in every if re.search(record_filter, r["key"])])
+        for run in runs:
+            profiles.a2a_stage_profile(run, calibration)
+        refusal = re.escape("no calibrated loss thresholds on ['ep64-2m-p4096-w256']")
+        with self.assertRaisesRegex(ValueError, refusal):
+            profiles.a2a_stage_runs("a2a_wide256_4k", calibration, self.tuning,
+                                    record_filter + "|-2m-healthy-reps_hold_auto_tail4_cover-s301$")
+        with self.assertRaisesRegex(ValueError, refusal):
+            profiles.a2a_stage_runs("a2a_wide256_4k", calibration, self.tuning)
+
     @measured_4k()
     def test_overdue_repair(self):
         # The stage's one overdue repair, on every arm: none until it is
@@ -3562,6 +3595,40 @@ class A2aCalibrate(unittest.TestCase):
             write_calibration_run(root, "r", [], [(self.INTERVAL * k, 3, 3, 10, k % 2) for k in range(1, 11)])
             sums = analyze.interval_losses(root / "r", 5 * self.INTERVAL)
         self.assertEqual(dict(sums), {(3, 0, 3): [50, 3], (3, 1, 3): [50, 2]})
+
+
+class RecordFilter(unittest.TestCase):
+    """profiles.py write --filter, as the workflow passes record_filter: an
+    empty one writes what the write without it does, to the byte, and one
+    that selects a run writes that run alone, as the whole stage has it."""
+
+    STAGES = ("comparison", "t_comparison", "a2a_probe", "a2a_candidates", "a2a_wide32_4k")
+
+    def write(self, out: Path, stage: str, *extra: str) -> dict[str, bytes]:
+        here = Path(profiles.__file__).parent
+        command = [sys.executable, str(here / "profiles.py"), "write", "--out", str(out), "--stage", stage]
+        for flag, name in (("--calibration", "calibration.json"), ("--tuning", "tuning.json"),
+                           ("--transient-calibration", "transient_calibration.json"),
+                           ("--transient-tuning", "transient_tuning.json"),
+                           ("--a2a-calibration", "a2a_calibration.json"), ("--a2a-tuning", "a2a_tuning.json")):
+            if (here / name).is_file():
+                command += [flag, str(here / name)]
+        subprocess.run(command + list(extra), check=True, stdout=subprocess.DEVNULL)
+        return {path.name: path.read_bytes() for path in out.iterdir()}
+
+    def test_each_family(self):
+        for stage in self.STAGES:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                every = self.write(root / "every", stage)
+                self.assertEqual(self.write(root / "empty", stage, "--filter="), every)
+                listed = json.loads(every["runs.json"])
+                self.assertGreater(len(listed), 1)
+                run = listed[1]
+                one = self.write(root / "one", stage, f"--filter=^{re.escape(run['key'])}$")
+                self.assertEqual(set(one), {"runs.json", run["profile"]})
+                self.assertEqual(one[run["profile"]], every[run["profile"]])
+                self.assertEqual(json.loads(one["runs.json"]), [run])
 
 
 if __name__ == "__main__":

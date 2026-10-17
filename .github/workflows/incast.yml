@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       record_filter:
-        description: Regular expression on run keys; empty runs every run of the stages
+        description: Regular expression on run keys; only the runs it matches are planned and run, and empty runs every run of the stages
         required: false
         default: ""
         type: string
@@ -95,10 +95,10 @@ jobs:
         [[ -f incast/a2a_tuning.json ]] && args+=(--a2a-tuning incast/a2a_tuning.json)
         IFS=, read -ra stages <<< "$STAGES"
         for stage in "${stages[@]}"; do
-          python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" "${args[@]}"
+          python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" --filter="$RECORD_FILTER" \
+            "${args[@]}"
         done
-        python3 incast/shards.py profiles --filter="$RECORD_FILTER" \
-          --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
+        python3 incast/shards.py profiles --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
         {
           echo "shards=$(cat profiles/shards.json)"
           echo "asteria_ref=$(tr -d '[:space:]' < incast/asteria.ref)"

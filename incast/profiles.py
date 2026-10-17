@@ -12,10 +12,12 @@ Arms are named load-balancing settings. The grade arms read thresholds and a
 gain from a calibration file once one exists; before that they run at the
 simulator defaults, which is what the calibration runs themselves use.
 
-    profiles.py write --out DIR [--calibration FILE] [--tuning FILE] --stage S
+    profiles.py write --out DIR [--calibration FILE] [--tuning FILE] --stage S [--filter REGEX]
 
 writes DIR/<run key>.json for every run of the stage and DIR/runs.json, the
-list of {key, profile, seed, stage, k, condition, arm}. Stages named t_*
+list of {key, profile, seed, stage, k, condition, arm}; with --filter (the
+workflow's record_filter), for the runs whose key it matches (re.search)
+only. Stages named t_*
 are the transient-fault stages of transient.py, which read their own
 calibration and tuning files (--transient-calibration, --transient-tuning)
 and the redirect_per_connection setting of --tuning. The a2a_probe stage
@@ -32,6 +34,7 @@ import argparse
 import itertools
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -2030,9 +2033,12 @@ def a2a_admitted_cells(tuning: dict[str, Any] | None) -> list[tuple[str, str, st
 
 
 def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
-                   tuning: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Every run of a Phase 9 stage."""
+                   tuning: dict[str, Any] | None, record_filter: str = "") -> list[dict[str, Any]]:
+    """Every run of a Phase 9 stage, or with record_filter the runs whose key
+    it matches (re.search); a stage of hold arms then needs the calibrated
+    loss thresholds of the pairs of those runs only."""
     out: list[dict[str, Any]] = []
+    uncalibrated: list[tuple[str, str]] = []
     payload = (A2A_STAGE_FIXTURE.get(stage) or {}).get("payload_bytes")
     spines = (A2A_STAGE_FIXTURE.get(stage) or {}).get("spine_count")
     wide = (A2A_STAGE_FIXTURE.get(stage) or {}).get("wide")
@@ -2066,6 +2072,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
 
     def calibrated(scope, group, size):
         return a2a_cell_name(group, size, payload, wide=wide) in (calibration or {}).get(scope, {})
+
+    def refuse_uncalibrated(pairs):
+        names = [a2a_cell_name(group, size, payload, wide=wide) for group, size in pairs]
+        raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {names}: "
+                         "merge the payload's calibration pass into a2a_calibration.json")
 
     def require_measured(pairs):
         provisional = [a2a_cell_name(group, size) for group, size in pairs if (group, size) not in measured]
@@ -2153,11 +2164,10 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         cells, arms = a2a_faulted_4k(stage)
         pairs = tuple(dict.fromkeys((group, size) for group, size, _ in cells))
         require_measured(pairs)
-        uncalibrated = [a2a_cell_name(group, size, payload, wide=wide) for group, size in pairs
+        uncalibrated = [(group, size) for group, size in pairs
                         if group not in A2A_ONE_LEAF_GROUPS and not calibrated("per_receiver", group, size)]
-        if uncalibrated:
-            raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
-                             "merge the payload's calibration pass into a2a_calibration.json")
+        if uncalibrated and not record_filter:
+            refuse_uncalibrated(uncalibrated)
         wide_family = stage in A2A_WIDE_STAGES or stage in A2A_WIDE_SEEDS_STAGES
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
@@ -2218,7 +2228,19 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(A2A_SOFT_ORACLE, group, size, condition, seed, A2A_ORACLE_SETTING)
     else:
         raise ValueError(f"unknown stage {stage}")
-    return out
+    if not record_filter:
+        return out
+    selected = selected_runs(out, record_filter)
+    named = [pair for pair in uncalibrated if any((run["group"], run["size"]) == pair for run in selected)]
+    if named:
+        refuse_uncalibrated(named)
+    return selected
+
+
+def selected_runs(runs: list[dict[str, Any]], record_filter: str) -> list[dict[str, Any]]:
+    """The runs whose key record_filter matches (re.search), in order."""
+    pattern = re.compile(record_filter)
+    return [run for run in runs if pattern.search(run["key"])]
 
 
 def a2a_stage_profile(run: dict[str, Any], calibration: dict[str, Any] | None) -> dict[str, Any]:
@@ -2263,15 +2285,17 @@ def write_listing(out: Path, documents: list[tuple[dict[str, Any], dict[str, Any
     return 0
 
 
-def write_transient(out: Path, stage: str, phase_tuning, calibration, tuning) -> int:
+def write_transient(out: Path, stage: str, phase_tuning, calibration, tuning, record_filter: str = "") -> int:
     """The t_* stages; phase_tuning (--tuning) gives redirect_per_connection
     its setting in t_comparison."""
     import transient
 
     redirect = (phase_tuning or {}).get(transient.REDIRECT_ARM)
+    runs_of = transient.runs(stage, tuning, redirect)
     return write_listing(
         out,
-        [(run, transient.profile(run, calibration)) for run in transient.runs(stage, tuning, redirect)],
+        [(run, transient.profile(run, calibration))
+         for run in (selected_runs(runs_of, record_filter) if record_filter else runs_of)],
     )
 
 
@@ -2286,7 +2310,9 @@ def main() -> int:
     parser.add_argument("--transient-tuning", type=Path)
     parser.add_argument("--a2a-calibration", type=Path)
     parser.add_argument("--a2a-tuning", type=Path)
+    parser.add_argument("--filter", default="")
     arguments = parser.parse_args()
+    record_filter = arguments.filter
 
     def read(path: Path | None) -> dict[str, Any] | None:
         return json.loads(path.read_text()) if path else None
@@ -2296,22 +2322,25 @@ def main() -> int:
     arguments.out.mkdir(parents=True, exist_ok=True)
     if arguments.stage == A2A_STAGE:
         transient_calibration = read(arguments.transient_calibration)
+        runs_of = a2a_runs(read(arguments.transient_tuning))
         return write_listing(
             arguments.out,
-            [(run, a2a_profile(run, transient_calibration)) for run in a2a_runs(read(arguments.transient_tuning))],
+            [(run, a2a_profile(run, transient_calibration))
+             for run in (selected_runs(runs_of, record_filter) if record_filter else runs_of)],
         )
     if arguments.stage in A2A_STAGES:
         a2a_calibration = read(arguments.a2a_calibration)
         return write_listing(
             arguments.out,
             [(run, a2a_stage_profile(run, a2a_calibration))
-             for run in a2a_stage_runs(arguments.stage, a2a_calibration, read(arguments.a2a_tuning))],
+             for run in a2a_stage_runs(arguments.stage, a2a_calibration, read(arguments.a2a_tuning), record_filter)],
         )
     if arguments.stage.startswith("t_"):
         return write_transient(arguments.out, arguments.stage, tuning,
-                               read(arguments.transient_calibration), read(arguments.transient_tuning))
+                               read(arguments.transient_calibration), read(arguments.transient_tuning), record_filter)
     documents = []
-    for run in runs(arguments.stage, calibration, tuning):
+    runs_of = runs(arguments.stage, calibration, tuning)
+    for run in selected_runs(runs_of, record_filter) if record_filter else runs_of:
         shape = (
             {"message_bytes": SHORT_MESSAGE_BYTES, "degrade_at_ns": SHORT_DEGRADE_AT_NS}
             if run["stage"] == "short"
