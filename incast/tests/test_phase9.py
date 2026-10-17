@@ -49,6 +49,19 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_wide{wide}_4k": 258 for wide in (8, 32, 128, 256)}}
 
 
+# The wide-leaf comparisons' reverse set, which a2a_stage_runs requires
+# chosen: as a2a_twoend_base_4k's, but where a test sets it.
+_wide_reverse_set = mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", "reps_hold_auto_tail4_cover_reverse_set")
+
+
+def setUpModule():
+    _wide_reverse_set.start()
+
+
+def tearDownModule():
+    _wide_reverse_set.stop()
+
+
 def measured_spines():
     """Every path-count stage's pair taken as measured, at its 8-spine
     4096-byte gap."""
@@ -2372,6 +2385,27 @@ class Wide(unittest.TestCase):
                 self.assertEqual((balancing.get("overdue_repair"), balancing.get("overdue_repair_limit")),
                                  ("reprobe", 3), r["key"])
                 self.assertNotIn("held_loss_rtts", balancing)
+
+    @measured_4k()
+    def test_reverse_set(self):
+        # The reverse set's setting the stage names, one of the sweep's: none
+        # until it is chosen, its keys on the reverse set alone once it is.
+        with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", None):
+            with self.assertRaisesRegex(ValueError, "a2a_wide32_4k's reverse set is not chosen"):
+                profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+        base = profiles.a2a_wide_settings(self.tuning)
+        chosen = "reps_hold_auto_tail4_cover_reverse_set_4x4_answer"
+        with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", chosen):
+            settings = profiles.a2a_wide_settings(self.tuning)
+            for arm, setting in settings.items():
+                self.assertEqual(setting, {**base[arm], **(profiles.A2A_RSET_SWEEP_ARMS[chosen]
+                                                           if arm == "reps_hold_auto_tail4_cover_reverse_set" else {})})
+            runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+            for r in runs:
+                if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set":
+                    balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
+                    self.assertEqual((balancing["ack_route_set_size"], balancing["ack_route_set_probe_rtts"],
+                                      balancing["ack_route_set_reply"]), (4, 4, "answer"))
 
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),

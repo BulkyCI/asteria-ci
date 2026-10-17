@@ -1370,6 +1370,10 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   uniform_tail and reps_oracle_tail_fwd read as the hold arms do, after the
 #   same wait of 2 base RTTs (held_loss_rtts' default). It is off; None
 #   would leave it unchosen, and a2a_stage_runs refuses the stage then.
+#   reps_hold_auto_tail4_cover_reverse_set takes the reverse set's setting
+#   the stage names (A2A_WIDE_REVERSE_SET), one of a2a_rset_sweep_4k's arms
+#   (A2A_RSET_SWEEP_ARMS), whose keys it adds; None until chosen, and
+#   a2a_stage_runs refuses the stage until then.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1392,6 +1396,7 @@ A2A_WIDE_ARM_CONDITIONS = {arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2
                            for arm in ("reps_hold_auto_tail4_cover_answer_seq",
                                        "reps_hold_auto_tail4_cover_reverse_set")}
 A2A_WIDE_OVERDUE_REPAIR: str | int | None = "off"
+A2A_WIDE_REVERSE_SET: str | None = None
 A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
 A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
@@ -1850,8 +1855,9 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     for reps_hold_auto_tail4_cover_rx, reps_oracle_tail_fwd's of
     a2a_ackroute_fwd_4k, reps_hold_auto_tail4_cover_answer_seq's of
     a2a_twoend_4k and reps_hold_auto_tail4_cover_reverse_set's of
-    a2a_twoend_base_4k; every arm with overdue_repair reprobe and
-    overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR where that is a limit."""
+    a2a_twoend_base_4k with A2A_WIDE_REVERSE_SET's keys; every arm with
+    overdue_repair reprobe and overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR
+    where that is a limit."""
     twoend = a2a_twoend_settings(tuning)
     cover = twoend["reps_hold_auto_tail4_cover"]
     settings = {
@@ -1861,8 +1867,9 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
         "reps_hold_auto_tail4_cover_rx": {**cover, **A2A_WIDE_RECEIVER},
         "reps_oracle_tail_fwd": a2a_ackroute_fwd_settings(tuning)["reps_oracle_tail_fwd"],
         "reps_hold_auto_tail4_cover_answer_seq": twoend["reps_hold_auto_tail4_cover_answer_seq"],
-        "reps_hold_auto_tail4_cover_reverse_set":
-            a2a_twoend_base_settings(tuning)["reps_hold_auto_tail4_cover_reverse_set"],
+        "reps_hold_auto_tail4_cover_reverse_set": {
+            **a2a_twoend_base_settings(tuning)["reps_hold_auto_tail4_cover_reverse_set"],
+            **A2A_RSET_SWEEP_ARMS.get(A2A_WIDE_REVERSE_SET, {})},
     }
     overdue = ({} if A2A_WIDE_OVERDUE_REPAIR in (None, "off")
                else {"overdue_repair": "reprobe", "overdue_repair_limit": A2A_WIDE_OVERDUE_REPAIR})
@@ -2093,6 +2100,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         if stage in A2A_WIDE_STAGES and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
+        if stage in A2A_WIDE_STAGES and A2A_WIDE_REVERSE_SET not in A2A_RSET_SWEEP_ARMS:
+            raise ValueError(f"{stage}'s reverse set is not chosen: set A2A_WIDE_REVERSE_SET to one of "
+                             "A2A_RSET_SWEEP_ARMS")
         settings = (a2a_ackroute_settings(tuning) if stage == A2A_ACKROUTE_STAGE
                     else a2a_ackroute_fwd_settings(tuning) if stage == A2A_ACKROUTE_FWD_STAGE
                     else a2a_downlink_spray_settings(tuning) if stage == A2A_DOWNLINK_SPRAY_STAGE
