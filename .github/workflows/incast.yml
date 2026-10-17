@@ -161,7 +161,10 @@ jobs:
         df -h / "$RUNNER_TEMP"
         if [[ -d "$CCACHE_DIR" ]]; then
           echo "[runner] ccache $(du -sh "$CCACHE_DIR" | cut -f1) in $(find "$CCACHE_DIR" -type f | wc -l) files"
-          [[ -f "$CCACHE_DIR/ccache.conf" ]] && sed 's/^/[runner] ccache.conf /' "$CCACHE_DIR/ccache.conf"
+          if [[ -f "$CCACHE_DIR/ccache.conf" ]]; then
+            echo "[runner] ccache.conf $(wc -l < "$CCACHE_DIR/ccache.conf") lines, $(stat -c %s "$CCACHE_DIR/ccache.conf") B"
+            grep -v '^[[:space:]]*$' "$CCACHE_DIR/ccache.conf" | head -20 | sed 's/^/[runner] ccache.conf /'
+          fi
           find "$CCACHE_DIR" \( -name '*lock*' -o -name '*alive*' -o -name '*.tmp*' \) \
             -printf '[runner] ccache %TY-%Tm-%Td %TH:%TM %s B %P\n' | head -50
         else
