@@ -295,8 +295,9 @@ and per faulted run:
   answers, an _up hold is correct when its sender is on leaf 0 (toward any
   leaf: the data crosses the link) or it is toward leaf 0 (the answers
   cross it), and a _down hold when it is toward leaf 1 (the data) or its
-  sender is on leaf 1 (the answers); under spray, where the answers take
-  spines their receivers draw, only the data path counts: an _up hold is
+  sender is on leaf 1 (the answers); under spray, reverse_set and repath,
+  where the answers take spines their receivers choose (drawn per answer,
+  or kept per connection), only the data path counts: an _up hold is
   correct when its sender is on leaf 0, a _down hold when it is toward
   leaf 1. A hold toward every leaf is correct only where its sender alone
   makes it so.
@@ -2239,7 +2240,10 @@ def downlink_markdown(cells: list[dict]) -> str:
 # routing of the answers, and the answers lost on each spine.
 
 A2A_ACKROUTE_REFERENCE = "reps_tail"
-A2A_ACK_ROUTES = ("data_spine", "spray")
+# The routings of the answers a hold is read under: data_spine, over the
+# data's spine; spray, a spine the receiver draws per answer; reverse_set and
+# repath, routes the receiver keeps per connection.
+A2A_ACK_ROUTES = ("data_spine", "spray", "reverse_set", "repath")
 # The leaf of the faulted link of a condition's direction: leaf 0's uplink
 # for _up, the downlink to leaf 1 for _down.
 A2A_FAULT_LEAF = {"up": 0, "down": 1}

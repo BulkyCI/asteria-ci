@@ -1164,6 +1164,13 @@ class AckRoute(unittest.TestCase):
                 self.assertFalse(correct(route, condition, 0, 0))
             for condition in ("blackhole_down", "loss1e2_down"):
                 self.assertFalse(correct(route, condition, 1, 1))
+        # Under the per-connection routes, as under spray, only the data's
+        # path counts.
+        for route in ("reverse_set", "repath"):
+            for condition in ("blackhole_up", "loss1e2_up", "blackhole_down", "loss1e2_down"):
+                for sender, destination in ((0, 4), (4, 0), (4, 1), (1, 4), (0, None), (1, None)):
+                    self.assertEqual(correct(route, condition, sender, destination),
+                                     correct("spray", condition, sender, destination), (route, condition))
         with self.assertRaisesRegex(ValueError, "ack_route"):
             correct("echo", "blackhole_up", 0, 5)
         with self.assertRaisesRegex(ValueError, "faulted direction"):
@@ -1172,7 +1179,7 @@ class AckRoute(unittest.TestCase):
     def test_analyzer(self):
         onset = analyze.DEGRADE_AT_NS
         costs = {"reps_hold_auto_tail4": [300, 310, 320], "reps_hold_auto_tail4_route_oracle": [100, 110, 120],
-                 "reps_tail": [400, 420, 440]}
+                 "reps_tail": [400, 420, 440], "reps_hold_auto_tail4_cover_reverse_set": [200, 210, 220]}
         # Holds of spine 3: host 0 on leaf 0 toward leaf 5, host 9 on leaf 1
         # toward leaf 0, and host 9 of host scope; host 0 of spine 2.
         holds = ("time_ns,rank,destination_leaf,spine,sent,lost,grade\n"
@@ -1183,7 +1190,8 @@ class AckRoute(unittest.TestCase):
             root = Path(directory)
             runs = []
             for arm, values in costs.items():
-                setting = {"ack_route": "spray", **({"ack_route_oracle": True} if "oracle" in arm else {})}
+                setting = {"ack_route": "reverse_set" if arm.endswith("reverse_set") else "spray",
+                           **({"ack_route_oracle": True} if "oracle" in arm else {})}
                 for seed, cost in zip((301, 302, 303), values):
                     for condition, extra in (("healthy", 0), ("blackhole_up", cost)):
                         r = {**run(arm, "ep64", "256k", condition, seed, "a2a_ackroute_4k", setting),
@@ -1218,6 +1226,11 @@ class AckRoute(unittest.TestCase):
         # toward leaf 0 and host 0's of spine 2 are false.
         self.assertEqual(hold["sender_hold_reading"],
                          [{"correct_holds": 1, "false_holds": 3, "correct_held_rows": 2, "false_held_rows": 3}] * 3)
+        # A run under reverse_set is read under its own routing, which, as
+        # spray, counts the data's path alone.
+        reverse_set = cell["arms"]["reps_hold_auto_tail4_cover_reverse_set"]
+        self.assertEqual(reverse_set["ack_route"], ["reverse_set"] * 3)
+        self.assertEqual(reverse_set["sender_hold_reading"], hold["sender_hold_reading"])
         # Under data_spine host 9's toward leaf 0 are correct too.
         self.assertEqual(data_spine["arms"]["reps_hold_auto_tail4"]["sender_hold_reading"],
                          [{"correct_holds": 3, "false_holds": 1, "correct_held_rows": 4, "false_held_rows": 1}] * 3)
