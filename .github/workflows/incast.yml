@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       stages:
-        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k, a2a_downlink_spray_4k, a2a_twoend_4k, a2a_hostlink_s_4k, a2a_twoend_base_4k, a2a_twoend_retract_4k, a2a_overdue_4k, a2a_rset_sweep_4k, a2a_twoend_rset_4k, a2a_spines<P>_probe_4k and a2a_spines<P>_calibration_4k for P in 8, 32, 128, 256, a2a_wide<P>_calibration_4k and a2a_wide<P>_4k for P in 8, 32, 128, 256, a2a_wide<P>_validity_4k for P in 32, 128, 256)
+        description: Comma-separated stages of incast/profiles.py (binding, calibration, gain, tuning, comparison, kill, edge, short, t_calibration, t_tuning, t_comparison, a2a_probe, a2a_oracle_calibration, a2a_gate, a2a_calibration, a2a_tuning, a2a_tuning_mix, a2a_comparison, a2a_gate_reps, a2a_candidates, a2a_receiver, a2a_rs3, a2a_tail, a2a_ackloss, a2a_candidates_ack, a2a_tail_ack, a2a_probe_4k, a2a_calibration_4k, a2a_tail_ack_4k, a2a_sweep_4k, a2a_downlink_4k, a2a_decode_probe_4k, a2a_decode_calibration_4k, a2a_decode_4k, a2a_reaction_4k, ar_parity_probe_4k, ar_parity_calibration_4k, ar_parity_4k, a2a_ackroute_4k, a2a_noack_4k, a2a_hostlink_4k, a2a_ackroute_fwd_4k, a2a_downlink_spray_4k, a2a_twoend_4k, a2a_hostlink_s_4k, a2a_twoend_base_4k, a2a_twoend_retract_4k, a2a_overdue_4k, a2a_rset_sweep_4k, a2a_twoend_rset_4k, a2a_spines<P>_probe_4k and a2a_spines<P>_calibration_4k for P in 8, 32, 128, 256, a2a_wide<P>_calibration_4k, a2a_wide<P>_4k and a2a_wide<P>_seeds_4k for P in 8, 32, 128, 256, a2a_wide<P>_validity_4k for P in 32, 128, 256)
         required: true
         type: string
       record_filter:
@@ -536,10 +536,10 @@ jobs:
             > results/a2a_hostlink_s_4k_holds.json
           cat results/a2a_hostlink_s_4k_holds.md >> "$GITHUB_STEP_SUMMARY"
         fi
-        # Each wide-leaf comparison against reps_tail, with the sender holds
-        # read against the run's failed links under sprayed answers.
-        for wide in 8 32 128 256; do
-          stage="a2a_wide${wide}_4k"
+        # Each wide-leaf comparison against reps_tail, and its more seeds,
+        # with the sender holds read against the run's failed links under
+        # each run's answer route.
+        for stage in a2a_wide{8,32,128,256}_4k a2a_wide{8,32,128,256}_seeds_4k; do
           if [[ ",${STAGES// /}," == *,$stage,* ]]; then
             python3 incast/analyze.py a2a_ackroute --runs results/runs.json --out-root results \
               --stage "$stage" --markdown "results/${stage}_holds.md" > "results/${stage}_holds.json"
