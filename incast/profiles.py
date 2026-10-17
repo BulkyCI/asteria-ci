@@ -855,7 +855,9 @@ A2A_TRANSPORT_ARMS = {**A2A_TAIL_ARMS, **A2A_ACK_ARMS, **A2A_TAIL_ACK_ARMS,
                       "reps_hold_leaf_tail_ack_cover": "reps_hold_auto",
                       "reps_flow_hold_tail_ack_cover": "reps_flow_hold",
                       "reps_hold_auto_tail4_cover_reverse_set": "reps_hold_auto",
-                      "reps_hold_auto_tail4_cover_repath": "reps_hold_auto"}
+                      "reps_hold_auto_tail4_cover_repath": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_rx_answer_seq": "reps_hold_auto",
+                      "reps_hold_auto_tail4_cover_reverse_set_rx": "reps_hold_auto"}
 # The settled fixture. The stages named *_4k and the ring's run on it, where
 # every stage above runs on the generator's defaults; a stage takes it from
 # A2A_STAGE_FIXTURE, and each of its runs carries it as fixture, less the
@@ -1378,13 +1380,19 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   blackhole up and the two multi-fault draws alone, each with its healthy
 #   pair (A2A_WIDE_ARM_CONDITIONS), reps_hold_auto_tail4_cover_answer_seq,
 #   a2a_twoend_4k's, and reps_hold_auto_tail4_cover_reverse_set,
-#   a2a_twoend_base_4k's. Every arm takes the stage's overdue repair
+#   a2a_twoend_base_4k's; and, on every condition,
+#   reps_hold_auto_tail4_cover_rx_answer_seq, reps_hold_auto_tail4_cover_rx
+#   with answer path sequences (A2A_ANSWER_PATH_SEQ), and
+#   reps_hold_auto_tail4_cover_reverse_set_rx, the reverse set with the
+#   receiver's hold of reps_hold_auto_tail4_cover_rx (A2A_WIDE_RECEIVER).
+#   Every arm takes the stage's overdue repair
 #   (A2A_WIDE_OVERDUE_REPAIR): "off", none, or K, overdue_repair reprobe
 #   with overdue_repair_limit K as in A2A_OVERDUE, which reps_tail,
 #   uniform_tail and reps_oracle_tail_fwd read as the hold arms do, after the
 #   same wait of 2 base RTTs (held_loss_rtts' default). It is off; None
 #   would leave it unchosen, and a2a_stage_runs refuses the stage then.
-#   reps_hold_auto_tail4_cover_reverse_set takes the reverse set's setting
+#   reps_hold_auto_tail4_cover_reverse_set and
+#   reps_hold_auto_tail4_cover_reverse_set_rx take the reverse set's setting
 #   the stage names (A2A_WIDE_REVERSE_SET), one of a2a_rset_sweep_4k's arms
 #   (A2A_RSET_SWEEP_ARMS), whose keys it adds. It is
 #   reps_hold_auto_tail4_cover_reverse_set_2x4_answer, a set of 2 spines
@@ -1407,7 +1415,8 @@ A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIR
 A2A_WIDE_RECEIVER = {**A2A_RECEIVER_HOLD, "receiver_tail_missing": True, **A2A_STRAY_CLOSED}
 A2A_WIDE_ARMS = ("reps_tail", "uniform_tail", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
                  "reps_oracle_tail_fwd", "reps_hold_auto_tail4_cover_answer_seq",
-                 "reps_hold_auto_tail4_cover_reverse_set")
+                 "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_rx_answer_seq",
+                 "reps_hold_auto_tail4_cover_reverse_set_rx")
 A2A_WIDE_ARM_CONDITIONS = {arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2")
                            for arm in ("reps_hold_auto_tail4_cover_answer_seq",
                                        "reps_hold_auto_tail4_cover_reverse_set")}
@@ -1878,7 +1887,11 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     for reps_hold_auto_tail4_cover_rx, reps_oracle_tail_fwd's of
     a2a_ackroute_fwd_4k, reps_hold_auto_tail4_cover_answer_seq's of
     a2a_twoend_4k and reps_hold_auto_tail4_cover_reverse_set's of
-    a2a_twoend_base_4k with A2A_WIDE_REVERSE_SET's keys; every arm with
+    a2a_twoend_base_4k with A2A_WIDE_REVERSE_SET's keys;
+    reps_hold_auto_tail4_cover_rx's with A2A_ANSWER_PATH_SEQ for
+    reps_hold_auto_tail4_cover_rx_answer_seq, and
+    reps_hold_auto_tail4_cover_reverse_set's with A2A_WIDE_RECEIVER for
+    reps_hold_auto_tail4_cover_reverse_set_rx; every arm with
     overdue_repair reprobe and overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR
     where that is a limit."""
     twoend = a2a_twoend_settings(tuning)
@@ -1894,6 +1907,10 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
             **a2a_twoend_base_settings(tuning)["reps_hold_auto_tail4_cover_reverse_set"],
             **A2A_RSET_SWEEP_ARMS.get(A2A_WIDE_REVERSE_SET, {})},
     }
+    settings["reps_hold_auto_tail4_cover_rx_answer_seq"] = {**settings["reps_hold_auto_tail4_cover_rx"],
+                                                           **A2A_ANSWER_PATH_SEQ}
+    settings["reps_hold_auto_tail4_cover_reverse_set_rx"] = {**settings["reps_hold_auto_tail4_cover_reverse_set"],
+                                                            **A2A_WIDE_RECEIVER}
     overdue = ({} if A2A_WIDE_OVERDUE_REPAIR in (None, "off")
                else {"overdue_repair": "reprobe", "overdue_repair_limit": A2A_WIDE_OVERDUE_REPAIR})
     return {arm: {**settings[arm], **overdue} for arm in A2A_WIDE_ARMS}

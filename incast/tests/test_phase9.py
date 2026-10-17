@@ -42,11 +42,11 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_spines{spines}_calibration_4k": 6 for spines in (8, 32, 128, 256)},
                  # Per P, the wide-leaf validity run of each pair (P above 8),
                  # the calibration's 2 pairs at 3 seeds, and the comparison's
-                 # 2 pairs by 7 conditions by 5 arms by 3 seeds, and by 4
+                 # 2 pairs by 7 conditions by 7 arms by 3 seeds, and by 4
                  # (3 conditions and healthy) by 2 arms by 3 seeds.
                  **{f"a2a_wide{wide}_validity_4k": 2 for wide in (32, 128, 256)},
                  **{f"a2a_wide{wide}_calibration_4k": 6 for wide in (8, 32, 128, 256)},
-                 **{f"a2a_wide{wide}_4k": 258 for wide in (8, 32, 128, 256)}}
+                 **{f"a2a_wide{wide}_4k": 342 for wide in (8, 32, 128, 256)}}
 
 
 def measured_spines():
@@ -2323,7 +2323,7 @@ class Wide(unittest.TestCase):
     @measured_4k()
     def test_members(self):
         runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
-        self.assertEqual(len(runs), 258)
+        self.assertEqual(len(runs), 342)
         self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_WIDE_ARMS))
         conditions = set(profiles.A2A_WIDE_CONDITIONS) | {"healthy"}
         for arm in profiles.A2A_WIDE_ARMS:
@@ -2348,7 +2348,9 @@ class Wide(unittest.TestCase):
             self.assertEqual(network.get("sparse_hold_trace"), True if hold else None)
             self.assertNotIn("port_counter_interval_ns", network)
             self.assertEqual(network["load_balancing"]["ack_route"],
-                             "reverse_set" if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set" else "spray")
+                             "reverse_set" if r["arm"] in ("reps_hold_auto_tail4_cover_reverse_set",
+                                                           "reps_hold_auto_tail4_cover_reverse_set_rx")
+                             else "spray")
             if r["arm"] == "reps_hold_auto_tail4_cover" and r["size"] == "2m":
                 self.assertEqual(network["load_balancing"]["loss_thresholds"],
                                  self.calibration["per_receiver"]["ep64-2m-p4096-w32"]["loss_thresholds"]["24648"])
@@ -2380,9 +2382,18 @@ class Wide(unittest.TestCase):
         self.assertEqual(settings["reps_hold_auto_tail4_cover_reverse_set"],
                          {**cover, "ack_route": "reverse_set", "ack_route_set_probe_rtts": 4,
                           "ack_route_set_reply": "answer"})
+        # The two-ended arm and the reverse set with the receiver's hold:
+        # each its two arms' keys together.
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_rx_answer_seq"],
+                         {**settings["reps_hold_auto_tail4_cover_rx"], "answer_path_seq": True})
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_rx_answer_seq"],
+                         {**settings["reps_hold_auto_tail4_cover_answer_seq"], **profiles.A2A_WIDE_RECEIVER})
+        self.assertEqual(settings["reps_hold_auto_tail4_cover_reverse_set_rx"],
+                         {**settings["reps_hold_auto_tail4_cover_reverse_set"], **profiles.A2A_WIDE_RECEIVER})
         self.assertEqual({arm: setting["ack_route"] for arm, setting in settings.items()},
                          {**{arm: "spray" for arm in profiles.A2A_WIDE_ARMS},
-                          "reps_hold_auto_tail4_cover_reverse_set": "reverse_set"})
+                          "reps_hold_auto_tail4_cover_reverse_set": "reverse_set",
+                          "reps_hold_auto_tail4_cover_reverse_set_rx": "reverse_set"})
         # The comparison reads its own P's calibration cells.
         lacking = {**self.calibration, "per_receiver": {
             k: v for k, v in self.calibration["per_receiver"].items() if not k.endswith("-w128")}}
@@ -2393,7 +2404,7 @@ class Wide(unittest.TestCase):
         # The committed calibration holds the 32-spine wide-leaf cells, so the
         # comparison at 32 plans on it alone; 128 and 256 still lack theirs.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
-        self.assertEqual(len(profiles.a2a_stage_runs("a2a_wide32_4k", committed, self.tuning)), 258)
+        self.assertEqual(len(profiles.a2a_stage_runs("a2a_wide32_4k", committed, self.tuning)), 342)
         for stage in ("a2a_wide128_4k", "a2a_wide256_4k"):
             with self.assertRaisesRegex(ValueError, "no calibrated loss thresholds"):
                 profiles.a2a_stage_runs(stage, committed, self.tuning)
@@ -2434,21 +2445,20 @@ class Wide(unittest.TestCase):
         with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", "reps_hold_auto_tail4_cover_reverse_set"):
             base = profiles.a2a_wide_settings(self.tuning)
         keys = ("ack_route_set_size", "ack_route_set_probe_rtts", "ack_route_set_reply")
+        reverse_set = ("reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_reverse_set_rx")
         for chosen, expected in (("reps_hold_auto_tail4_cover_reverse_set_2x4_answer", (None, 4, "answer")),
                                  ("reps_hold_auto_tail4_cover_reverse_set_4x4_answer", (4, 4, "answer"))):
             with mock.patch.object(profiles, "A2A_WIDE_REVERSE_SET", chosen):
                 settings = profiles.a2a_wide_settings(self.tuning)
                 for arm, setting in settings.items():
                     self.assertEqual(setting, {**base[arm], **(profiles.A2A_RSET_SWEEP_ARMS[chosen]
-                                                               if arm == "reps_hold_auto_tail4_cover_reverse_set"
-                                                               else {})})
+                                                               if arm in reverse_set else {})})
                 runs = profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
-                self.assertEqual(len(runs), 258)
+                self.assertEqual(len(runs), 342)
                 for r in runs:
                     balancing = profiles.a2a_stage_profile(r, self.calibration)["network"]["load_balancing"]
                     self.assertEqual(tuple(balancing.get(k) for k in keys),
-                                     expected if r["arm"] == "reps_hold_auto_tail4_cover_reverse_set"
-                                     else (None, None, None), r["key"])
+                                     expected if r["arm"] in reverse_set else (None, None, None), r["key"])
 
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
@@ -2537,7 +2547,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_twoend_base_4k": set(profiles.A2A_TWOEND_BASE_ARMS),
                  "a2a_twoend_retract_4k": set(profiles.A2A_TWOEND_RETRACT_ARMS),
                  **{stage: {"reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
-                            "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set"}
+                            "reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set",
+                            "reps_hold_auto_tail4_cover_rx_answer_seq", "reps_hold_auto_tail4_cover_reverse_set_rx"}
                     for stage in profiles.A2A_WIDE_STAGES},
                  "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"},
                  "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS),
