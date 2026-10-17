@@ -1398,6 +1398,14 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   reps_hold_auto_tail4_cover_reverse_set_2x4_answer, a set of 2 spines
 #   probed once per 4 base RTTs with the replies queued as the answers are;
 #   None would leave it unchosen, and a2a_stage_runs refuses the stage then.
+# - a2a_wide<P>_seeds_4k: seeds 304-306 (A2A_WIDE_SEEDS_SEEDS) of
+#   a2a_wide<P>_4k's reps_hold_auto_tail4_cover,
+#   reps_hold_auto_tail4_cover_rx, reps_hold_auto_tail4_cover_reverse_set
+#   and reps_hold_auto_tail4_cover_reverse_set_rx (A2A_WIDE_SEEDS_ARMS) on
+#   the two multi-fault draws of both pairs, and of the first two on 256 KiB
+#   loss 1e-2 down (A2A_WIDE_SEEDS_CELLS, A2A_WIDE_SEEDS_ARM_CONDITIONS),
+#   each with its healthy pairs, at a2a_wide<P>_4k's settings: each run's
+#   profile is that stage's run of its arm and cell but for its name.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1425,6 +1433,15 @@ A2A_WIDE_REVERSE_SET: str | None = "reps_hold_auto_tail4_cover_reverse_set_2x4_a
 A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
 A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
+A2A_WIDE_SEEDS_ARMS = ("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
+                       "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_reverse_set_rx")
+A2A_WIDE_SEEDS_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
+                             for condition in ("multi_loss1e3", "multi_loss1e2")) + (("ep64", "256k", "loss1e2_down"),)
+A2A_WIDE_SEEDS_ARM_CONDITIONS = {arm: ("multi_loss1e3", "multi_loss1e2")
+                                 for arm in ("reps_hold_auto_tail4_cover_reverse_set",
+                                             "reps_hold_auto_tail4_cover_reverse_set_rx")}
+A2A_WIDE_SEEDS_SEEDS = (304, 305, 306)
+A2A_WIDE_SEEDS_STAGES = {f"a2a_wide{wide}_seeds_4k": wide for wide in A2A_WIDE}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1449,7 +1466,7 @@ A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
                           for stage, spines in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
-                          for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES)
+                          for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1976,6 +1993,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_RSET_SWEEP_STAGE: (A2A_RSET_SWEEP_CELLS, tuple(A2A_RSET_SWEEP_ARMS)),
         A2A_TWOEND_RSET_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_RSET_ARMS),
         **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
+        **{seeds_stage: (A2A_WIDE_SEEDS_CELLS, A2A_WIDE_SEEDS_ARMS) for seeds_stage in A2A_WIDE_SEEDS_STAGES},
     }[stage]
 
 
@@ -2138,10 +2156,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         if uncalibrated:
             raise ValueError(f"{stage}'s hold arms have no calibrated loss thresholds on {uncalibrated}: "
                              "merge the payload's calibration pass into a2a_calibration.json")
-        if stage in A2A_WIDE_STAGES and A2A_WIDE_OVERDUE_REPAIR is None:
+        wide_family = stage in A2A_WIDE_STAGES or stage in A2A_WIDE_SEEDS_STAGES
+        if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
-        if stage in A2A_WIDE_STAGES and A2A_WIDE_REVERSE_SET not in A2A_RSET_SWEEP_ARMS:
+        if wide_family and A2A_WIDE_REVERSE_SET not in A2A_RSET_SWEEP_ARMS:
             raise ValueError(f"{stage}'s reverse set is not chosen: set A2A_WIDE_REVERSE_SET to one of "
                              "A2A_RSET_SWEEP_ARMS")
         settings = (a2a_ackroute_settings(tuning) if stage == A2A_ACKROUTE_STAGE
@@ -2153,6 +2172,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_twoend_retract_settings(tuning) if stage == A2A_TWOEND_RETRACT_STAGE
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
+                    else {arm: setting for arm, setting in a2a_wide_settings(tuning).items()
+                          if arm in A2A_WIDE_SEEDS_ARMS} if stage in A2A_WIDE_SEEDS_STAGES
                     else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE
                     else a2a_rset_sweep_settings(tuning) if stage == A2A_RSET_SWEEP_STAGE
                     else a2a_twoend_rset_settings(tuning) if stage == A2A_TWOEND_RSET_STAGE
@@ -2160,8 +2181,10 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         _, shared = a2a_shared_4k(stage)
         # An arm a stage runs on some of its conditions only, and their
         # healthy pairs.
-        arm_conditions = A2A_WIDE_ARM_CONDITIONS if stage in A2A_WIDE_STAGES else {}
-        seeds = A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE else A2A_SEEDS["comparison"]
+        arm_conditions = (A2A_WIDE_ARM_CONDITIONS if stage in A2A_WIDE_STAGES
+                          else A2A_WIDE_SEEDS_ARM_CONDITIONS if stage in A2A_WIDE_SEEDS_STAGES else {})
+        seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
+                 else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES else A2A_SEEDS["comparison"])
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
                 if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):

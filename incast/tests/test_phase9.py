@@ -46,7 +46,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # (3 conditions and healthy) by 2 arms by 3 seeds.
                  **{f"a2a_wide{wide}_validity_4k": 2 for wide in (32, 128, 256)},
                  **{f"a2a_wide{wide}_calibration_4k": 6 for wide in (8, 32, 128, 256)},
-                 **{f"a2a_wide{wide}_4k": 342 for wide in (8, 32, 128, 256)}}
+                 **{f"a2a_wide{wide}_4k": 342 for wide in (8, 32, 128, 256)},
+                 # The more seeds: 3 seeds of 4 arms on the 4 multi-fault cells
+                 # and 2 healthy pairs, and of 2 arms on 256 KiB loss1e2_down.
+                 **{f"a2a_wide{wide}_seeds_4k": 78 for wide in (8, 32, 128, 256)}}
 
 
 def measured_spines():
@@ -2480,6 +2483,31 @@ class Wide(unittest.TestCase):
                     self.assertEqual(tuple(balancing.get(k) for k in keys),
                                      expected if r["arm"] in reverse_set else (None, None, None), r["key"])
 
+    def test_seeds(self):
+        # Seeds 304-306 of 4 arms on the 4 multi-fault cells and of S and rx
+        # on 256 KiB loss1e2_down, with healthy pairs: each run's profile is
+        # the comparison's of its arm and cell but for its name.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        for wide in (8, 32):
+            runs = profiles.a2a_stage_runs(f"a2a_wide{wide}_seeds_4k", committed, self.tuning)
+            self.assertEqual(len(runs), 78)
+            self.assertEqual({r["seed"] for r in runs}, {304, 305, 306})
+            cells = {arm: {(r["size"], r["condition"]) for r in runs if r["arm"] == arm}
+                     for arm in profiles.A2A_WIDE_SEEDS_ARMS}
+            multi = {(size, condition) for size in ("256k", "2m")
+                     for condition in ("multi_loss1e3", "multi_loss1e2", "healthy")}
+            self.assertEqual(cells, {"reps_hold_auto_tail4_cover": multi | {("256k", "loss1e2_down")},
+                                     "reps_hold_auto_tail4_cover_rx": multi | {("256k", "loss1e2_down")},
+                                     "reps_hold_auto_tail4_cover_reverse_set": multi,
+                                     "reps_hold_auto_tail4_cover_reverse_set_rx": multi})
+            comparison = {(r["arm"], r["size"], r["condition"]): profiles.a2a_stage_profile(r, committed)
+                          for r in profiles.a2a_stage_runs(f"a2a_wide{wide}_4k", committed, self.tuning)
+                          if r["seed"] == 301}
+            for r in runs:
+                document = profiles.a2a_stage_profile(r, committed)
+                pair = comparison[(r["arm"], r["size"], r["condition"])]
+                self.assertEqual({**document, "name": pair["name"]}, pair, r["key"])
+
     def test_multi_fault(self):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
                          [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
@@ -2572,7 +2600,8 @@ class CopyDeadline(unittest.TestCase):
                     for stage in profiles.A2A_WIDE_STAGES},
                  "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"},
                  "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS),
-                 "a2a_twoend_rset_4k": set(profiles.A2A_TWOEND_RSET_ARMS)}
+                 "a2a_twoend_rset_4k": set(profiles.A2A_TWOEND_RSET_ARMS),
+                 **{stage: set(profiles.A2A_WIDE_SEEDS_ARMS) for stage in profiles.A2A_WIDE_SEEDS_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
