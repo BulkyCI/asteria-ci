@@ -49,19 +49,6 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_wide{wide}_4k": 258 for wide in (8, 32, 128, 256)}}
 
 
-# The wide-leaf comparisons' overdue repair, which a2a_stage_runs requires
-# chosen: off, but where a test sets it.
-_wide_overdue = mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", "off")
-
-
-def setUpModule():
-    _wide_overdue.start()
-
-
-def tearDownModule():
-    _wide_overdue.stop()
-
-
 def measured_spines():
     """Every path-count stage's pair taken as measured, at its 8-spine
     4096-byte gap."""
@@ -2335,6 +2322,8 @@ class Wide(unittest.TestCase):
         with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", None):
             with self.assertRaisesRegex(ValueError, "a2a_wide32_4k's overdue repair is not chosen"):
                 profiles.a2a_stage_runs("a2a_wide32_4k", self.calibration, self.tuning)
+        # Off, as committed.
+        self.assertEqual(profiles.A2A_WIDE_OVERDUE_REPAIR, "off")
         off = profiles.a2a_wide_settings(self.tuning)
         self.assertFalse(any("overdue_repair" in setting for setting in off.values()))
         with mock.patch.object(profiles, "A2A_WIDE_OVERDUE_REPAIR", 3):

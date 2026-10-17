@@ -1345,8 +1345,8 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   (A2A_WIDE_OVERDUE_REPAIR): "off", none, or K, overdue_repair reprobe
 #   with overdue_repair_limit K as in A2A_OVERDUE, which reps_tail,
 #   uniform_tail and reps_oracle_tail_fwd read as the hold arms do, after the
-#   same wait of 2 base RTTs (held_loss_rtts' default). It is None until
-#   chosen, and a2a_stage_runs refuses the stage until then.
+#   same wait of 2 base RTTs (held_loss_rtts' default). It is off; None
+#   would leave it unchosen, and a2a_stage_runs refuses the stage then.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1368,7 +1368,7 @@ A2A_WIDE_ARMS = ("reps_tail", "uniform_tail", "reps_hold_auto_tail4_cover", "rep
 A2A_WIDE_ARM_CONDITIONS = {arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2")
                            for arm in ("reps_hold_auto_tail4_cover_answer_seq",
                                        "reps_hold_auto_tail4_cover_reverse_set")}
-A2A_WIDE_OVERDUE_REPAIR: str | int | None = None
+A2A_WIDE_OVERDUE_REPAIR: str | int | None = "off"
 A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
 A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
