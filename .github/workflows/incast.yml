@@ -286,6 +286,26 @@ jobs:
       working-directory: asteria
       run: bash ci/dcs/install-runtime.sh cluster-runtime-x86-64-v3.tar.gz
 
+    # A full cluster scratch fails a shard at job set-up, before any step
+    # can report it, so each shard that does start records its own
+    # footprint and the scratch's state; shard s000 also sizes the shared
+    # tree, once per run, to keep the load on the network file system low.
+    - name: Report the cluster scratch
+      if: ${{ inputs.runner == 'dcs' }}
+      continue-on-error: true
+      env:
+        SHARD: ${{ matrix.shard.id }}
+      run: |
+        set +e
+        job_dir="$(cd "$RUNNER_WORKSPACE/../.." && pwd -P)"
+        echo "[scratch] job dir ${job_dir}: $(timeout 120 du -sh "$job_dir" 2>/dev/null | cut -f1)"
+        df -hP "$job_dir" | sed 's/^/[scratch] /'
+        if command -v quota >/dev/null; then quota -s 2>&1 | sed 's/^/[scratch] /'; fi
+        if [[ "$SHARD" == s000 ]]; then
+          parent="$(dirname "$job_dir")"
+          echo "[scratch] $(find "$parent" -mindepth 1 -maxdepth 1 -type d | wc -l) entries under ${parent}"
+          timeout 300 du -sh "$parent"/* 2>/dev/null | sort -h | tail -10 | sed 's/^/[scratch] /'
+        fi
     - name: Install pinned uv
       uses: astral-sh/setup-uv@v9.0.0
       with:
