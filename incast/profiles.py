@@ -1387,7 +1387,12 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   reps_hold_auto_tail4_cover_rx_answer_seq, reps_hold_auto_tail4_cover_rx
 #   with answer path sequences (A2A_ANSWER_PATH_SEQ), and
 #   reps_hold_auto_tail4_cover_reverse_set_rx, the reverse set with the
-#   receiver's hold of reps_hold_auto_tail4_cover_rx (A2A_WIDE_RECEIVER).
+#   receiver's hold of reps_hold_auto_tail4_cover_rx (A2A_WIDE_RECEIVER);
+#   and reps_hold_auto_tail4_cover_rx_slots8 on every condition, and
+#   reps_hold_auto_tail4_cover_reverse_set_rx_slots8 on the two multi-fault
+#   draws alone, each with its healthy pair, those two arms with the
+#   receiver's report a list of A2A_WIDE_SLOTS spines (receiver_hold_slots)
+#   in place of the bitmap over every spine.
 #   Every arm takes the stage's overdue repair
 #   (A2A_WIDE_OVERDUE_REPAIR): "off", none, or K, overdue_repair reprobe
 #   with overdue_repair_limit K as in A2A_OVERDUE, which reps_tail,
@@ -1425,13 +1430,18 @@ A2A_WIDE_CONDITIONS = ("loss1e3_up", "loss1e3_down", "loss1e2_down", "blackhole_
 A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
                        for condition in A2A_WIDE_CONDITIONS)
 A2A_WIDE_RECEIVER = {**A2A_RECEIVER_HOLD, "receiver_tail_missing": True, **A2A_STRAY_CLOSED}
+A2A_WIDE_SLOTS = 8
 A2A_WIDE_ARMS = ("reps_tail", "uniform_tail", "reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
                  "reps_oracle_tail_fwd", "reps_hold_auto_tail4_cover_answer_seq",
                  "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_rx_answer_seq",
-                 "reps_hold_auto_tail4_cover_reverse_set_rx")
-A2A_WIDE_ARM_CONDITIONS = {arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2")
-                           for arm in ("reps_hold_auto_tail4_cover_answer_seq",
-                                       "reps_hold_auto_tail4_cover_reverse_set")}
+                 "reps_hold_auto_tail4_cover_reverse_set_rx", f"reps_hold_auto_tail4_cover_rx_slots{A2A_WIDE_SLOTS}",
+                 f"reps_hold_auto_tail4_cover_reverse_set_rx_slots{A2A_WIDE_SLOTS}")
+A2A_WIDE_ARM_CONDITIONS = {
+    **{arm: ("blackhole_up", "multi_loss1e3", "multi_loss1e2")
+       for arm in ("reps_hold_auto_tail4_cover_answer_seq", "reps_hold_auto_tail4_cover_reverse_set")},
+    f"reps_hold_auto_tail4_cover_reverse_set_rx_slots{A2A_WIDE_SLOTS}": ("multi_loss1e3", "multi_loss1e2")}
+A2A_TRANSPORT_ARMS.update({f"{arm}_slots{A2A_WIDE_SLOTS}": "reps_hold_auto"
+                           for arm in ("reps_hold_auto_tail4_cover_rx", "reps_hold_auto_tail4_cover_reverse_set_rx")})
 A2A_WIDE_OVERDUE_REPAIR: str | int | None = "off"
 A2A_WIDE_REVERSE_SET: str | None = "reps_hold_auto_tail4_cover_reverse_set_2x4_answer"
 A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_WIDE if wide != A2A_WIDE_JOB_HOSTS}
@@ -1913,7 +1923,8 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     reps_hold_auto_tail4_cover_rx's with A2A_ANSWER_PATH_SEQ for
     reps_hold_auto_tail4_cover_rx_answer_seq, and
     reps_hold_auto_tail4_cover_reverse_set's with A2A_WIDE_RECEIVER for
-    reps_hold_auto_tail4_cover_reverse_set_rx; every arm with
+    reps_hold_auto_tail4_cover_reverse_set_rx; those two receiver arms'
+    with receiver_hold_slots A2A_WIDE_SLOTS for their _slots arms; every arm with
     overdue_repair reprobe and overdue_repair_limit A2A_WIDE_OVERDUE_REPAIR
     where that is a limit."""
     twoend = a2a_twoend_settings(tuning)
@@ -1933,6 +1944,8 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
                                                            **A2A_ANSWER_PATH_SEQ}
     settings["reps_hold_auto_tail4_cover_reverse_set_rx"] = {**settings["reps_hold_auto_tail4_cover_reverse_set"],
                                                             **A2A_WIDE_RECEIVER}
+    for arm in ("reps_hold_auto_tail4_cover_rx", "reps_hold_auto_tail4_cover_reverse_set_rx"):
+        settings[f"{arm}_slots{A2A_WIDE_SLOTS}"] = {**settings[arm], "receiver_hold_slots": A2A_WIDE_SLOTS}
     overdue = ({} if A2A_WIDE_OVERDUE_REPAIR in (None, "off")
                else {"overdue_repair": "reprobe", "overdue_repair_limit": A2A_WIDE_OVERDUE_REPAIR})
     return {arm: {**settings[arm], **overdue} for arm in A2A_WIDE_ARMS}
