@@ -52,7 +52,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # The more seeds: 3 seeds of 5 arms on the 4 multi-fault cells
                  # and 2 healthy pairs, and of 3 arms on 256 KiB loss1e2_down
                  # and loss1e3_down.
-                 **{f"a2a_wide{wide}_seeds_4k": 108 for wide in (8, 32, 128, 256)}}
+                 **{f"a2a_wide{wide}_seeds_4k": 108 for wide in (8, 32, 128, 256)},
+                 # The sentinel spread: 12 seeds of 2 arms on 256 KiB
+                 # loss1e2_down, the sparse draw and their healthy pair.
+                 **{f"a2a_wide{wide}_spread_4k": 72 for wide in (32, 256)}}
 
 
 def measured_spines():
@@ -2562,11 +2565,50 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.a2a_fault("multi_loss1e2"),
                          [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
                            "draw": {"fraction": 0.02, "seed": 1}}])
-        for condition in ("multi_blackhole", "multi", "multiloss1e3"):
+        self.assertEqual(profiles.a2a_fault("sparse_loss1e2"),
+                         [{"model": "gray", "error_rate": 0.01, "start_ns": profiles.DEGRADE_AT_NS,
+                           "draw": {"fraction": 0.001, "seed": 1}}])
+        for condition in ("multi_blackhole", "multi", "multiloss1e3", "sparse", "sparse_blackhole"):
             with self.assertRaisesRegex(ValueError, "unknown condition"):
                 profiles.a2a_fault(condition)
         self.assertTrue(analyze.multi_condition("multi_loss1e3"))
+        self.assertTrue(analyze.multi_condition("sparse_loss1e2"))
         self.assertFalse(analyze.multi_condition("loss1e3_up"))
+
+    def test_spread(self):
+        # Seeds 301-312 of S and rx with 8 slots, each with a sentinel
+        # spread of 64, on 256 KiB loss1e2_down and the sparse draw with
+        # their healthy pair: each run's profile is the comparison's of its
+        # base arm and cell, or of loss1e2_down's but for its faults on the
+        # sparse draw, with held_sentinel_spread 64, but for its name (read
+        # at 32 spines).
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        for wide in (32, 256):
+            runs = profiles.a2a_stage_runs(f"a2a_wide{wide}_spread_4k", committed, self.tuning)
+            self.assertEqual(len(runs), 72)
+            self.assertEqual({r["seed"] for r in runs}, set(range(301, 313)))
+            self.assertEqual({r["arm"] for r in runs}, {"reps_hold_auto_tail4_cover_spread64",
+                                                        "reps_hold_auto_tail4_cover_rx_slots8_spread64"})
+            self.assertEqual({(r["size"], r["condition"]) for r in runs},
+                             {("256k", "loss1e2_down"), ("256k", "sparse_loss1e2"), ("256k", "healthy")})
+            # a2a_wide256_4k plans only with its 2 MiB pair calibrated.
+            if wide == 256:
+                continue
+            comparison = {(r["arm"], r["condition"]): profiles.a2a_stage_profile(r, committed)
+                          for r in profiles.a2a_stage_runs(f"a2a_wide{wide}_4k", committed, self.tuning)
+                          if r["seed"] == 301 and r["size"] == "256k"}
+            for r in runs:
+                document = profiles.a2a_stage_profile(r, committed)
+                base = r["arm"].removesuffix("_spread64")
+                pair = comparison[(base, "loss1e2_down" if r["condition"] == "sparse_loss1e2" else r["condition"])]
+                balancing = {**pair["network"]["load_balancing"], "held_sentinel_spread": 64}
+                expected = {**pair, "name": document["name"],
+                            "network": {**pair["network"], "load_balancing": balancing}}
+                if r["condition"] == "sparse_loss1e2":
+                    unit = pair["network"]["link_failures"][0]["loss_unit"]
+                    expected["network"]["link_failures"] = [{**failure, "loss_unit": unit}
+                                                            for failure in profiles.a2a_fault("sparse_loss1e2")]
+                self.assertEqual(document, expected, r["key"])
 
     def test_reactions_read_the_runs_fabric(self):
         # 32 hosts per leaf and 32 spines: host 20 is on leaf 0, host 40 on
@@ -2652,7 +2694,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_overdue_4k": set(profiles.A2A_OVERDUE_ARMS) - {"reps_hold_auto_tail4_od"},
                  "a2a_rset_sweep_4k": set(profiles.A2A_RSET_SWEEP_ARMS),
                  "a2a_twoend_rset_4k": set(profiles.A2A_TWOEND_RSET_ARMS),
-                 **{stage: set(profiles.A2A_WIDE_SEEDS_ARMS) for stage in profiles.A2A_WIDE_SEEDS_STAGES}}
+                 **{stage: set(profiles.A2A_WIDE_SEEDS_ARMS) for stage in profiles.A2A_WIDE_SEEDS_STAGES},
+                 **{stage: set(profiles.A2A_WIDE_SPREAD_ARMS) for stage in profiles.A2A_WIDE_SPREAD_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

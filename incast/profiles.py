@@ -1416,16 +1416,26 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   A2A_WIDE_SEEDS_ARM_CONDITIONS),
 #   each with its healthy pairs, at a2a_wide<P>_4k's settings: each run's
 #   profile is that stage's run of its arm and cell but for its name.
+# - a2a_wide<P>_spread_4k (P of A2A_WIDE_SPREAD_WIDE): seeds 301-312
+#   (A2A_WIDE_SPREAD_SEEDS) of reps_hold_auto_tail4_cover and
+#   reps_hold_auto_tail4_cover_rx_slots8 with held_sentinel_spread
+#   A2A_WIDE_SPREAD, their _spread<N> arms (A2A_WIDE_SPREAD_ARMS), at
+#   a2a_wide<P>_4k's settings otherwise, on 256 KiB loss 1e-2 down and the
+#   sparse draw at 1e-2 (A2A_WIDE_SPREAD_CELLS), each with its healthy pair.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
-# run of the condition at one P, the same fraction at every P.
+# run of the condition at one P, the same fraction at every P. A sparse
+# condition, sparse_<loss kind>, is drawn the same way at
+# A2A_SPARSE_FRACTION, 4 directions at 256 spines.
 A2A_WIDE_PAIRS = (("ep64", "256k"), ("ep64", "2m"))
 A2A_WIDE_VALIDITY_ITERATIONS = 2
 A2A_WIDE_PORT_COUNTER_NS = 50_000
 A2A_MULTI_PREFIX = "multi"
 A2A_MULTI_FRACTION = 0.02
 A2A_MULTI_SEED = 1
+A2A_SPARSE_PREFIX = "sparse"
+A2A_SPARSE_FRACTION = 0.001
 A2A_WIDE_CONDITIONS = ("loss1e3_up", "loss1e3_down", "loss1e2_down", "blackhole_up", "multi_loss1e3",
                        "multi_loss1e2")
 A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
@@ -1459,6 +1469,14 @@ A2A_WIDE_SEEDS_ARM_CONDITIONS = {arm: ("multi_loss1e3", "multi_loss1e2")
                                              "reps_hold_auto_tail4_cover_reverse_set_rx")}
 A2A_WIDE_SEEDS_SEEDS = (304, 305, 306)
 A2A_WIDE_SEEDS_STAGES = {f"a2a_wide{wide}_seeds_4k": wide for wide in A2A_WIDE}
+A2A_WIDE_SPREAD = 64
+A2A_WIDE_SPREAD_BASES = ("reps_hold_auto_tail4_cover", f"reps_hold_auto_tail4_cover_rx_slots{A2A_WIDE_SLOTS}")
+A2A_WIDE_SPREAD_ARMS = tuple(f"{arm}_spread{A2A_WIDE_SPREAD}" for arm in A2A_WIDE_SPREAD_BASES)
+A2A_TRANSPORT_ARMS.update({arm: "reps_hold_auto" for arm in A2A_WIDE_SPREAD_ARMS})
+A2A_WIDE_SPREAD_CELLS = (("ep64", "256k", "loss1e2_down"), ("ep64", "256k", f"{A2A_SPARSE_PREFIX}_loss1e2"))
+A2A_WIDE_SPREAD_SEEDS = tuple(range(301, 313))
+A2A_WIDE_SPREAD_WIDE = (32, 256)
+A2A_WIDE_SPREAD_STAGES = {f"a2a_wide{wide}_spread_4k": wide for wide in A2A_WIDE_SPREAD_WIDE}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1483,7 +1501,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stages in (A2A_SPINES_PROBE_STAGES, A2A_SPINES_CALIBRATION_STAGES)
                           for stage, spines in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
-                          for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES)
+                          for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES,
+                                         A2A_WIDE_SPREAD_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1596,7 +1615,7 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
         return []
     if condition.startswith(A2A_HOST_PREFIX):
         return a2a_host_fault(condition)
-    if condition.startswith(A2A_MULTI_PREFIX):
+    if condition.startswith((A2A_MULTI_PREFIX, A2A_SPARSE_PREFIX)):
         return a2a_multi_fault(condition)
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
     if condition == "structural":
@@ -1628,14 +1647,16 @@ def a2a_host_fault(condition: str) -> list[dict[str, Any]]:
 
 
 def a2a_multi_fault(condition: str) -> list[dict[str, Any]]:
-    """The link_failures of a multi-fault condition, multi_<loss kind>: a gray
-    loss at the kind's rate from the onset on A2A_MULTI_FRACTION of the
-    leaf-spine link directions, drawn by A2A_MULTI_SEED."""
-    loss = condition[len(A2A_MULTI_PREFIX) + 1:]
-    if not condition.startswith(f"{A2A_MULTI_PREFIX}_") or loss not in A2A_LOSS_RATES:
+    """The link_failures of a multi-fault condition, multi_<loss kind>, or a
+    sparse one, sparse_<loss kind>: a gray loss at the kind's rate from the
+    onset on A2A_MULTI_FRACTION, or A2A_SPARSE_FRACTION, of the leaf-spine
+    link directions, drawn by A2A_MULTI_SEED."""
+    prefix, _, loss = condition.partition("_")
+    fraction = {A2A_MULTI_PREFIX: A2A_MULTI_FRACTION, A2A_SPARSE_PREFIX: A2A_SPARSE_FRACTION}.get(prefix)
+    if fraction is None or loss not in A2A_LOSS_RATES:
         raise ValueError(f"unknown condition {condition}")
     return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
-             "draw": {"fraction": A2A_MULTI_FRACTION, "seed": A2A_MULTI_SEED}}]
+             "draw": {"fraction": fraction, "seed": A2A_MULTI_SEED}}]
 
 
 def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1953,6 +1974,14 @@ def a2a_wide_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]
     return {arm: {**settings[arm], **overdue} for arm in A2A_WIDE_ARMS}
 
 
+def a2a_wide_spread_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Each a2a_wide<P>_spread_4k arm's setting: its base arm's of
+    a2a_wide_settings with held_sentinel_spread A2A_WIDE_SPREAD."""
+    wide = a2a_wide_settings(tuning)
+    return {f"{arm}_spread{A2A_WIDE_SPREAD}": {**wide[arm], "held_sentinel_spread": A2A_WIDE_SPREAD}
+            for arm in A2A_WIDE_SPREAD_BASES}
+
+
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """settings with A2A_COPY_DEADLINE on every setting whose copies it
     expires, those under sentinel_mode duplicate; the others as given."""
@@ -2014,6 +2043,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         A2A_TWOEND_RSET_STAGE: (A2A_ACKROUTE_CELLS, A2A_TWOEND_RSET_ARMS),
         **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
         **{seeds_stage: (A2A_WIDE_SEEDS_CELLS, A2A_WIDE_SEEDS_ARMS) for seeds_stage in A2A_WIDE_SEEDS_STAGES},
+        **{spread_stage: (A2A_WIDE_SPREAD_CELLS, A2A_WIDE_SPREAD_ARMS) for spread_stage in A2A_WIDE_SPREAD_STAGES},
     }[stage]
 
 
@@ -2183,7 +2213,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                         if group not in A2A_ONE_LEAF_GROUPS and not calibrated("per_receiver", group, size)]
         if uncalibrated and not record_filter:
             refuse_uncalibrated(uncalibrated)
-        wide_family = stage in A2A_WIDE_STAGES or stage in A2A_WIDE_SEEDS_STAGES
+        wide_family = stage in A2A_WIDE_STAGES or stage in A2A_WIDE_SEEDS_STAGES or stage in A2A_WIDE_SPREAD_STAGES
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2201,6 +2231,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
                     else {arm: setting for arm, setting in a2a_wide_settings(tuning).items()
                           if arm in A2A_WIDE_SEEDS_ARMS} if stage in A2A_WIDE_SEEDS_STAGES
+                    else a2a_wide_spread_settings(tuning) if stage in A2A_WIDE_SPREAD_STAGES
                     else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE
                     else a2a_rset_sweep_settings(tuning) if stage == A2A_RSET_SWEEP_STAGE
                     else a2a_twoend_rset_settings(tuning) if stage == A2A_TWOEND_RSET_STAGE
@@ -2211,7 +2242,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         arm_conditions = (A2A_WIDE_ARM_CONDITIONS if stage in A2A_WIDE_STAGES
                           else A2A_WIDE_SEEDS_ARM_CONDITIONS if stage in A2A_WIDE_SEEDS_STAGES else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
-                 else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES else A2A_SEEDS["comparison"])
+                 else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
+                 else A2A_WIDE_SPREAD_SEEDS if stage in A2A_WIDE_SPREAD_STAGES else A2A_SEEDS["comparison"])
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
                 if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):

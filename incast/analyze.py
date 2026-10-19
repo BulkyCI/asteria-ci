@@ -1302,9 +1302,11 @@ def gate_reps_markdown(rows: list[dict]) -> str:
 A2A_SHARE_LIMIT = 1 / 16
 A2A_EARLY_WINDOW_NS = 500_000
 A2A_HOSTS_PER_LEAF_OF_TRACE = 8
-# profiles.py's A2A_MULTI_PREFIX: a condition multi_<loss kind> fails a drawn
-# set of link directions.
+# profiles.py's A2A_MULTI_PREFIX and A2A_SPARSE_PREFIX: a condition
+# multi_<loss kind> or sparse_<loss kind> fails a drawn set of link
+# directions.
 A2A_MULTI_PREFIX = "multi"
+A2A_SPARSE_PREFIX = "sparse"
 A2A_DEFAULT_LOSS_INTERVAL_NS = 2 * BASE_RTT_NS
 # The runs' retransmission timeout (profiles.py's retransmission_timeout_ns)
 # and NCCL's InfiniBand retry count, against which rto_run is read: a queue
@@ -1332,8 +1334,8 @@ def run_fabric(directory: Path) -> tuple[int, int]:
 
 def multi_condition(condition: str) -> bool:
     """Whether condition fails a drawn set of link directions (profiles.py
-    A2A_MULTI_PREFIX), no one spine."""
-    return condition.startswith(f"{A2A_MULTI_PREFIX}_")
+    A2A_MULTI_PREFIX or A2A_SPARSE_PREFIX), no one spine."""
+    return condition.startswith((f"{A2A_MULTI_PREFIX}_", f"{A2A_SPARSE_PREFIX}_"))
 
 
 def faulted_share_rows(condition: str, columns, hosts: int = A2A_HOSTS_PER_LEAF_OF_TRACE):
