@@ -59,7 +59,11 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # The receiver hold widened: 6 seeds of rx with 8 slots,
                  # spread and widened on 3 cells and their healthy pair, and
                  # of the two spread arms on multi_loss1e3 and healthy.
-                 "a2a_wide256_widen_4k": 48}
+                 "a2a_wide256_widen_4k": 48,
+                 # The receiver widening at its first loss: 3 seeds of that
+                 # arm on 3 cells and healthy, and of S spread and the
+                 # widened arm on loss1e3_down and healthy.
+                 "a2a_wide256_rauto_4k": 24}
 
 
 def measured_spines():
@@ -2612,6 +2616,38 @@ class Wide(unittest.TestCase):
                                                         for failure in profiles.a2a_fault("multi_loss1e3")]
             self.assertEqual(document, expected, r["key"])
 
+    def test_rauto(self):
+        # Seeds 307-309 of the widened receiver arm with
+        # receiver_hold_auto_leaves 1 on 256 KiB loss1e3_down, the sparse
+        # draw and multi_loss1e3, and of S spread and the widened arm on
+        # loss1e3_down, each with its healthy pair: each run's profile is the
+        # widened arm's (or S spread's) of a2a_wide256_widen_4k on healthy,
+        # with the cell's faults and, for the new arm, receiver_hold_auto_leaves
+        # 1, but for its name.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide256_rauto_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 24)
+        self.assertEqual({r["seed"] for r in runs}, {307, 308, 309})
+        widened = "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2"
+        rauto = f"{widened}_rauto1"
+        cells = {arm: {r["condition"] for r in runs if r["arm"] == arm} for arm in profiles.A2A_WIDE_RAUTO_ARMS}
+        self.assertEqual(cells, {"reps_hold_auto_tail4_cover_spread64": {"loss1e3_down", "healthy"},
+                                 widened: {"loss1e3_down", "healthy"},
+                                 rauto: {"loss1e3_down", "sparse_loss1e2", "multi_loss1e3", "healthy"}})
+        healthy = {(r["arm"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                   for r in profiles.a2a_stage_runs("a2a_wide256_widen_4k", committed, self.tuning)
+                   if r["condition"] == "healthy"}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            pair = healthy[(widened if r["arm"] == rauto else r["arm"], r["seed"])]
+            balancing = {**pair["network"]["load_balancing"],
+                         **({"receiver_hold_auto_leaves": 1} if r["arm"] == rauto else {})}
+            expected = {**pair, "name": document["name"], "network": {**pair["network"], "load_balancing": balancing}}
+            if r["condition"] != "healthy":
+                expected["network"]["link_failures"] = [{**failure, "loss_unit": "byte"}
+                                                        for failure in profiles.a2a_fault(r["condition"])]
+            self.assertEqual(document, expected, r["key"])
+
     def test_spread(self):
         # Seeds 301-312 of S and rx with 8 slots, each with a sentinel
         # spread of 64, on 256 KiB loss1e2_down and the sparse draw with
@@ -2733,7 +2769,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_twoend_rset_4k": set(profiles.A2A_TWOEND_RSET_ARMS),
                  **{stage: set(profiles.A2A_WIDE_SEEDS_ARMS) for stage in profiles.A2A_WIDE_SEEDS_STAGES},
                  **{stage: set(profiles.A2A_WIDE_SPREAD_ARMS) for stage in profiles.A2A_WIDE_SPREAD_STAGES},
-                 "a2a_wide256_widen_4k": set(profiles.A2A_WIDE_WIDEN_ARMS)}
+                 "a2a_wide256_widen_4k": set(profiles.A2A_WIDE_WIDEN_ARMS),
+                 "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
