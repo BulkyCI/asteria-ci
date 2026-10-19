@@ -1422,6 +1422,9 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   A2A_WIDE_SPREAD, their _spread<N> arms (A2A_WIDE_SPREAD_ARMS), at
 #   a2a_wide<P>_4k's settings otherwise, on 256 KiB loss 1e-2 down and the
 #   sparse draw at 1e-2 (A2A_WIDE_SPREAD_CELLS), each with its healthy pair.
+# - a2a_wide128_spread2m_4k: seeds 301-303 of the same two _spread64 arms on
+#   2 MiB loss1e2_down and the two multi-fault draws (A2A_WIDE_SPREAD_2M_CELLS),
+#   each with its healthy pair, at a2a_wide128_4k's settings otherwise.
 # - a2a_wide256_widen_4k: seeds 307-312 (A2A_WIDE_WIDEN_SEEDS) of
 #   reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2, that arm of
 #   a2a_wide<P>_spread_4k with receiver_hold_widen 2, on 256 KiB loss1e2_down,
@@ -1489,6 +1492,9 @@ A2A_WIDE_SPREAD_CELLS = (("ep64", "256k", "loss1e2_down"), ("ep64", "256k", f"{A
 A2A_WIDE_SPREAD_SEEDS = tuple(range(301, 313))
 A2A_WIDE_SPREAD_WIDE = (32, 256)
 A2A_WIDE_SPREAD_STAGES = {f"a2a_wide{wide}_spread_4k": wide for wide in A2A_WIDE_SPREAD_WIDE}
+A2A_WIDE_SPREAD_2M_CELLS = tuple(("ep64", "2m", condition)
+                                 for condition in ("loss1e2_down", "multi_loss1e2", "multi_loss1e3"))
+A2A_WIDE_SPREAD_2M_STAGES = {"a2a_wide128_spread2m_4k": 128}
 A2A_WIDE_WIDEN = 2
 A2A_WIDE_WIDEN_ARM = f"{A2A_WIDE_SPREAD_ARMS[1]}_widen{A2A_WIDE_WIDEN}"
 A2A_WIDE_WIDEN_ARMS = (*A2A_WIDE_SPREAD_ARMS, A2A_WIDE_WIDEN_ARM)
@@ -1528,7 +1534,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_SPINES_FIXTURE[spines]
                           for stage, spines in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                           for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES,
-                                         A2A_WIDE_SPREAD_STAGES, A2A_WIDE_WIDEN_STAGES, A2A_WIDE_RAUTO_STAGES)
+                                         A2A_WIDE_SPREAD_STAGES, A2A_WIDE_WIDEN_STAGES, A2A_WIDE_RAUTO_STAGES,
+                                         A2A_WIDE_SPREAD_2M_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -2085,6 +2092,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{wide_stage: (A2A_WIDE_CELLS, A2A_WIDE_ARMS) for wide_stage in A2A_WIDE_STAGES},
         **{seeds_stage: (A2A_WIDE_SEEDS_CELLS, A2A_WIDE_SEEDS_ARMS) for seeds_stage in A2A_WIDE_SEEDS_STAGES},
         **{spread_stage: (A2A_WIDE_SPREAD_CELLS, A2A_WIDE_SPREAD_ARMS) for spread_stage in A2A_WIDE_SPREAD_STAGES},
+        **{stage_2m: (A2A_WIDE_SPREAD_2M_CELLS, A2A_WIDE_SPREAD_ARMS) for stage_2m in A2A_WIDE_SPREAD_2M_STAGES},
         **{widen_stage: (A2A_WIDE_WIDEN_CELLS, A2A_WIDE_WIDEN_ARMS) for widen_stage in A2A_WIDE_WIDEN_STAGES},
         **{rauto_stage: (A2A_WIDE_RAUTO_CELLS, A2A_WIDE_RAUTO_ARMS) for rauto_stage in A2A_WIDE_RAUTO_STAGES},
     }[stage]
@@ -2258,7 +2266,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
             refuse_uncalibrated(uncalibrated)
         wide_family = any(stage in stages for stages in (A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES,
                                                          A2A_WIDE_SPREAD_STAGES, A2A_WIDE_WIDEN_STAGES,
-                                                         A2A_WIDE_RAUTO_STAGES))
+                                                         A2A_WIDE_RAUTO_STAGES, A2A_WIDE_SPREAD_2M_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2276,7 +2284,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
                     else {arm: setting for arm, setting in a2a_wide_settings(tuning).items()
                           if arm in A2A_WIDE_SEEDS_ARMS} if stage in A2A_WIDE_SEEDS_STAGES
-                    else a2a_wide_spread_settings(tuning) if stage in A2A_WIDE_SPREAD_STAGES
+                    else a2a_wide_spread_settings(tuning)
+                    if stage in A2A_WIDE_SPREAD_STAGES or stage in A2A_WIDE_SPREAD_2M_STAGES
                     else a2a_wide_widen_settings(tuning) if stage in A2A_WIDE_WIDEN_STAGES
                     else a2a_wide_rauto_settings(tuning) if stage in A2A_WIDE_RAUTO_STAGES
                     else a2a_overdue_settings(tuning) if stage == A2A_OVERDUE_STAGE

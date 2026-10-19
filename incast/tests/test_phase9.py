@@ -62,7 +62,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide256_widen_4k": 48,
                  # The receiver widening at its first loss: 3 seeds of that
                  # arm on 2 cells and healthy.
-                 "a2a_wide256_rauto_4k": 9}
+                 "a2a_wide256_rauto_4k": 9,
+                 # The sentinel spread at 128 spines and 2 MiB: 3 seeds of 2
+                 # arms on loss1e2_down, the two multi-fault draws and healthy.
+                 "a2a_wide128_spread2m_4k": 24}
 
 
 def measured_spines():
@@ -2643,6 +2646,27 @@ class Wide(unittest.TestCase):
                                                         for failure in profiles.a2a_fault(r["condition"])]
             self.assertEqual(document, expected, r["key"])
 
+    def test_spread_2m(self):
+        # Seeds 301-303 of the two spread arms at 128 spines on 2 MiB
+        # loss1e2_down and the two multi-fault draws, each with its healthy
+        # pair: each run's profile is a2a_wide128_4k's of its base arm and
+        # cell with held_sentinel_spread 64, but for its name.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide128_spread2m_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 24)
+        self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
+        self.assertEqual({(r["size"], r["condition"]) for r in runs},
+                         {("2m", c) for c in ("loss1e2_down", "multi_loss1e2", "multi_loss1e3", "healthy")})
+        comparison = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                      for r in profiles.a2a_stage_runs("a2a_wide128_4k", committed, self.tuning)
+                      if r["size"] == "2m"}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            pair = comparison[(r["arm"].removesuffix("_spread64"), r["condition"], r["seed"])]
+            balancing = {**pair["network"]["load_balancing"], "held_sentinel_spread": 64}
+            self.assertEqual(document, {**pair, "name": document["name"],
+                                        "network": {**pair["network"], "load_balancing": balancing}}, r["key"])
+
     def test_spread(self):
         # Seeds 301-312 of S and rx with 8 slots, each with a sentinel
         # spread of 64, on 256 KiB loss1e2_down and the sparse draw with
@@ -2765,7 +2789,8 @@ class CopyDeadline(unittest.TestCase):
                  **{stage: set(profiles.A2A_WIDE_SEEDS_ARMS) for stage in profiles.A2A_WIDE_SEEDS_STAGES},
                  **{stage: set(profiles.A2A_WIDE_SPREAD_ARMS) for stage in profiles.A2A_WIDE_SPREAD_STAGES},
                  "a2a_wide256_widen_4k": set(profiles.A2A_WIDE_WIDEN_ARMS),
-                 "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS)}
+                 "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS),
+                 "a2a_wide128_spread2m_4k": set(profiles.A2A_WIDE_SPREAD_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
