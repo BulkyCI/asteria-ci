@@ -49,10 +49,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_wide{wide}_validity_4k": 2 for wide in (32, 128, 256)},
                  **{f"a2a_wide{wide}_calibration_4k": 6 for wide in (8, 32, 128, 256)},
                  **{f"a2a_wide{wide}_4k": 402 for wide in (8, 32, 128, 256)},
-                 # The more seeds: 3 seeds of 4 arms on the 4 multi-fault cells
-                 # and 2 healthy pairs, and of 2 arms on 256 KiB loss1e2_down
+                 # The more seeds: 3 seeds of 5 arms on the 4 multi-fault cells
+                 # and 2 healthy pairs, and of 3 arms on 256 KiB loss1e2_down
                  # and loss1e3_down.
-                 **{f"a2a_wide{wide}_seeds_4k": 84 for wide in (8, 32, 128, 256)}}
+                 **{f"a2a_wide{wide}_seeds_4k": 108 for wide in (8, 32, 128, 256)}}
 
 
 def measured_spines():
@@ -2530,14 +2530,15 @@ class Wide(unittest.TestCase):
                                      expected if r["arm"] in reverse_set else (None, None, None), r["key"])
 
     def test_seeds(self):
-        # Seeds 304-306 of 4 arms on the 4 multi-fault cells and of S and rx
-        # on 256 KiB loss1e2_down and loss1e3_down, with healthy pairs: each
+        # Seeds 304-306 of 5 arms on the 4 multi-fault cells and of S, rx and
+        # rx with 8 slots on 256 KiB loss1e2_down and loss1e3_down, with
+        # healthy pairs: each
         # run's profile is the comparison's of its arm and cell but for its
         # name.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         for wide in (8, 32):
             runs = profiles.a2a_stage_runs(f"a2a_wide{wide}_seeds_4k", committed, self.tuning)
-            self.assertEqual(len(runs), 84)
+            self.assertEqual(len(runs), 108)
             self.assertEqual({r["seed"] for r in runs}, {304, 305, 306})
             cells = {arm: {(r["size"], r["condition"]) for r in runs if r["arm"] == arm}
                      for arm in profiles.A2A_WIDE_SEEDS_ARMS}
@@ -2546,6 +2547,7 @@ class Wide(unittest.TestCase):
             down = {("256k", "loss1e2_down"), ("256k", "loss1e3_down")}
             self.assertEqual(cells, {"reps_hold_auto_tail4_cover": multi | down,
                                      "reps_hold_auto_tail4_cover_rx": multi | down,
+                                     "reps_hold_auto_tail4_cover_rx_slots8": multi | down,
                                      "reps_hold_auto_tail4_cover_reverse_set": multi,
                                      "reps_hold_auto_tail4_cover_reverse_set_rx": multi})
             comparison = {(r["arm"], r["size"], r["condition"]): profiles.a2a_stage_profile(r, committed)

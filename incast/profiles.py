@@ -1408,10 +1408,11 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   None would leave it unchosen, and a2a_stage_runs refuses the stage then.
 # - a2a_wide<P>_seeds_4k: seeds 304-306 (A2A_WIDE_SEEDS_SEEDS) of
 #   a2a_wide<P>_4k's reps_hold_auto_tail4_cover,
-#   reps_hold_auto_tail4_cover_rx, reps_hold_auto_tail4_cover_reverse_set
-#   and reps_hold_auto_tail4_cover_reverse_set_rx (A2A_WIDE_SEEDS_ARMS) on
-#   the two multi-fault draws of both pairs, and of the first two on 256 KiB
-#   loss 1e-2 and 1e-3 down (A2A_WIDE_SEEDS_CELLS,
+#   reps_hold_auto_tail4_cover_rx, reps_hold_auto_tail4_cover_reverse_set,
+#   reps_hold_auto_tail4_cover_reverse_set_rx and
+#   reps_hold_auto_tail4_cover_rx_slots8 (A2A_WIDE_SEEDS_ARMS) on the two
+#   multi-fault draws of both pairs, and of all but the two reverse-set arms
+#   on 256 KiB loss 1e-2 and 1e-3 down (A2A_WIDE_SEEDS_CELLS,
 #   A2A_WIDE_SEEDS_ARM_CONDITIONS),
 #   each with its healthy pairs, at a2a_wide<P>_4k's settings: each run's
 #   profile is that stage's run of its arm and cell but for its name.
@@ -1448,7 +1449,8 @@ A2A_WIDE_VALIDITY_STAGES = {f"a2a_wide{wide}_validity_4k": wide for wide in A2A_
 A2A_WIDE_CALIBRATION_STAGES = {f"a2a_wide{wide}_calibration_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_STAGES = {f"a2a_wide{wide}_4k": wide for wide in A2A_WIDE}
 A2A_WIDE_SEEDS_ARMS = ("reps_hold_auto_tail4_cover", "reps_hold_auto_tail4_cover_rx",
-                       "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_reverse_set_rx")
+                       "reps_hold_auto_tail4_cover_reverse_set", "reps_hold_auto_tail4_cover_reverse_set_rx",
+                       f"reps_hold_auto_tail4_cover_rx_slots{A2A_WIDE_SLOTS}")
 A2A_WIDE_SEEDS_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
                              for condition in ("multi_loss1e3", "multi_loss1e2")) + (
     ("ep64", "256k", "loss1e2_down"), ("ep64", "256k", "loss1e3_down"))
