@@ -61,9 +61,8 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # of the two spread arms on multi_loss1e3 and healthy.
                  "a2a_wide256_widen_4k": 48,
                  # The receiver widening at its first loss: 3 seeds of that
-                 # arm on 3 cells and healthy, and of S spread and the
-                 # widened arm on loss1e3_down and healthy.
-                 "a2a_wide256_rauto_4k": 24}
+                 # arm on 2 cells and healthy.
+                 "a2a_wide256_rauto_4k": 9}
 
 
 def measured_spines():
@@ -2618,22 +2617,18 @@ class Wide(unittest.TestCase):
 
     def test_rauto(self):
         # Seeds 307-309 of the widened receiver arm with
-        # receiver_hold_auto_leaves 1 on 256 KiB loss1e3_down, the sparse
-        # draw and multi_loss1e3, and of S spread and the widened arm on
-        # loss1e3_down, each with its healthy pair: each run's profile is the
-        # widened arm's (or S spread's) of a2a_wide256_widen_4k on healthy,
-        # with the cell's faults and, for the new arm, receiver_hold_auto_leaves
-        # 1, but for its name.
+        # receiver_hold_auto_leaves 1 on 256 KiB sparse_loss1e2 and
+        # multi_loss1e3, each with its healthy pair: each run's profile is
+        # the widened arm's of a2a_wide256_widen_4k on healthy, with the
+        # cell's faults and receiver_hold_auto_leaves 1, but for its name.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         runs = profiles.a2a_stage_runs("a2a_wide256_rauto_4k", committed, self.tuning)
-        self.assertEqual(len(runs), 24)
+        self.assertEqual(len(runs), 9)
         self.assertEqual({r["seed"] for r in runs}, {307, 308, 309})
         widened = "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2"
         rauto = f"{widened}_rauto1"
-        cells = {arm: {r["condition"] for r in runs if r["arm"] == arm} for arm in profiles.A2A_WIDE_RAUTO_ARMS}
-        self.assertEqual(cells, {"reps_hold_auto_tail4_cover_spread64": {"loss1e3_down", "healthy"},
-                                 widened: {"loss1e3_down", "healthy"},
-                                 rauto: {"loss1e3_down", "sparse_loss1e2", "multi_loss1e3", "healthy"}})
+        self.assertEqual({r["arm"] for r in runs}, {rauto})
+        self.assertEqual({r["condition"] for r in runs}, {"sparse_loss1e2", "multi_loss1e3", "healthy"})
         healthy = {(r["arm"], r["seed"]): profiles.a2a_stage_profile(r, committed)
                    for r in profiles.a2a_stage_runs("a2a_wide256_widen_4k", committed, self.tuning)
                    if r["condition"] == "healthy"}

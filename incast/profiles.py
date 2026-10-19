@@ -1431,9 +1431,9 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 # - a2a_wide256_rauto_4k: seeds 307-309 (A2A_WIDE_RAUTO_SEEDS) of
 #   A2A_WIDE_RAUTO_ARM, the widened receiver arm with receiver_hold_auto_leaves
 #   1 (a receiver holding a spine for every sender leaf at its first loss), on
-#   256 KiB loss1e3_down, sparse_loss1e2 and multi_loss1e3, and of
-#   reps_hold_auto_tail4_cover_spread64 and the widened arm on loss1e3_down
-#   alone (A2A_WIDE_RAUTO_ARM_CONDITIONS), each with its healthy pair.
+#   256 KiB sparse_loss1e2 and multi_loss1e3, each with its healthy pair; the
+#   other arms' runs of those seeds are a2a_wide256_spread_4k's and
+#   a2a_wide256_widen_4k's.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1498,11 +1498,9 @@ A2A_WIDE_WIDEN_ARM_CONDITIONS = {arm: ("multi_loss1e3",) for arm in A2A_WIDE_SPR
 A2A_WIDE_WIDEN_SEEDS = tuple(range(307, 313))
 A2A_WIDE_WIDEN_STAGES = {"a2a_wide256_widen_4k": 256}
 A2A_WIDE_RAUTO_ARM = f"{A2A_WIDE_WIDEN_ARM}_rauto1"
-A2A_WIDE_RAUTO_ARMS = (A2A_WIDE_SPREAD_ARMS[0], A2A_WIDE_WIDEN_ARM, A2A_WIDE_RAUTO_ARM)
+A2A_WIDE_RAUTO_ARMS = (A2A_WIDE_RAUTO_ARM,)
 A2A_TRANSPORT_ARMS[A2A_WIDE_RAUTO_ARM] = "reps_hold_auto"
-A2A_WIDE_RAUTO_CELLS = (("ep64", "256k", "loss1e3_down"), ("ep64", "256k", f"{A2A_SPARSE_PREFIX}_loss1e2"),
-                        ("ep64", "256k", "multi_loss1e3"))
-A2A_WIDE_RAUTO_ARM_CONDITIONS = {arm: ("loss1e3_down",) for arm in A2A_WIDE_RAUTO_ARMS[:2]}
+A2A_WIDE_RAUTO_CELLS = (("ep64", "256k", f"{A2A_SPARSE_PREFIX}_loss1e2"), ("ep64", "256k", "multi_loss1e3"))
 A2A_WIDE_RAUTO_SEEDS = (307, 308, 309)
 A2A_WIDE_RAUTO_STAGES = {"a2a_wide256_rauto_4k": 256}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
@@ -2019,12 +2017,10 @@ def a2a_wide_widen_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str
 
 
 def a2a_wide_rauto_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Each a2a_wide256_rauto_4k arm's setting: S's spread and the widened
-    receiver arm's of a2a_wide_widen_settings, and A2A_WIDE_RAUTO_ARM's, the
-    widened one's with receiver_hold_auto_leaves 1."""
-    widen = a2a_wide_widen_settings(tuning)
-    return {A2A_WIDE_SPREAD_ARMS[0]: widen[A2A_WIDE_SPREAD_ARMS[0]], A2A_WIDE_WIDEN_ARM: widen[A2A_WIDE_WIDEN_ARM],
-            A2A_WIDE_RAUTO_ARM: {**widen[A2A_WIDE_WIDEN_ARM], "receiver_hold_auto_leaves": 1}}
+    """A2A_WIDE_RAUTO_ARM's setting: the widened receiver arm's of
+    a2a_wide_widen_settings with receiver_hold_auto_leaves 1."""
+    return {A2A_WIDE_RAUTO_ARM: {**a2a_wide_widen_settings(tuning)[A2A_WIDE_WIDEN_ARM],
+                                 "receiver_hold_auto_leaves": 1}}
 
 
 def a2a_copy_deadline(settings: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -2293,7 +2289,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         arm_conditions = (A2A_WIDE_ARM_CONDITIONS if stage in A2A_WIDE_STAGES
                           else A2A_WIDE_SEEDS_ARM_CONDITIONS if stage in A2A_WIDE_SEEDS_STAGES
                           else A2A_WIDE_WIDEN_ARM_CONDITIONS if stage in A2A_WIDE_WIDEN_STAGES
-                          else A2A_WIDE_RAUTO_ARM_CONDITIONS if stage in A2A_WIDE_RAUTO_STAGES else {})
+                          else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
                  else A2A_WIDE_SPREAD_SEEDS if stage in A2A_WIDE_SPREAD_STAGES
