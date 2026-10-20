@@ -65,7 +65,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide256_rauto_4k": 9,
                  # The sentinel spread at 128 spines and 2 MiB: 3 seeds of 2
                  # arms on loss1e2_down, the two multi-fault draws and healthy.
-                 "a2a_wide128_spread2m_4k": 24}
+                 "a2a_wide128_spread2m_4k": 24,
+                 # The overdue repair at 256 spines: 6 seeds of the widen
+                 # stage's 3 arms on multi_loss1e3 and healthy.
+                 "a2a_wide256_od_4k": 36}
 
 
 def measured_spines():
@@ -2646,6 +2649,27 @@ class Wide(unittest.TestCase):
                                                         for failure in profiles.a2a_fault(r["condition"])]
             self.assertEqual(document, expected, r["key"])
 
+    def test_od(self):
+        # Seeds 307-312 of a2a_wide256_widen_4k's three arms with the
+        # overdue repair on 256 KiB multi_loss1e3, each with its healthy
+        # pair: each run's profile is its arm's of a2a_wide256_widen_4k on
+        # the same cell and seed with overdue_repair reprobe and
+        # overdue_repair_limit 3, but for its name.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide256_od_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 36)
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+        self.assertEqual({r["arm"] for r in runs}, {f"{arm}_od" for arm in profiles.A2A_WIDE_WIDEN_ARMS})
+        self.assertEqual({r["condition"] for r in runs}, {"multi_loss1e3", "healthy"})
+        widen = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                 for r in profiles.a2a_stage_runs("a2a_wide256_widen_4k", committed, self.tuning)}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            pair = widen[(r["arm"].removesuffix("_od"), r["condition"], r["seed"])]
+            balancing = {**pair["network"]["load_balancing"], "overdue_repair": "reprobe", "overdue_repair_limit": 3}
+            expected = {**pair, "name": document["name"], "network": {**pair["network"], "load_balancing": balancing}}
+            self.assertEqual(document, expected, r["key"])
+
     def test_spread_2m(self):
         # Seeds 301-303 of the two spread arms at 128 spines on 2 MiB
         # loss1e2_down and the two multi-fault draws, each with its healthy
@@ -2790,7 +2814,8 @@ class CopyDeadline(unittest.TestCase):
                  **{stage: set(profiles.A2A_WIDE_SPREAD_ARMS) for stage in profiles.A2A_WIDE_SPREAD_STAGES},
                  "a2a_wide256_widen_4k": set(profiles.A2A_WIDE_WIDEN_ARMS),
                  "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS),
-                 "a2a_wide128_spread2m_4k": set(profiles.A2A_WIDE_SPREAD_ARMS)}
+                 "a2a_wide128_spread2m_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
+                 "a2a_wide256_od_4k": set(profiles.A2A_WIDE_OD_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
