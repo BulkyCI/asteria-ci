@@ -69,7 +69,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide128_spread2m_4k": 30,
                  # The overdue repair at 256 spines: 6 seeds of the widen
                  # stage's 3 arms on multi_loss1e3 and healthy.
-                 "a2a_wide256_od_4k": 36, "a2a_wide256_uid_4k": 4}
+                 "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_uid_4k": 4}
 
 
 def measured_spines():
@@ -2671,6 +2671,36 @@ class Wide(unittest.TestCase):
             expected = {**pair, "name": document["name"], "network": {**pair["network"], "load_balancing": balancing}}
             self.assertEqual(document, expected, r["key"])
 
+    def test_od2(self):
+        # a2a_wide256_od_4k's arms on 256 KiB loss1e2_down and
+        # sparse_loss1e2, seeds 307-312: each faulted run's profile is its
+        # base arm's of a2a_wide256_spread_4k or a2a_wide256_widen_4k on the
+        # same cell and seed with overdue_repair reprobe and limit 3, and
+        # each healthy run's is a2a_wide256_od_4k's, but for its name; the
+        # stage builds at a2a_wide256_od_4k's commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide256_od2_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 54)
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+        self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_WIDE_OD_ARMS))
+        self.assertEqual({r["condition"] for r in runs}, {"loss1e2_down", "sparse_loss1e2", "healthy"})
+        pairs = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                 for stage in ("a2a_wide256_spread_4k", "a2a_wide256_widen_4k")
+                 for r in profiles.a2a_stage_runs(stage, committed, self.tuning)}
+        od = {(r["arm"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+              for r in profiles.a2a_stage_runs("a2a_wide256_od_4k", committed, self.tuning) if r["condition"] == "healthy"}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            if r["condition"] == "healthy":
+                self.assertEqual(document, {**od[(r["arm"], r["seed"])], "name": document["name"]}, r["key"])
+                continue
+            pair = pairs[(r["arm"].removesuffix("_od"), r["condition"], r["seed"])]
+            balancing = {**pair["network"]["load_balancing"], "overdue_repair": "reprobe", "overdue_repair_limit": 3}
+            expected = {**pair, "name": document["name"], "network": {**pair["network"], "load_balancing": balancing}}
+            self.assertEqual(document, expected, r["key"])
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_od2_4k"],
+                         profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_od_4k"])
+
     def test_uid(self):
         # The healthy runs of seeds 309 and 311 of the receiver arm and its
         # _od arm: each run's profile is the same arm's run of
@@ -2857,6 +2887,7 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS),
                  "a2a_wide128_spread2m_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide256_od_4k": set(profiles.A2A_WIDE_OD_ARMS),
+                 "a2a_wide256_od2_4k": set(profiles.A2A_WIDE_OD_ARMS),
                  "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
