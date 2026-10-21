@@ -99,9 +99,20 @@ jobs:
             "${args[@]}"
         done
         python3 incast/shards.py profiles --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
+        # A stage profiles.py pins builds at its own asteria commit; one run
+        # builds one commit.
+        default_ref=$(tr -d '[:space:]' < incast/asteria.ref)
+        refs=$(for stage in "${stages[@]}"; do
+          if [[ -f "profiles/$stage/asteria.ref" ]]; then tr -d '[:space:]' < "profiles/$stage/asteria.ref"; else printf '%s' "$default_ref"; fi
+          echo
+        done | sort -u)
+        if [[ $(wc -l <<< "$refs") -ne 1 ]]; then
+          echo "::error::The stages build at different asteria commits: $(tr '\n' ' ' <<< "$refs")"
+          exit 1
+        fi
         {
           echo "shards=$(cat profiles/shards.json)"
-          echo "asteria_ref=$(tr -d '[:space:]' < incast/asteria.ref)"
+          echo "asteria_ref=$refs"
           # Two cores per DCS allocation, four on a hosted runner; the
           # simulator is single-threaded.
           if [[ "$RUNNER_KIND" == dcs ]]; then echo "parallel=2"; else echo "parallel=4"; fi

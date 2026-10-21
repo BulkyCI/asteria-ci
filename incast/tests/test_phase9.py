@@ -69,7 +69,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide128_spread2m_4k": 30,
                  # The overdue repair at 256 spines: 6 seeds of the widen
                  # stage's 3 arms on multi_loss1e3 and healthy.
-                 "a2a_wide256_od_4k": 36}
+                 "a2a_wide256_od_4k": 36, "a2a_wide256_uid_4k": 4}
 
 
 def measured_spines():
@@ -2671,6 +2671,45 @@ class Wide(unittest.TestCase):
             expected = {**pair, "name": document["name"], "network": {**pair["network"], "load_balancing": balancing}}
             self.assertEqual(document, expected, r["key"])
 
+    def test_uid(self):
+        # The healthy runs of seeds 309 and 311 of the receiver arm and its
+        # _od arm: each run's profile is the same arm's run of
+        # a2a_wide256_widen_4k or a2a_wide256_od_4k, but for its name.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide256_uid_4k", committed, self.tuning)
+        self.assertEqual(sorted((r["arm"], r["condition"], r["seed"]) for r in runs),
+                         sorted((arm, "healthy", seed) for arm in ("reps_hold_auto_tail4_cover_rx_slots8_spread64",
+                                                                   "reps_hold_auto_tail4_cover_rx_slots8_spread64_od")
+                                for seed in (309, 311)))
+        pairs = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                 for stage in ("a2a_wide256_widen_4k", "a2a_wide256_od_4k")
+                 for r in profiles.a2a_stage_runs(stage, committed, self.tuning)}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            pair = pairs[(r["arm"], r["condition"], r["seed"])]
+            self.assertEqual(document, {**pair, "name": document["name"]}, r["key"])
+        self.assertNotIn("a2a_wide256_uid_4k", profiles.A2A_STAGE_ASTERIA_REF)
+
+    def test_stage_asteria_ref(self):
+        # profiles.py write leaves a pinned stage's commit in its profile
+        # directory, for the workflow to build; an unpinned stage leaves
+        # none and builds at incast/asteria.ref.
+        here = Path(profiles.__file__).parent
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for stage in ("a2a_wide256_od_4k", "a2a_wide256_widen_4k"):
+                subprocess.run(
+                    [sys.executable, str(here / "profiles.py"), "write", "--out", str(root / stage), "--stage", stage,
+                     "--filter=-s307$", "--a2a-calibration", str(here / "a2a_calibration.json"),
+                     "--a2a-tuning", str(here / "a2a_tuning.json")],
+                    check=True, stdout=subprocess.DEVNULL,
+                )
+            self.assertEqual((root / "a2a_wide256_od_4k" / "asteria.ref").read_text(),
+                             profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_od_4k"] + "\n")
+            self.assertFalse((root / "a2a_wide256_widen_4k" / "asteria.ref").exists())
+        self.assertTrue(set(profiles.A2A_STAGE_ASTERIA_REF) <= set(profiles.A2A_STAGES))
+        self.assertTrue(all(len(ref) == 40 for ref in profiles.A2A_STAGE_ASTERIA_REF.values()))
+
     def test_spread_2m(self):
         # Seeds 301-303 of the two spread arms at 128 spines on 2 MiB
         # loss1e2_down, loss1e3_down and the two multi-fault draws, each with its healthy
@@ -2817,7 +2856,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_widen_4k": set(profiles.A2A_WIDE_WIDEN_ARMS),
                  "a2a_wide256_rauto_4k": set(profiles.A2A_WIDE_RAUTO_ARMS),
                  "a2a_wide128_spread2m_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
-                 "a2a_wide256_od_4k": set(profiles.A2A_WIDE_OD_ARMS)}
+                 "a2a_wide256_od_4k": set(profiles.A2A_WIDE_OD_ARMS),
+                 "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
