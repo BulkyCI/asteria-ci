@@ -1423,7 +1423,8 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   a2a_wide<P>_4k's settings otherwise, on 256 KiB loss 1e-2 down and the
 #   sparse draw at 1e-2 (A2A_WIDE_SPREAD_CELLS), each with its healthy pair.
 # - a2a_wide128_spread2m_4k: seeds 301-303 of the same two _spread64 arms on
-#   2 MiB loss1e2_down and the two multi-fault draws (A2A_WIDE_SPREAD_2M_CELLS),
+#   2 MiB loss1e2_down, loss1e3_down and the two multi-fault draws
+#   (A2A_WIDE_SPREAD_2M_CELLS),
 #   each with its healthy pair, at a2a_wide128_4k's settings otherwise.
 # - a2a_wide256_widen_4k: seeds 307-312 (A2A_WIDE_WIDEN_SEEDS) of
 #   reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2, that arm of
@@ -1497,7 +1498,7 @@ A2A_WIDE_SPREAD_SEEDS = tuple(range(301, 313))
 A2A_WIDE_SPREAD_WIDE = (32, 256)
 A2A_WIDE_SPREAD_STAGES = {f"a2a_wide{wide}_spread_4k": wide for wide in A2A_WIDE_SPREAD_WIDE}
 A2A_WIDE_SPREAD_2M_CELLS = tuple(("ep64", "2m", condition)
-                                 for condition in ("loss1e2_down", "multi_loss1e2", "multi_loss1e3"))
+                                 for condition in ("loss1e2_down", "loss1e3_down", "multi_loss1e2", "multi_loss1e3"))
 A2A_WIDE_SPREAD_2M_STAGES = {"a2a_wide128_spread2m_4k": 128}
 A2A_WIDE_WIDEN = 2
 A2A_WIDE_WIDEN_ARM = f"{A2A_WIDE_SPREAD_ARMS[1]}_widen{A2A_WIDE_WIDEN}"

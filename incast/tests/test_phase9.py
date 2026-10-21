@@ -64,8 +64,9 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # arm on 2 cells and healthy.
                  "a2a_wide256_rauto_4k": 9,
                  # The sentinel spread at 128 spines and 2 MiB: 3 seeds of 2
-                 # arms on loss1e2_down, the two multi-fault draws and healthy.
-                 "a2a_wide128_spread2m_4k": 24,
+                 # arms on loss1e2_down, loss1e3_down, the two multi-fault
+                 # draws and healthy.
+                 "a2a_wide128_spread2m_4k": 30,
                  # The overdue repair at 256 spines: 6 seeds of the widen
                  # stage's 3 arms on multi_loss1e3 and healthy.
                  "a2a_wide256_od_4k": 36}
@@ -2672,15 +2673,16 @@ class Wide(unittest.TestCase):
 
     def test_spread_2m(self):
         # Seeds 301-303 of the two spread arms at 128 spines on 2 MiB
-        # loss1e2_down and the two multi-fault draws, each with its healthy
+        # loss1e2_down, loss1e3_down and the two multi-fault draws, each with its healthy
         # pair: each run's profile is a2a_wide128_4k's of its base arm and
         # cell with held_sentinel_spread 64, but for its name.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         runs = profiles.a2a_stage_runs("a2a_wide128_spread2m_4k", committed, self.tuning)
-        self.assertEqual(len(runs), 24)
+        self.assertEqual(len(runs), 30)
         self.assertEqual({r["seed"] for r in runs}, {301, 302, 303})
         self.assertEqual({(r["size"], r["condition"]) for r in runs},
-                         {("2m", c) for c in ("loss1e2_down", "multi_loss1e2", "multi_loss1e3", "healthy")})
+                         {("2m", c) for c in ("loss1e2_down", "loss1e3_down", "multi_loss1e2", "multi_loss1e3",
+                                              "healthy")})
         comparison = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
                       for r in profiles.a2a_stage_runs("a2a_wide128_4k", committed, self.tuning)
                       if r["size"] == "2m"}
