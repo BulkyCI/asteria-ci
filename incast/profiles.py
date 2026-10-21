@@ -1454,6 +1454,12 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   (a2a_wide256_od_4k's S_spread_od) and the same with the sender's loss rule
 #   across paths (A2A_RACK, its _rack arm), on 256 KiB multi_loss1e3 at 32
 #   spines, seeds 307-309, each with its healthy pair: a pilot of the rule.
+# - a2a_wide32_rack2_4k: a2a_wide32_rack_4k's S_spread_od and three arms of
+#   the rule with less spurious loss (A2A_WIDE_RACK2_ARMS): a window of one
+#   base RTT (A2A_RACK_RTT, _rackrtt), RFC 8985's window with the declared
+#   losses told to the selector only after tail_loss_rtts unless the late
+#   answer arrives first (A2A_RACK_DEFER, _rackdefer), and both
+#   (_rackrttdefer), on the same cells and seeds, each with its healthy pair.
 # - a2a_wide256_uid_4k: the healthy runs of seeds 309 and 311
 #   (A2A_WIDE_UID_SEEDS) of a2a_wide256_widen_4k's receiver arm and of its _od
 #   arm (A2A_WIDE_UID_ARMS), at the default asteria commit: an arm whose
@@ -1548,6 +1554,14 @@ A2A_WIDE_RACK_PILOT_ARMS = (f"{A2A_WIDE_SPREAD_ARMS[0]}_od", f"{A2A_WIDE_SPREAD_
 A2A_TRANSPORT_ARMS[A2A_WIDE_RACK_PILOT_ARMS[1]] = "reps_hold_auto"
 A2A_WIDE_RACK_PILOT_SEEDS = (307, 308, 309)
 A2A_WIDE_RACK_PILOT_STAGES = {"a2a_wide32_rack_4k": 32}
+# One base RTT, and the rule's declarations told to the selector as a tail
+# repair request's are.
+A2A_RACK_RTT = {"rack_reorder_ns": 12324}
+A2A_RACK_DEFER = {"rack_defer_loss": True}
+A2A_WIDE_RACK2_ARMS = (A2A_WIDE_RACK_PILOT_ARMS[0], f"{A2A_WIDE_RACK_PILOT_ARMS[0]}_rackrtt",
+                       f"{A2A_WIDE_RACK_PILOT_ARMS[0]}_rackdefer", f"{A2A_WIDE_RACK_PILOT_ARMS[0]}_rackrttdefer")
+A2A_TRANSPORT_ARMS.update({arm: "reps_hold_auto" for arm in A2A_WIDE_RACK2_ARMS[1:]})
+A2A_WIDE_RACK2_STAGES = {"a2a_wide32_rack2_4k": 32}
 A2A_WIDE_UID_ARMS = (A2A_WIDE_SPREAD_ARMS[1], f"{A2A_WIDE_SPREAD_ARMS[1]}_od")
 A2A_WIDE_UID_SEEDS = (309, 311)
 A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
@@ -1578,7 +1592,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                           for stages in (A2A_WIDE_CALIBRATION_STAGES, A2A_WIDE_STAGES, A2A_WIDE_SEEDS_STAGES,
                                          A2A_WIDE_SPREAD_STAGES, A2A_WIDE_WIDEN_STAGES, A2A_WIDE_RAUTO_STAGES,
                                          A2A_WIDE_SPREAD_2M_STAGES, A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
-                                         A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_UID_STAGES)
+                                         A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
+                                         A2A_WIDE_UID_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1598,6 +1613,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide256_od_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
     "a2a_wide256_od2_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
     "a2a_wide256_rauto_od_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
+    "a2a_wide32_rack_4k": "e5b9d1011345dfd0a38d0eaaf4de79f7f1c25ba3",
 }
 
 
@@ -2099,6 +2115,15 @@ def a2a_wide_rack_pilot_settings(tuning: dict[str, Any] | None) -> dict[str, dic
     return {A2A_WIDE_RACK_PILOT_ARMS[0]: od, A2A_WIDE_RACK_PILOT_ARMS[1]: {**od, **A2A_RACK}}
 
 
+def a2a_wide_rack2_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """a2a_wide32_rack2_4k's arms: S_spread_od's setting, and the same with
+    A2A_RACK_RTT, with A2A_RACK and A2A_RACK_DEFER, and with A2A_RACK_RTT and
+    A2A_RACK_DEFER."""
+    od = a2a_wide_od_settings(tuning)[A2A_WIDE_RACK2_ARMS[0]]
+    return dict(zip(A2A_WIDE_RACK2_ARMS, (od, {**od, **A2A_RACK_RTT}, {**od, **A2A_RACK, **A2A_RACK_DEFER},
+                                          {**od, **A2A_RACK_RTT, **A2A_RACK_DEFER})))
+
+
 def a2a_wide_od_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_wide256_od_4k arm's setting: its arm's of
     a2a_wide_widen_settings with A2A_OVERDUE."""
@@ -2175,6 +2200,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{od2_stage: (A2A_WIDE_OD2_CELLS, A2A_WIDE_OD_ARMS) for od2_stage in A2A_WIDE_OD2_STAGES},
         **{rod_stage: (A2A_WIDE_RAUTO_OD_CELLS, (A2A_WIDE_RAUTO_OD_ARM,)) for rod_stage in A2A_WIDE_RAUTO_OD_STAGES},
         **{rack_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_RACK_PILOT_ARMS) for rack_stage in A2A_WIDE_RACK_PILOT_STAGES},
+        **{rack2_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_RACK2_ARMS) for rack2_stage in A2A_WIDE_RACK2_STAGES},
         **{uid_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_UID_ARMS) for uid_stage in A2A_WIDE_UID_STAGES},
     }[stage]
 
@@ -2350,7 +2376,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_RAUTO_STAGES, A2A_WIDE_SPREAD_2M_STAGES,
                                                          A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
                                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES,
-                                                         A2A_WIDE_UID_STAGES))
+                                                         A2A_WIDE_RACK2_STAGES, A2A_WIDE_UID_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2375,6 +2401,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_od_settings(tuning) if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES
                     else a2a_wide_rauto_od_settings(tuning) if stage in A2A_WIDE_RAUTO_OD_STAGES
                     else a2a_wide_rack_pilot_settings(tuning) if stage in A2A_WIDE_RACK_PILOT_STAGES
+                    else a2a_wide_rack2_settings(tuning) if stage in A2A_WIDE_RACK2_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2398,7 +2425,9 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_WIDE_WIDEN_SEEDS
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
-                 else A2A_WIDE_RACK_PILOT_SEEDS if stage in A2A_WIDE_RACK_PILOT_STAGES else A2A_SEEDS["comparison"])
+                 else A2A_WIDE_RACK_PILOT_SEEDS
+                 if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
+                 else A2A_SEEDS["comparison"])
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
                 if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):

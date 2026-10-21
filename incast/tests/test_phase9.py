@@ -70,7 +70,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # The overdue repair at 256 spines: 6 seeds of the widen
                  # stage's 3 arms on multi_loss1e3 and healthy.
                  "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_rauto_od_4k": 24,
-                 "a2a_wide32_rack_4k": 12, "a2a_wide256_uid_4k": 4}
+                 "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_uid_4k": 4}
 
 
 def measured_spines():
@@ -2751,7 +2751,36 @@ class Wide(unittest.TestCase):
             expected = {**twin, "name": document["name"], "network": {**twin["network"], "load_balancing": balancing}}
             self.assertEqual(document, expected, (arm, condition, seed))
             self.assertEqual(document["network"]["spine_count"], 32)
-        self.assertNotIn("a2a_wide32_rack_4k", profiles.A2A_STAGE_ASTERIA_REF)
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide32_rack_4k"],
+                         "e5b9d1011345dfd0a38d0eaaf4de79f7f1c25ba3")
+
+    def test_rack2_pilot(self):
+        # a2a_wide32_rack_4k's S_spread_od and three arms of the rule, on its
+        # cells and seeds, each with its healthy pair: each _rack arm's
+        # profile is the _od twin's with its keys, but for its name, at the
+        # default commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide32_rack2_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 24)
+        self.assertEqual({r["seed"] for r in runs}, {307, 308, 309})
+        self.assertEqual({r["condition"] for r in runs}, {"multi_loss1e3", "healthy"})
+        od = profiles.A2A_WIDE_RACK2_ARMS[0]
+        keys = {f"{od}_rackrtt": {"rack_reorder_ns": 12324},
+                f"{od}_rackdefer": {"rack_reorder_ns": 3081, "rack_defer_loss": True},
+                f"{od}_rackrttdefer": {"rack_reorder_ns": 12324, "rack_defer_loss": True}}
+        self.assertEqual(set(profiles.A2A_WIDE_RACK2_ARMS), {od, *keys})
+        pilot = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                 for r in profiles.a2a_stage_runs("a2a_wide32_rack_4k", committed, self.tuning)}
+        documents = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed) for r in runs}
+        for (arm, condition, seed), document in documents.items():
+            twin = documents[(od, condition, seed)]
+            if arm == od:
+                self.assertEqual(document, {**pilot[(od, condition, seed)], "name": document["name"]})
+                continue
+            balancing = {**twin["network"]["load_balancing"], **keys[arm]}
+            expected = {**twin, "name": document["name"], "network": {**twin["network"], "load_balancing": balancing}}
+            self.assertEqual(document, expected, (arm, condition, seed))
+        self.assertNotIn("a2a_wide32_rack2_4k", profiles.A2A_STAGE_ASTERIA_REF)
 
     def test_uid(self):
         # The healthy runs of seeds 309 and 311 of the receiver arm and its
@@ -2942,6 +2971,7 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_od2_4k": set(profiles.A2A_WIDE_OD_ARMS),
                  "a2a_wide256_rauto_od_4k": {profiles.A2A_WIDE_RAUTO_OD_ARM},
                  "a2a_wide32_rack_4k": set(profiles.A2A_WIDE_RACK_PILOT_ARMS),
+                 "a2a_wide32_rack2_4k": set(profiles.A2A_WIDE_RACK2_ARMS),
                  "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
