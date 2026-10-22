@@ -1474,7 +1474,9 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   307-309, each with its healthy pair.
 # - a2a_wide32_themis2_4k: a2a_wide32_themis_4k's _psn arm and a threshold of
 #   5 packets that also waits for a stash 24,648 ns old (_t5f,
-#   A2A_WIDE_THEMIS2_ARMS), on the same cells and seeds.
+#   A2A_WIDE_THEMIS2_STAGE_ARMS), on the same cells and seeds.
+# - a2a_wide32_themis3_4k: the same with a threshold of 2 packets and a stash
+#   6,162 ns old (_t2f) in place of _t5f.
 # - a2a_wide256_mrc_4k: a2a_wide256_rack_4k's three _rackdefer arms with
 #   MRC's spraying over every spine (mrc_hold) in place of REPS's cached
 #   paths (A2A_WIDE_MRC_ARMS), the same keys otherwise, on loss1e2_down and
@@ -1598,11 +1600,17 @@ A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arm in A2A_WIDE_THEMIS_ARMS})
 A2A_WIDE_THEMIS_PILOT_ARMS = (A2A_WIDE_RACK_ARMS[1], *A2A_WIDE_THEMIS_ARMS)
 A2A_WIDE_THEMIS_PILOT_CELLS = (*A2A_WIDE_OD_CELLS, ("ep64", "256k", "loss1e2_down"))
 A2A_WIDE_THEMIS_PILOT_STAGES = {"a2a_wide32_themis_4k": 32}
-# The stash floor is 2 base RTTs (2 x 12,324 ns).
-A2A_WIDE_THEMIS2_ARMS = {"themis_psn_od_rackdefer": A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"],
-                         "themis_t5f_od_rackdefer": {"themis_ooo_threshold": 5, "themis_stash_min_ns": 24648}}
-A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arm in A2A_WIDE_THEMIS2_ARMS})
-A2A_WIDE_THEMIS2_STAGES = {"a2a_wide32_themis2_4k": 32}
+# Each floored stage's arms: _t5f's stash floor is 2 base RTTs (2 x 12,324
+# ns); _t2f's is half a base RTT, so a lost head signals before the sender's
+# loss rule repairs it.
+A2A_WIDE_THEMIS2_STAGE_ARMS = {
+    "a2a_wide32_themis2_4k": {"themis_psn_od_rackdefer": A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"],
+                              "themis_t5f_od_rackdefer": {"themis_ooo_threshold": 5, "themis_stash_min_ns": 24648}},
+    "a2a_wide32_themis3_4k": {"themis_psn_od_rackdefer": A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"],
+                              "themis_t2f_od_rackdefer": {"themis_ooo_threshold": 2, "themis_stash_min_ns": 6162}},
+}
+A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arms in A2A_WIDE_THEMIS2_STAGE_ARMS.values() for arm in arms})
+A2A_WIDE_THEMIS2_STAGES = {stage: 32 for stage in A2A_WIDE_THEMIS2_STAGE_ARMS}
 A2A_WIDE_UID_ARMS = (A2A_WIDE_SPREAD_ARMS[1], f"{A2A_WIDE_SPREAD_ARMS[1]}_od")
 A2A_WIDE_UID_SEEDS = (309, 311)
 A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
@@ -2193,12 +2201,13 @@ def a2a_wide_themis_settings(tuning: dict[str, Any] | None) -> dict[str, dict[st
     return {A2A_WIDE_RACK_ARMS[1]: rack, **{arm: {**common, **keys} for arm, keys in A2A_WIDE_THEMIS_ARMS.items()}}
 
 
-def a2a_wide_themis2_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """a2a_wide32_themis2_4k's arms: a2a_wide32_themis_4k's Themis arms'
-    transport keys with each A2A_WIDE_THEMIS2_ARMS arm's keys."""
+def a2a_wide_themis2_settings(stage: str, tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """A floored Themis stage's arms: a2a_wide32_themis_4k's Themis arms'
+    transport keys with each of the stage's A2A_WIDE_THEMIS2_STAGE_ARMS
+    arms' keys."""
     rack = a2a_wide_rack_settings(tuning)[A2A_WIDE_RACK_ARMS[1]]
     common = {key: rack[key] for key in A2A_THEMIS_TRANSPORT_KEYS}
-    return {arm: {**common, **keys} for arm, keys in A2A_WIDE_THEMIS2_ARMS.items()}
+    return {arm: {**common, **keys} for arm, keys in A2A_WIDE_THEMIS2_STAGE_ARMS[stage].items()}
 
 
 def a2a_wide_mrc_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
@@ -2290,7 +2299,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for themis_stage in A2A_WIDE_THEMIS_PILOT_STAGES},
         **{uid_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_UID_ARMS) for uid_stage in A2A_WIDE_UID_STAGES},
         **{mrc_stage: (A2A_WIDE_OD2_CELLS, tuple(A2A_WIDE_MRC_ARMS)) for mrc_stage in A2A_WIDE_MRC_STAGES},
-        **{themis2_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, tuple(A2A_WIDE_THEMIS2_ARMS))
+        **{themis2_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, tuple(A2A_WIDE_THEMIS2_STAGE_ARMS[themis2_stage]))
            for themis2_stage in A2A_WIDE_THEMIS2_STAGES},
     }[stage]
 
@@ -2497,7 +2506,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_rack_settings(tuning) if stage in A2A_WIDE_RACK_STAGES
                     else a2a_wide_themis_settings(tuning) if stage in A2A_WIDE_THEMIS_PILOT_STAGES
                     else a2a_wide_mrc_settings(tuning) if stage in A2A_WIDE_MRC_STAGES
-                    else a2a_wide_themis2_settings(tuning) if stage in A2A_WIDE_THEMIS2_STAGES
+                    else a2a_wide_themis2_settings(stage, tuning) if stage in A2A_WIDE_THEMIS2_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES

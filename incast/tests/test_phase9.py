@@ -71,7 +71,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # stage's 3 arms on multi_loss1e3 and healthy.
                  "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_rauto_od_4k": 24,
                  "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_rack_4k": 78, "a2a_wide32_themis_4k": 36,
-                 "a2a_wide32_themis2_4k": 18,
+                 "a2a_wide32_themis2_4k": 18, "a2a_wide32_themis3_4k": 18,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2867,24 +2867,28 @@ class Wide(unittest.TestCase):
         self.assertNotIn("a2a_wide32_themis_4k", profiles.A2A_STAGE_ASTERIA_REF)
 
     def test_themis2(self):
-        # The _psn arm and the floored threshold arm at 32 spines: each run's
-        # profile is its a2a_wide32_themis_4k _psn twin's, with the _t5f arm's
-        # threshold and stash floor, and the same seeds and cells.
+        # The _psn arm and a floored threshold arm at 32 spines per stage:
+        # each run's profile is its a2a_wide32_themis_4k _psn twin's, with the
+        # floored arm's threshold and stash floor, and the same seeds and cells.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
-        runs = profiles.a2a_stage_runs("a2a_wide32_themis2_4k", committed, self.tuning)
-        self.assertEqual(len(runs), 18)
         pilot = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
                  for r in profiles.a2a_stage_runs("a2a_wide32_themis_4k", committed, self.tuning)}
-        for run in runs:
-            document = profiles.a2a_stage_profile(run, committed)
-            twin = pilot[("themis_psn_od_rackdefer", run["condition"], run["seed"])]
-            expected = twin["network"]["load_balancing"]
-            if run["arm"] == "themis_t5f_od_rackdefer":
-                expected = {**expected, "themis_ooo_threshold": 5, "themis_stash_min_ns": 24648}
-            self.assertEqual(document["network"]["load_balancing"], expected, run["arm"])
-            self.assertEqual({k: v for k, v in document.items() if k not in ("name", "network")},
-                             {k: v for k, v in twin.items() if k not in ("name", "network")}, run["arm"])
-        self.assertNotIn("a2a_wide32_themis2_4k", profiles.A2A_STAGE_ASTERIA_REF)
+        floored = {"a2a_wide32_themis2_4k": ("themis_t5f_od_rackdefer", 5, 24648),
+                   "a2a_wide32_themis3_4k": ("themis_t2f_od_rackdefer", 2, 6162)}
+        for stage, (arm, threshold, floor) in floored.items():
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(len(runs), 18)
+            self.assertEqual({r["arm"] for r in runs}, {"themis_psn_od_rackdefer", arm})
+            for run in runs:
+                document = profiles.a2a_stage_profile(run, committed)
+                twin = pilot[("themis_psn_od_rackdefer", run["condition"], run["seed"])]
+                expected = twin["network"]["load_balancing"]
+                if run["arm"] == arm:
+                    expected = {**expected, "themis_ooo_threshold": threshold, "themis_stash_min_ns": floor}
+                self.assertEqual(document["network"]["load_balancing"], expected, (stage, run["arm"]))
+                self.assertEqual({k: v for k, v in document.items() if k not in ("name", "network")},
+                                 {k: v for k, v in twin.items() if k not in ("name", "network")}, (stage, run["arm"]))
+            self.assertNotIn(stage, profiles.A2A_STAGE_ASTERIA_REF)
 
     def test_uid(self):
         # The healthy runs of seeds 309 and 311 of the receiver arm and its
