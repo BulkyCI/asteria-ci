@@ -1472,6 +1472,11 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   destination signal (_psn), a threshold of 5 packets (_t5) and Themis's own
 #   constants (_paper), on 256 KiB multi_loss1e3 and loss1e2_down, seeds
 #   307-309, each with its healthy pair.
+# - a2a_wide256_mrc_4k: a2a_wide256_rack_4k's three _rackdefer arms with
+#   MRC's spraying over every spine (mrc_hold) in place of REPS's cached
+#   paths (A2A_WIDE_MRC_ARMS), the same keys otherwise, on loss1e2_down and
+#   sparse_loss1e2, seeds 307-312, each with its healthy pair, at
+#   a2a_wide256_rack_4k's commit.
 # - a2a_wide256_uid_4k: the healthy runs of seeds 309 and 311
 #   (A2A_WIDE_UID_SEEDS) of a2a_wide256_widen_4k's receiver arm and of its _od
 #   arm (A2A_WIDE_UID_ARMS), at the default asteria commit: an arm whose
@@ -1593,6 +1598,10 @@ A2A_WIDE_THEMIS_PILOT_STAGES = {"a2a_wide32_themis_4k": 32}
 A2A_WIDE_UID_ARMS = (A2A_WIDE_SPREAD_ARMS[1], f"{A2A_WIDE_SPREAD_ARMS[1]}_od")
 A2A_WIDE_UID_SEEDS = (309, 311)
 A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
+# Each MRC arm and the a2a_wide256_rack_4k arm whose keys it takes.
+A2A_WIDE_MRC_ARMS = {arm.replace("reps_hold_auto", "mrc_hold_auto", 1): arm for arm in A2A_WIDE_RACK_ARMS[1:]}
+A2A_TRANSPORT_ARMS.update({arm: "mrc_hold_auto" for arm in A2A_WIDE_MRC_ARMS})
+A2A_WIDE_MRC_STAGES = {"a2a_wide256_mrc_4k": 256}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1621,7 +1630,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_SPREAD_STAGES, A2A_WIDE_WIDEN_STAGES, A2A_WIDE_RAUTO_STAGES,
                                          A2A_WIDE_SPREAD_2M_STAGES, A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
-                                         A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES)
+                                         A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
+                                         A2A_WIDE_MRC_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1644,6 +1654,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_rack_4k": "e5b9d1011345dfd0a38d0eaaf4de79f7f1c25ba3",
     "a2a_wide32_rack2_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
     "a2a_wide256_rack_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
+    "a2a_wide256_mrc_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
 }
 
 
@@ -2174,6 +2185,13 @@ def a2a_wide_themis_settings(tuning: dict[str, Any] | None) -> dict[str, dict[st
     return {A2A_WIDE_RACK_ARMS[1]: rack, **{arm: {**common, **keys} for arm, keys in A2A_WIDE_THEMIS_ARMS.items()}}
 
 
+def a2a_wide_mrc_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """a2a_wide256_mrc_4k's arms: each A2A_WIDE_MRC_ARMS arm with its
+    a2a_wide256_rack_4k arm's setting."""
+    rack = a2a_wide_rack_settings(tuning)
+    return {arm: rack[base] for arm, base in A2A_WIDE_MRC_ARMS.items()}
+
+
 def a2a_wide_od_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each a2a_wide256_od_4k arm's setting: its arm's of
     a2a_wide_widen_settings with A2A_OVERDUE."""
@@ -2255,6 +2273,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{themis_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, A2A_WIDE_THEMIS_PILOT_ARMS)
            for themis_stage in A2A_WIDE_THEMIS_PILOT_STAGES},
         **{uid_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_UID_ARMS) for uid_stage in A2A_WIDE_UID_STAGES},
+        **{mrc_stage: (A2A_WIDE_OD2_CELLS, tuple(A2A_WIDE_MRC_ARMS)) for mrc_stage in A2A_WIDE_MRC_STAGES},
     }[stage]
 
 
@@ -2430,7 +2449,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
                                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES,
                                                          A2A_WIDE_RACK2_STAGES, A2A_WIDE_RACK_STAGES,
-                                                         A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES))
+                                                         A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
+                                                         A2A_WIDE_MRC_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2458,6 +2478,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_rack2_settings(tuning) if stage in A2A_WIDE_RACK2_STAGES
                     else a2a_wide_rack_settings(tuning) if stage in A2A_WIDE_RACK_STAGES
                     else a2a_wide_themis_settings(tuning) if stage in A2A_WIDE_THEMIS_PILOT_STAGES
+                    else a2a_wide_mrc_settings(tuning) if stage in A2A_WIDE_MRC_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2481,7 +2502,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_WIDE_RAUTO_SEEDS if stage in A2A_WIDE_RAUTO_STAGES
                  else A2A_WIDE_WIDEN_SEEDS
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
-                 or stage in A2A_WIDE_RACK_STAGES
+                 or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
