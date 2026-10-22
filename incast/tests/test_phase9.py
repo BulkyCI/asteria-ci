@@ -70,7 +70,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # The overdue repair at 256 spines: 6 seeds of the widen
                  # stage's 3 arms on multi_loss1e3 and healthy.
                  "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_rauto_od_4k": 24,
-                 "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_rack_4k": 78,
+                 "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_rack_4k": 78, "a2a_wide32_themis_4k": 36,
                  "a2a_wide256_uid_4k": 4}
 
 
@@ -2781,7 +2781,8 @@ class Wide(unittest.TestCase):
             balancing = {**twin["network"]["load_balancing"], **keys[arm]}
             expected = {**twin, "name": document["name"], "network": {**twin["network"], "load_balancing": balancing}}
             self.assertEqual(document, expected, (arm, condition, seed))
-        self.assertNotIn("a2a_wide32_rack2_4k", profiles.A2A_STAGE_ASTERIA_REF)
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide32_rack2_4k"],
+                         "6268ca702026b7af170dfea97c4c2464500eb1f3")
 
     def test_rack_wide256(self):
         # The second pilot's _rackdefer rule at 256 spines on the sender-only
@@ -2811,7 +2812,33 @@ class Wide(unittest.TestCase):
         self.assertEqual(set(racks), {"reps_hold_auto_tail4_cover_spread64_od_rackdefer",
                                       "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_od_rackdefer",
                                       "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_rauto1_od_rackdefer"})
-        self.assertNotIn("a2a_wide256_rack_4k", profiles.A2A_STAGE_ASTERIA_REF)
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_rack_4k"],
+                         "6268ca702026b7af170dfea97c4c2464500eb1f3")
+
+    def test_themis_pilot(self):
+        # The sender-only _rackdefer arm and three Themis-style arms at 32
+        # spines: each Themis arm's load balancing is selector themis with the
+        # _rackdefer arm's transport keys and its own threshold, no loss hold
+        # key, and no sparse hold trace (no loss trace is written).
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide32_themis_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 36)
+        self.assertEqual({r["condition"] for r in runs}, {"multi_loss1e3", "loss1e2_down", "healthy"})
+        documents = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed) for r in runs}
+        rack = documents[(profiles.A2A_WIDE_RACK_ARMS[1], "healthy", 307)]["network"]["load_balancing"]
+        thresholds = {"themis_psn_od_rackdefer": 0, "themis_t5_od_rackdefer": 5, "themis_paper_od_rackdefer": None}
+        for (arm, condition, seed), document in documents.items():
+            if arm not in thresholds:
+                continue
+            balancing = document["network"]["load_balancing"]
+            expected = {"mode": "spray_uniform", "selector": "themis", "path_state": "connection",
+                        **{key: rack[key] for key in profiles.A2A_THEMIS_TRANSPORT_KEYS}}
+            if thresholds[arm] is not None:
+                expected["themis_ooo_threshold"] = thresholds[arm]
+            self.assertEqual(balancing, expected, (arm, condition, seed))
+            self.assertNotIn("sparse_hold_trace", document["network"])
+            self.assertEqual(document["network"]["spine_count"], 32)
+        self.assertNotIn("a2a_wide32_themis_4k", profiles.A2A_STAGE_ASTERIA_REF)
 
     def test_uid(self):
         # The healthy runs of seeds 309 and 311 of the receiver arm and its
@@ -3004,6 +3031,7 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide32_rack_4k": set(profiles.A2A_WIDE_RACK_PILOT_ARMS),
                  "a2a_wide32_rack2_4k": set(profiles.A2A_WIDE_RACK2_ARMS),
                  "a2a_wide256_rack_4k": set(profiles.A2A_WIDE_RACK_ARMS),
+                 "a2a_wide32_themis_4k": {profiles.A2A_WIDE_RACK_ARMS[1]},
                  "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS)}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
