@@ -74,6 +74,9 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide32_themis2_4k": 18, "a2a_wide32_themis3_4k": 18, "a2a_wide32_themis4_4k": 27,
                  "a2a_wide256_themis_4k": 36,
                  "a2a_wide32_fair_4k": 45,
+                 "a2a_wide64_4k": 402, "a2a_wide64_calibration_4k": 6, "a2a_wide64_seeds_4k": 108,
+                 "a2a_wide64_validity_4k": 2,
+                 **{f"a2a_wide{wide}_matrix_4k": 162 for wide in (32, 64, 128, 256)},
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2869,6 +2872,52 @@ class Wide(unittest.TestCase):
             self.assertEqual(document["network"]["spine_count"], 256)
         self.assertNotIn("a2a_wide256_themis_4k", profiles.A2A_STAGE_ASTERIA_REF)
 
+    def test_matrix(self):
+        # The same arms, cells and seeds at every P. A baseline's profile is
+        # its sender-only MRC twin's but for its name and its load balancing,
+        # which is its selector with the twin's transport keys and its own
+        # keys, no loss hold and no hold trace; the MRC arms at 256 spines are
+        # a2a_wide256_mrc_4k's but for their names. Every stage builds at the
+        # commit adding mrc_spine and ue_aware_spine.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        mrc = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+               for r in profiles.a2a_stage_runs("a2a_wide256_mrc_4k", committed, self.tuning)}
+        sender = profiles.A2A_WIDE_MRC_ARMS and next(iter(profiles.A2A_WIDE_MRC_ARMS))
+        selectors = {"uniform_od_rackdefer": None, "reps_spine_od_rackdefer": "reps_spine",
+                     "mrc_spine_od_rackdefer": "mrc_spine", "mrc_spine_probe1000_od_rackdefer": "mrc_spine",
+                     "ue_aware_spine_avoid1s_od_rackdefer": "ue_aware_spine",
+                     "reps_oracle_fwd_od_rackdefer": "reps_oracle"}
+        own = {"mrc_spine_probe1000_od_rackdefer": {"probe_timeouts": 1000},
+               "ue_aware_spine_avoid1s_od_rackdefer": {"loss_avoid_ns": 1_000_000_000},
+               "reps_oracle_fwd_od_rackdefer": {"oracle_hops": "forward", "grade_cost_source": "switch_queue"}}
+        for stage, wide in profiles.A2A_MATRIX_STAGES.items():
+            if stage == "a2a_wide64_matrix_4k" and "ep64-256k-p4096-w64" not in committed["per_receiver"]:
+                continue
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(len(runs), 162, stage)
+            self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_MATRIX_ARMS))
+            self.assertEqual({r["condition"] for r in runs}, {"loss1e2_down", "sparse_loss1e2", "healthy"})
+            self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+            documents = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                         for r in runs}
+            for (arm, condition, seed), document in documents.items():
+                self.assertEqual(document["network"]["spine_count"], wide)
+                twin = documents[(sender, condition, seed)]
+                if arm in selectors:
+                    balancing = document["network"]["load_balancing"]
+                    held = twin["network"]["load_balancing"]
+                    transport = {key: held[key] for key in (*profiles.A2A_THEMIS_TRANSPORT_KEYS, "path_state")}
+                    expected = {"mode": "spray_uniform", **transport, **own.get(arm, {})}
+                    if selectors[arm]:
+                        expected["selector"] = selectors[arm]
+                    self.assertEqual(balancing, expected, arm)
+                    network = {k: v for k, v in twin["network"].items() if k != "sparse_hold_trace"}
+                    self.assertEqual(document, {**twin, "name": document["name"],
+                                                "network": {**network, "load_balancing": balancing}}, arm)
+                elif wide == 256:
+                    self.assertEqual(document, {**mrc[(arm, condition, seed)], "name": document["name"]}, arm)
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "5c3bcdff3350f07ea87fdc068a70e1ffd75cc09a")
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3161,7 +3210,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide32_themis_4k": {profiles.A2A_WIDE_RACK_ARMS[1]},
                  "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS),
                  "a2a_wide256_mrc_4k": set(profiles.A2A_WIDE_MRC_ARMS),
-                 "a2a_wide32_fair_4k": set(profiles.A2A_WIDE_PSN_HOLD_ARMS)}
+                 "a2a_wide32_fair_4k": set(profiles.A2A_WIDE_PSN_HOLD_ARMS),
+                 **{stage: set(profiles.A2A_WIDE_MRC_ARMS) for stage in profiles.A2A_MATRIX_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

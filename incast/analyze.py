@@ -3265,7 +3265,7 @@ def twoend_markdown(cells: list[dict]) -> str:
 A2A_SPINES = (8, 32, 128, 256)
 # profiles.py's A2A_WIDE: a wide-leaf fixture's calibration pass per P, its
 # cells named -w<P>.
-A2A_WIDE = (8, 32, 128, 256)
+A2A_WIDE = (8, 32, 64, 128, 256)
 A2A_CALIBRATION_STAGES = ("a2a_oracle_calibration", "a2a_calibration", "a2a_calibration_4k",
                           "a2a_decode_calibration_4k", "ar_parity_calibration_4k",
                           *(f"a2a_spines{spines}_calibration_4k" for spines in A2A_SPINES),

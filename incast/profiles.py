@@ -1351,7 +1351,7 @@ A2A_SPINES_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {spines: (
 # Every link is a 400 Gb/s one, so the base RTT, the retransmission timeout
 # and the loss intervals are the 8-spine fabric's at every P. At P = 8 the
 # fixture is A2A_FIXTURE_4K: its leaves have no other host.
-A2A_WIDE = (8, 32, 128, 256)
+A2A_WIDE = (8, 32, 64, 128, 256)
 A2A_WIDE_LEAVES = 8
 A2A_WIDE_JOB_HOSTS = 8
 A2A_WIDE_BACKGROUND = {"pattern": "leaf_shift", "rate": "350Gbps"}
@@ -1486,6 +1486,11 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   and seeds.
 # - a2a_wide256_themis_4k: a2a_wide32_themis4_4k's _psn and _t2fl arms at 256
 #   spines, on a2a_wide256_mrc_4k's cells and seeds.
+# - a2a_wide<P>_matrix_4k, P in A2A_MATRIX_SPINES: the published baselines
+#   over named spines (A2A_MATRIX_BASELINES) and a2a_wide256_mrc_4k's three
+#   arms, every one on the sender-only _rackdefer arm's transport, on
+#   a2a_wide256_mrc_4k's cells and seeds, at the asteria commit that adds
+#   mrc_spine and ue_aware_spine.
 # - a2a_wide32_fair_4k: one spraying rule for every arm, Themis's: its _psn
 #   and _t2fl arms, and a2a_wide256_rack_4k's sender-only and receiver
 #   _rackdefer arms with their loss hold under selector themis_hold and no
@@ -1657,6 +1662,30 @@ A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
 A2A_WIDE_MRC_ARMS = {arm.replace("reps_hold_auto", "mrc_hold_auto", 1): arm for arm in A2A_WIDE_RACK_ARMS[1:]}
 A2A_TRANSPORT_ARMS.update({arm: "mrc_hold_auto" for arm in A2A_WIDE_MRC_ARMS})
 A2A_WIDE_MRC_STAGES = {"a2a_wide256_mrc_4k": 256}
+# The selectors over named spines without a loss hold, each its own arm's
+# base: REPS, Themis, MRC and UEC path-aware spraying.
+A2A_NAMED_SPINE_SELECTORS = (A2A_REPS_SPINE, A2A_THEMIS, "mrc_spine", "ue_aware_spine")
+# The matrix: at every P of A2A_MATRIX_SPINES the same arms on the same
+# cells and seeds, all with the sender-only _rackdefer arm's transport keys
+# (A2A_THEMIS_TRANSPORT_KEYS). The published baselines over named spines,
+# each with its base and the keys it adds: oblivious spraying (the uniform
+# draw); REPS; MRC at its defaults and with its probe a thousand timeouts
+# apart, so that a retired spine stays retired for the run; UEC path-aware
+# spraying passing over a spine with a declared loss for a second, the rest
+# of the run; and the forward-hop REPS oracle as a bound. Then
+# a2a_wide256_mrc_4k's three arms.
+A2A_MATRIX_BASELINES = {
+    "uniform_od_rackdefer": ("uniform", {}),
+    "reps_spine_od_rackdefer": (A2A_REPS_SPINE, {}),
+    "mrc_spine_od_rackdefer": ("mrc_spine", {}),
+    "mrc_spine_probe1000_od_rackdefer": ("mrc_spine", {"probe_timeouts": 1000}),
+    "ue_aware_spine_avoid1s_od_rackdefer": ("ue_aware_spine", {"loss_avoid_ns": 1_000_000_000}),
+    "reps_oracle_fwd_od_rackdefer": (A2A_REPS_ORACLE, {"oracle_hops": "forward"}),
+}
+A2A_TRANSPORT_ARMS.update({arm: base for arm, (base, _) in A2A_MATRIX_BASELINES.items()})
+A2A_MATRIX_ARMS = (*A2A_MATRIX_BASELINES, *A2A_WIDE_MRC_ARMS)
+A2A_MATRIX_SPINES = (32, 64, 128, 256)
+A2A_MATRIX_STAGES = {f"a2a_wide{wide}_matrix_4k": wide for wide in A2A_MATRIX_SPINES}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1686,7 +1715,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_SPREAD_2M_STAGES, A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
                                          A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
-                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES)
+                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES,
+                                         A2A_MATRIX_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1716,6 +1746,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
     "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
+    **{stage: "5c3bcdff3350f07ea87fdc068a70e1ffd75cc09a" for stage in A2A_MATRIX_STAGES},
 }
 
 
@@ -1895,10 +1926,8 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return balancing(arm, 0, None)
     if arm == A2A_REPS_ORACLE:
         return {"mode": "spray_uniform", "selector": "reps_oracle", "grade_cost_source": "switch_queue"}
-    if arm == A2A_REPS_SPINE:
-        return {"mode": "spray_uniform", "selector": "reps_spine"}
-    if arm == A2A_THEMIS:
-        return {"mode": "spray_uniform", "selector": "themis"}
+    if arm in A2A_NAMED_SPINE_SELECTORS:
+        return {"mode": "spray_uniform", "selector": arm}
     if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_LOSS_HOLD_BASES:
         # The setting is the transport keys alone.
         return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None, payload, wide),
@@ -2266,6 +2295,16 @@ def a2a_wide_fair_settings(stage: str, tuning: dict[str, Any] | None) -> dict[st
     return {arm: {**themis, **hold}[arm] for arm in A2A_WIDE_FAIR_STAGE_ARMS[stage]}
 
 
+def a2a_matrix_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """The matrix's arms: each A2A_MATRIX_BASELINES arm with the sender-only
+    _rackdefer arm's A2A_THEMIS_TRANSPORT_KEYS and its own keys, and
+    a2a_wide256_mrc_4k's arms."""
+    rack = a2a_wide_rack_settings(tuning)[A2A_WIDE_RACK_ARMS[1]]
+    common = {key: rack[key] for key in A2A_THEMIS_TRANSPORT_KEYS}
+    return {**{arm: {**common, **keys} for arm, (_, keys) in A2A_MATRIX_BASELINES.items()},
+            **a2a_wide_mrc_settings(tuning)}
+
+
 def a2a_wide_mrc_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """a2a_wide256_mrc_4k's arms: each A2A_WIDE_MRC_ARMS arm with its
     a2a_wide256_rack_4k arm's setting."""
@@ -2360,6 +2399,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for themis2_stage in A2A_WIDE_THEMIS2_STAGES},
         **{fair_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, A2A_WIDE_FAIR_STAGE_ARMS[fair_stage])
            for fair_stage in A2A_WIDE_FAIR_STAGES},
+        **{matrix_stage: (A2A_WIDE_OD2_CELLS, A2A_MATRIX_ARMS) for matrix_stage in A2A_MATRIX_STAGES},
     }[stage]
 
 
@@ -2537,7 +2577,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_RACK2_STAGES, A2A_WIDE_RACK_STAGES,
                                                          A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
                                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES,
-                                                         A2A_WIDE_FAIR_STAGES))
+                                                         A2A_WIDE_FAIR_STAGES, A2A_MATRIX_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2568,6 +2608,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_mrc_settings(tuning) if stage in A2A_WIDE_MRC_STAGES
                     else a2a_wide_themis2_settings(stage, tuning) if stage in A2A_WIDE_THEMIS2_STAGES
                     else a2a_wide_fair_settings(stage, tuning) if stage in A2A_WIDE_FAIR_STAGES
+                    else a2a_matrix_settings(tuning) if stage in A2A_MATRIX_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2592,7 +2633,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_WIDE_WIDEN_SEEDS
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
                  or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
-                 or stage in A2A_WIDE_THEMIS256_STAGES
+                 or stage in A2A_WIDE_THEMIS256_STAGES or stage in A2A_MATRIX_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
