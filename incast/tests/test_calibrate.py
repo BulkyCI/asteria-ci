@@ -14,6 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import analyze  # noqa: E402
 
+try:
+    import zstandard
+except ImportError:
+    zstandard = None
+
 
 def write_reports(run: Path, reports: int, mark_excess: float, trim_excess: float) -> None:
     """Reports of eight spines in which spine 3 marks and trims above the
@@ -109,6 +114,22 @@ class Streamed(unittest.TestCase):
                 self.assertSame([run], metrics)
                 self.assertSame([mixed], metrics)
                 self.assertSame([run, mixed], metrics)
+
+    @unittest.skipIf(zstandard is None, "no zstandard")
+    def test_reports_kept_compressed(self):
+        # A run whose reports are kept as spine_reports.csv.zst, as a
+        # download too large to unpack keeps them, reads as the plain run.
+        with tempfile.TemporaryDirectory() as directory:
+            plain, packed = Path(directory) / "plain", Path(directory) / "packed"
+            for run in (plain, packed):
+                (run / "ns3").mkdir(parents=True)
+            data = Path(__file__).parent / "data" / "spine_reports_wide128.csv"
+            shutil.copy(data, plain / "ns3" / "spine_reports.csv")
+            (packed / "ns3" / "spine_reports.csv.zst").write_bytes(zstandard.ZstdCompressor().compress(data.read_bytes()))
+            metrics = ("mark_fraction", "trim_fraction")
+            self.assertEqual(json.dumps(analyze.thresholds([packed], metrics)),
+                             json.dumps(analyze.thresholds([plain], metrics)))
+            self.assertEqual(analyze.reports(packed), analyze.reports(plain))
 
     def test_synthetic_runs(self):
         # Three runs of six-place fractions, the third per_connection (a

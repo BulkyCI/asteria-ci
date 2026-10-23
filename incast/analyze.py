@@ -539,7 +539,7 @@ def report_key(row: dict[str, str]) -> tuple:
 
 def reports(run: Path):
     groups: dict[tuple, list[dict[str, str]]] = defaultdict(list)
-    with (run / "ns3" / "spine_reports.csv").open() as handle:
+    with traces.open_rows(run / "ns3" / "spine_reports.csv") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             groups[report_key(row)].append(row)
@@ -555,7 +555,7 @@ def consecutive_reports(run: Path):
     consecutive and in time order, as the backend writes them; raises
     InterleavedReports at a row of a report already closed."""
     time_ns, closed, key, rows = -1, set(), None, []
-    with (run / "ns3" / "spine_reports.csv").open() as handle:
+    with traces.open_rows(run / "ns3" / "spine_reports.csv") as handle:
         for row in csv.DictReader(handle):
             if report_key(row) == key:
                 rows.append(row)
