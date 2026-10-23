@@ -76,7 +76,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide32_fair_4k": 45,
                  "a2a_wide64_4k": 402, "a2a_wide64_calibration_4k": 6, "a2a_wide64_seeds_4k": 108,
                  "a2a_wide64_validity_4k": 2,
-                 **{f"a2a_wide{wide}_matrix_4k": 162 for wide in (32, 64, 128, 256)},
+                 **{f"a2a_wide{wide}_matrix_4k": 144 for wide in (32, 64, 128, 256)},
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2884,17 +2884,14 @@ class Wide(unittest.TestCase):
                for r in profiles.a2a_stage_runs("a2a_wide256_mrc_4k", committed, self.tuning)}
         sender = profiles.A2A_WIDE_MRC_ARMS and next(iter(profiles.A2A_WIDE_MRC_ARMS))
         selectors = {"uniform_od_rackdefer": None, "reps_spine_od_rackdefer": "reps_spine",
-                     "mrc_spine_od_rackdefer": "mrc_spine", "mrc_spine_probe1000_od_rackdefer": "mrc_spine",
-                     "ue_aware_spine_avoid1s_od_rackdefer": "ue_aware_spine",
+                     "mrc_spine_od_rackdefer": "mrc_spine", "ue_aware_spine_od_rackdefer": "ue_aware_spine",
                      "reps_oracle_fwd_od_rackdefer": "reps_oracle"}
-        own = {"mrc_spine_probe1000_od_rackdefer": {"probe_timeouts": 1000},
-               "ue_aware_spine_avoid1s_od_rackdefer": {"loss_avoid_ns": 1_000_000_000},
-               "reps_oracle_fwd_od_rackdefer": {"oracle_hops": "forward", "grade_cost_source": "switch_queue"}}
+        own = {"reps_oracle_fwd_od_rackdefer": {"oracle_hops": "forward", "grade_cost_source": "switch_queue"}}
         for stage, wide in profiles.A2A_MATRIX_STAGES.items():
             if stage == "a2a_wide64_matrix_4k" and "ep64-256k-p4096-w64" not in committed["per_receiver"]:
                 continue
             runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
-            self.assertEqual(len(runs), 162, stage)
+            self.assertEqual(len(runs), 144, stage)
             self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_MATRIX_ARMS))
             self.assertEqual({r["condition"] for r in runs}, {"loss1e2_down", "sparse_loss1e2", "healthy"})
             self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
@@ -2916,7 +2913,7 @@ class Wide(unittest.TestCase):
                                                 "network": {**network, "load_balancing": balancing}}, arm)
                 elif wide == 256:
                     self.assertEqual(document, {**mrc[(arm, condition, seed)], "name": document["name"]}, arm)
-            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "5c3bcdff3350f07ea87fdc068a70e1ffd75cc09a")
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "d68572320c38133238019796d6c675d0022532d0")
 
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are

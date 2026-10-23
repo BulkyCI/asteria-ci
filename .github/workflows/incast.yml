@@ -48,6 +48,11 @@ on:
         required: false
         default: 64
         type: number
+      dcs_cores:
+        description: Cores asked of SLURM for each DCS shard, named to the cluster as the runner's -c<N> suffix; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
+        required: false
+        default: 2
+        type: number
       compiler_cache:
         description: Restore the newest compiler cache, or build the runtime without one
         required: false
@@ -237,7 +242,7 @@ jobs:
 
     - uses: ./.github/actions/dcs-provision
       with:
-        runner-name: dcs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard.id }}
+        runner-name: dcs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard.id }}${{ inputs.dcs_cores > 2 && format('-c{0}', inputs.dcs_cores) || '' }}
         run-label: dcs-r${{ github.run_id }}-${{ matrix.shard.id }}
         app-id: ${{ vars.DCS_APP_ID }}
         app-private-key: ${{ secrets.DCS_APP_PRIVATE_KEY }}
@@ -338,12 +343,35 @@ jobs:
       run: |
         set -uo pipefail
         mkdir -p results
+        # The allocation SLURM granted, not the one asked for, sets the
+        # parallelism: above 2 cores each simulation is its own job step,
+        # pinned to one core with an equal share of the job's memory and
+        # metered by SLURM, and one core stays with the runner.
+        LAUNCH=""
+        cores="${SLURM_CPUS_PER_TASK:-0}"
+        if (( cores > 2 )) && command -v srun >/dev/null; then
+          PARALLEL=$((cores - 1))
+          step_mem="${SLURM_MEM_PER_CPU:-$(( ${SLURM_MEM_PER_NODE:-0} / cores ))}"
+          LAUNCH="srun --exact --ntasks=1 --cpus-per-task=1 --mem=${step_mem}M"
+          # A step that cannot start leaves the runs to share the job's cores
+          # unpinned, at the same parallelism.
+          if ! $LAUNCH true; then
+            echo "[shard] job steps unavailable; running unpinned"
+            LAUNCH=""
+          fi
+          echo "[shard] ${cores} cores: ${PARALLEL} simulations at once, ${step_mem} MB each"
+        fi
+        export LAUNCH
         for key in $KEYS; do
           stage="${key%%-*}"
           printf '%s %s\n' "profiles/$stage" "$key"
         done | xargs -P "$PARALLEL" -L 1 sh -c \
-          'bash study/incast/run_one.sh "$0" "$1" results' \
+          '$LAUNCH bash study/incast/run_one.sh "$0" "$1" results' \
           | tee results/shard-${{ matrix.shard.id }}.txt
+        if [[ -n "$LAUNCH" ]] && command -v sacct >/dev/null; then
+          sacct -j "$SLURM_JOB_ID" --format=JobID,Elapsed,MaxRSS,State -P \
+            > results/shard-${{ matrix.shard.id }}-steps.txt || true
+        fi
         echo "--- $(grep -c 'status 0,' results/shard-${{ matrix.shard.id }}.txt) of $(wc -w <<< "$KEYS") runs completed cleanly"
 
     - name: Upload the shard's results

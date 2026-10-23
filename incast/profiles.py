@@ -1487,10 +1487,10 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 # - a2a_wide256_themis_4k: a2a_wide32_themis4_4k's _psn and _t2fl arms at 256
 #   spines, on a2a_wide256_mrc_4k's cells and seeds.
 # - a2a_wide<P>_matrix_4k, P in A2A_MATRIX_SPINES: the published baselines
-#   over named spines (A2A_MATRIX_BASELINES) and a2a_wide256_mrc_4k's three
-#   arms, every one on the sender-only _rackdefer arm's transport, on
-#   a2a_wide256_mrc_4k's cells and seeds, at the asteria commit that adds
-#   mrc_spine and ue_aware_spine.
+#   over named spines at their defaults (A2A_MATRIX_BASELINES) and
+#   a2a_wide256_mrc_4k's three arms, every one on the sender-only _rackdefer
+#   arm's transport, on a2a_wide256_mrc_4k's cells and seeds, at the asteria
+#   commit with mrc_spine and ue_aware_spine.
 # - a2a_wide32_fair_4k: one spraying rule for every arm, Themis's: its _psn
 #   and _t2fl arms, and a2a_wide256_rack_4k's sender-only and receiver
 #   _rackdefer arms with their loss hold under selector themis_hold and no
@@ -1668,18 +1668,15 @@ A2A_NAMED_SPINE_SELECTORS = (A2A_REPS_SPINE, A2A_THEMIS, "mrc_spine", "ue_aware_
 # The matrix: at every P of A2A_MATRIX_SPINES the same arms on the same
 # cells and seeds, all with the sender-only _rackdefer arm's transport keys
 # (A2A_THEMIS_TRANSPORT_KEYS). The published baselines over named spines,
-# each with its base and the keys it adds: oblivious spraying (the uniform
-# draw); REPS; MRC at its defaults and with its probe a thousand timeouts
-# apart, so that a retired spine stays retired for the run; UEC path-aware
-# spraying passing over a spine with a declared loss for a second, the rest
-# of the run; and the forward-hop REPS oracle as a bound. Then
-# a2a_wide256_mrc_4k's three arms.
+# each as its source states it, with its base and the keys it adds:
+# oblivious spraying (the uniform draw), REPS, MRC and UEC path-aware
+# spraying at their defaults; and the forward-hop REPS oracle as a bound.
+# Then a2a_wide256_mrc_4k's three arms.
 A2A_MATRIX_BASELINES = {
     "uniform_od_rackdefer": ("uniform", {}),
     "reps_spine_od_rackdefer": (A2A_REPS_SPINE, {}),
     "mrc_spine_od_rackdefer": ("mrc_spine", {}),
-    "mrc_spine_probe1000_od_rackdefer": ("mrc_spine", {"probe_timeouts": 1000}),
-    "ue_aware_spine_avoid1s_od_rackdefer": ("ue_aware_spine", {"loss_avoid_ns": 1_000_000_000}),
+    "ue_aware_spine_od_rackdefer": ("ue_aware_spine", {}),
     "reps_oracle_fwd_od_rackdefer": (A2A_REPS_ORACLE, {"oracle_hops": "forward"}),
 }
 A2A_TRANSPORT_ARMS.update({arm: base for arm, (base, _) in A2A_MATRIX_BASELINES.items()})
@@ -1746,7 +1743,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
     "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
-    **{stage: "5c3bcdff3350f07ea87fdc068a70e1ffd75cc09a" for stage in A2A_MATRIX_STAGES},
+    **{stage: "d68572320c38133238019796d6c675d0022532d0" for stage in A2A_MATRIX_STAGES},
 }
 
 
