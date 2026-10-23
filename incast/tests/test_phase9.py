@@ -72,6 +72,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_rauto_od_4k": 24,
                  "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_rack_4k": 78, "a2a_wide32_themis_4k": 36,
                  "a2a_wide32_themis2_4k": 18, "a2a_wide32_themis3_4k": 18, "a2a_wide32_themis4_4k": 27,
+                 "a2a_wide256_themis_4k": 36,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2840,6 +2841,32 @@ class Wide(unittest.TestCase):
                           "mrc_hold_auto_tail4_cover_rx_slots8_spread64_widen2_rauto1_od_rackdefer"})
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_mrc_4k"],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_rack_4k"])
+
+    def test_themis256(self):
+        # a2a_wide32_themis4_4k's _psn and _t2fl arms at 256 spines on
+        # a2a_wide256_mrc_4k's cells and seeds: each run's profile is its
+        # sender-only MRC twin's but for its name, its load balancing, which is
+        # the 32-spine arm's, and no loss hold trace; it builds at
+        # incast/asteria.ref.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        runs = profiles.a2a_stage_runs("a2a_wide256_themis_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 36)
+        self.assertEqual({r["arm"] for r in runs}, {"themis_psn_od_rackdefer", "themis_t2fl_od_rackdefer"})
+        self.assertEqual({r["condition"] for r in runs}, {"loss1e2_down", "sparse_loss1e2", "healthy"})
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+        mrc = {(r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+               for r in profiles.a2a_stage_runs("a2a_wide256_mrc_4k", committed, self.tuning)
+               if r["arm"] == "mrc_hold_auto_tail4_cover_spread64_od_rackdefer"}
+        small = {r["arm"]: profiles.a2a_stage_profile(r, committed)["network"]["load_balancing"]
+                 for r in profiles.a2a_stage_runs("a2a_wide32_themis4_4k", committed, self.tuning)}
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            twin = mrc[(r["condition"], r["seed"])]
+            network = {k: v for k, v in twin["network"].items() if k != "sparse_hold_trace"}
+            expected = {**twin, "name": document["name"], "network": {**network, "load_balancing": small[r["arm"]]}}
+            self.assertEqual(document, expected, r["key"])
+            self.assertEqual(document["network"]["spine_count"], 256)
+        self.assertNotIn("a2a_wide256_themis_4k", profiles.A2A_STAGE_ASTERIA_REF)
 
     def test_themis_pilot(self):
         # The sender-only _rackdefer arm and three Themis-style arms at 32

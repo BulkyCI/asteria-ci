@@ -1481,6 +1481,8 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   signal no longer repairs a send RACK has repaired, and _t2f with the host's
 #   connections to a leaf sharing their avoidance (_t2fl), on the same cells
 #   and seeds.
+# - a2a_wide256_themis_4k: a2a_wide32_themis4_4k's _psn and _t2fl arms at 256
+#   spines, on a2a_wide256_mrc_4k's cells and seeds.
 # - a2a_wide256_mrc_4k: a2a_wide256_rack_4k's three _rackdefer arms with
 #   MRC's spraying over every spine (mrc_hold) in place of REPS's cached
 #   paths (A2A_WIDE_MRC_ARMS), the same keys otherwise, on loss1e2_down and
@@ -1618,8 +1620,12 @@ A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide32_themis4_4k"] = {
     "themis_t2fl_od_rackdefer": {"themis_ooo_threshold": 2, "themis_stash_min_ns": 6162,
                                  "themis_leaf_avoidance": True},
 }
+A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide256_themis_4k"] = {
+    arm: A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide32_themis4_4k"][arm]
+    for arm in ("themis_psn_od_rackdefer", "themis_t2fl_od_rackdefer")}
 A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arms in A2A_WIDE_THEMIS2_STAGE_ARMS.values() for arm in arms})
-A2A_WIDE_THEMIS2_STAGES = {stage: 32 for stage in A2A_WIDE_THEMIS2_STAGE_ARMS}
+A2A_WIDE_THEMIS256_STAGES = {"a2a_wide256_themis_4k": 256}
+A2A_WIDE_THEMIS2_STAGES = {stage: A2A_WIDE_THEMIS256_STAGES.get(stage, 32) for stage in A2A_WIDE_THEMIS2_STAGE_ARMS}
 A2A_WIDE_UID_ARMS = (A2A_WIDE_SPREAD_ARMS[1], f"{A2A_WIDE_SPREAD_ARMS[1]}_od")
 A2A_WIDE_UID_SEEDS = (309, 311)
 A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
@@ -2313,7 +2319,8 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for themis_stage in A2A_WIDE_THEMIS_PILOT_STAGES},
         **{uid_stage: (A2A_WIDE_OD_CELLS, A2A_WIDE_UID_ARMS) for uid_stage in A2A_WIDE_UID_STAGES},
         **{mrc_stage: (A2A_WIDE_OD2_CELLS, tuple(A2A_WIDE_MRC_ARMS)) for mrc_stage in A2A_WIDE_MRC_STAGES},
-        **{themis2_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, tuple(A2A_WIDE_THEMIS2_STAGE_ARMS[themis2_stage]))
+        **{themis2_stage: (A2A_WIDE_OD2_CELLS if themis2_stage in A2A_WIDE_THEMIS256_STAGES
+                           else A2A_WIDE_THEMIS_PILOT_CELLS, tuple(A2A_WIDE_THEMIS2_STAGE_ARMS[themis2_stage]))
            for themis2_stage in A2A_WIDE_THEMIS2_STAGES},
     }[stage]
 
@@ -2545,6 +2552,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_WIDE_WIDEN_SEEDS
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
                  or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
+                 or stage in A2A_WIDE_THEMIS256_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
