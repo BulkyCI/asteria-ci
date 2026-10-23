@@ -391,6 +391,18 @@ class Losses(unittest.TestCase):
         self.assertEqual(result["spines"], {"2": {"sent": 16, "lost": 1}, "3": {"sent": 60, "lost": 25}})
         self.assertEqual(result["cumulative_lost_reached_ns"], {"1": 100, "5": 200, "20": 400})
         self.assertEqual(result["cumulative_lost_reached_after_onset_ns"], {"1": 50, "5": 150, "20": 350})
+        self.assertEqual(result["damaged_lines"], 0)
+
+    def test_lines_a_storage_fault_filled_with_nul_bytes_are_counted_not_read(self):
+        # The fault's runs are longer than the csv module's field limit.
+        damaged = "20" + "\0" * 200_000 + "0,1,3,10,2,3\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            path.write_text("time_ns,rank,spine,sent,lost,grade\n100,0,3,10,1,3\n" + damaged + "300,0,3,10,4,3\n")
+            result = summarize.spine_losses(path, 3, 50)
+        self.assertEqual(result["spines"], {"3": {"sent": 20, "lost": 5}})
+        self.assertEqual(result["damaged_lines"], 1)
+        self.assertEqual(result["cumulative_lost_reached_ns"], {"1": 100, "5": 300, "20": None})
 
 
 def run(arm, group, size, condition, seed, stage="a2a_gate", setting=None):

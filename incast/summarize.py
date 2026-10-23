@@ -265,9 +265,21 @@ def spine_losses(path: Path, spine: int | None, onset_ns: int | None) -> dict:
     DETECTION_COUNTS; never, for no spine."""
     totals: dict[int, list[int]] = {}
     lost_at: dict[int, int] = {}
-    # Its counts summed, from the rows as written (traces).
+    damaged = 0
+
+    def intact(lines):
+        nonlocal damaged
+        for line in lines:
+            if "\0" in line:
+                damaged += 1
+            else:
+                yield line
+
+    # Its counts summed, from the rows as written (traces). A storage fault
+    # can leave runs of NUL bytes where rows were: such lines are counted,
+    # never read as rows.
     with path.open() as handle:
-        for row in csv.DictReader(handle):
+        for row in csv.DictReader(intact(handle)):
             s = int(row["spine"])
             lost = int(row["lost"])
             cell = totals.setdefault(s, [0, 0])
@@ -285,6 +297,7 @@ def spine_losses(path: Path, spine: int | None, onset_ns: int | None) -> dict:
                 reached[str(n)] = time
     return {
         "spines": {str(s): {"sent": c[0], "lost": c[1]} for s, c in sorted(totals.items())},
+        "damaged_lines": damaged,
         "faulted_spine": spine,
         "onset_ns": onset_ns,
         "cumulative_lost_reached_ns": reached,
