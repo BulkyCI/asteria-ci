@@ -49,7 +49,7 @@ on:
         default: 64
         type: number
       dcs_cores:
-        description: Cores asked of SLURM for each DCS shard, with 4 GB each, as the slice's --cpus-per-task and --mem; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
+        description: CPUs asked of SLURM for each DCS shard, with 4 GB each, as the slice's --cpus-per-task and --mem; with more than 2 granted, the shard runs one simulation per physical core, each its own job step (on DCS, 2 CPUs to a core)
         required: false
         default: 2
         type: number
@@ -360,22 +360,29 @@ jobs:
         set -uo pipefail
         mkdir -p results
         # The allocation SLURM granted, not the one asked for, sets the
-        # parallelism: above 2 cores each simulation is its own job step,
-        # pinned to one core with an equal share of the job's memory and
-        # metered by SLURM, and one core stays with the runner.
+        # parallelism: above 2 CPUs each simulation is its own job step on
+        # one whole physical core, with an equal share of the job's memory,
+        # metered by SLURM. SLURM allocates a hyperthreaded node by the core,
+        # so a 1-CPU step would take a core anyway and the rest would wait;
+        # the runner shares the cores' second threads, and on a node without
+        # them one core stays with it.
         LAUNCH=""
-        cores="${SLURM_CPUS_PER_TASK:-0}"
-        if (( cores > 2 )) && command -v srun >/dev/null; then
-          PARALLEL=$((cores - 1))
-          step_mem="${SLURM_MEM_PER_CPU:-$(( ${SLURM_MEM_PER_NODE:-0} / cores ))}"
-          LAUNCH="srun --exact --ntasks=1 --cpus-per-task=1 --mem=${step_mem}M"
+        cpus="${SLURM_CPUS_ON_NODE:-0}"
+        if (( cpus > 2 )) && command -v srun >/dev/null; then
+          threads=$(scontrol show node "${SLURMD_NODENAME:-}" 2>/dev/null | grep -o 'ThreadsPerCore=[0-9]*' | cut -d= -f2)
+          threads=${threads:-1}
+          PARALLEL=$((cpus / threads))
+          (( threads > 1 )) || PARALLEL=$((PARALLEL - 1))
+          job_mem=${SLURM_MEM_PER_NODE:-$(( ${SLURM_MEM_PER_CPU:-0} * cpus ))}
+          step_mem=$((job_mem / PARALLEL))
+          LAUNCH="srun --exact --ntasks=1 --cpus-per-task=${threads} --mem=${step_mem}M"
           # A step that cannot start leaves the runs to share the job's cores
           # unpinned, at the same parallelism.
           if ! $LAUNCH true; then
             echo "[shard] job steps unavailable; running unpinned"
             LAUNCH=""
           fi
-          echo "[shard] ${cores} cores: ${PARALLEL} simulations at once, ${step_mem} MB each"
+          echo "[shard] ${cpus} CPUs, ${threads} per core: ${PARALLEL} simulations at once, ${step_mem} MB each"
         fi
         export LAUNCH
         for key in $KEYS; do
