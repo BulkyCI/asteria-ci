@@ -4,8 +4,8 @@
 # Needs ASTERIA (an asteria checkout with a locked environment), and the
 # simulator as ASTRA_SIM_BINARY or the checkout's own build. Writes
 # OUT_ROOT/KEY with the run's small outputs and summary.json; the raw event
-# stream is reduced and deleted. A run already summarized is skipped, so a
-# shard can be re-run after an interruption.
+# stream is reduced and deleted as it is written. A run already summarized
+# is skipped, so a shard can be re-run after an interruption.
 set -euo pipefail
 key=$2
 profile_dir=$(realpath "$1")
@@ -19,12 +19,33 @@ out="$out_root/$key"
 seed=$("$python" -c 'import json,sys; print(next(r["seed"] for r in json.load(open(sys.argv[1])) if r["key"]==sys.argv[2]))' "$profile_dir/runs.json" "$key")
 binary=()
 [[ -n "${ASTRA_SIM_BINARY:-}" ]] && binary=(--binary "$ASTRA_SIM_BINARY")
+# While the simulator runs, summarize.py --follow bins its event segments
+# and deletes each one it has read, so the run keeps about one segment on
+# scratch rather than its whole stream; it returns once the file
+# $simulated marks the simulator's exit. The segments of an earlier,
+# interrupted attempt would be taken for this one's, so its directory goes
+# first, as --clean would remove it. The follower yields the core to the
+# simulator.
+simulated="$out_root/$key.simulated"
+rm -rf "$out" "$simulated"
+nice "$python" "$here/summarize.py" "$out" --profile "$profile_dir/$key.json" --follow "$simulated" &
+follower=$!
+# Should this script stop before writing $simulated, the follower would wait
+# for it forever.
+trap 'kill "$follower" 2>/dev/null || true' EXIT
 start=$(date +%s)
 status=0
 (cd "$asteria" && "$python" experiments/ring_3d/run.py --profile "$profile_dir/$key.json" \
     --output "$out" --clean --seed "$seed" --skip-analysis "${binary[@]}" \
     --simulation-timeout-seconds "${SIMULATION_TIMEOUT_SECONDS:-21600}") > "$out_root/$key.log" 2>&1 || status=$?
 wall=$(( $(date +%s) - start ))
+touch "$simulated"
+follower_status=0
+wait "$follower" || follower_status=$?
+rm -f "$simulated"
+# A follower that stopped early leaves its counts and the segments it had
+# not read, from which summarize.py takes the rest.
+(( follower_status == 0 )) || echo "$key: follower status $follower_status"
 # A run the transport gives up on (a queue pair exhausting its retries) is a
 # result for its arm, not an error of the study: it is summarized like any
 # other, with the simulator's status and its stated reason, and the run
