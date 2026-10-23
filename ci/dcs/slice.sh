@@ -12,8 +12,10 @@
 #                         --job-name=... --test-only ...
 # Whatever the options leave out comes from the script's #SBATCH lines.
 # This command's stdin, at most 64 KiB, is kept for the job, which finds it
-# at $DCS_SLICE_PAYLOAD beside DCS_SLICE_REPO and DCS_SLICE_REF. A
-# repository's jobs start in ~/slices/<name>, where their logs land.
+# at $DCS_SLICE_PAYLOAD beside DCS_SLICE_REPO and DCS_SLICE_REF. They reach
+# it in sbatch's default --export=ALL: naming variables in --export would
+# make SLURM load the login environment on the node, which DCS fails to do.
+# A repository's jobs start in ~/slices/<name>, where their logs land.
 #
 # A branch is read through GitHub's raw cache, which can trail a push by a
 # few minutes; a commit is exact, so workflows pass theirs.
@@ -54,8 +56,7 @@ cd "$dir"
 payload=$(mktemp "$dir/payload.XXXXXX")
 head -c 65536 > "$payload"
 echo "slice: $script at $repo $ref" >&2
-sbatch "${options[@]}" \
-    --export="ALL,DCS_SLICE_PAYLOAD=$payload,DCS_SLICE_REPO=$repo,DCS_SLICE_REF=$ref" \
-    <<< "$job" || { rm -f "$payload"; exit 1; }
+export DCS_SLICE_PAYLOAD=$payload DCS_SLICE_REPO=$repo DCS_SLICE_REF=$ref
+sbatch "${options[@]}" <<< "$job" || { rm -f "$payload"; exit 1; }
 # --test-only submits nothing, so nothing will read the payload.
 [[ " ${options[*]} " != *" --test-only "* ]] || rm -f "$payload"

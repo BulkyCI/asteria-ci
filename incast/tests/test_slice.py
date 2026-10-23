@@ -27,8 +27,8 @@ SBATCH = r"""#!/bin/bash
 [[ -e "$FX/sbatch-fails" ]] && exit 1
 printf '%s\n' "$@" > "$FX/out/args"
 cat > "$FX/out/script"
-payload=$(tr ',' '\n' <<< "${*: -1}" | sed -n 's/^DCS_SLICE_PAYLOAD=//p')
-cp "$payload" "$FX/out/payload"
+env | grep '^DCS_SLICE_' | sort > "$FX/out/env"
+cp "$DCS_SLICE_PAYLOAD" "$FX/out/payload"
 pwd > "$FX/out/cwd"
 echo 4242
 """
@@ -77,13 +77,13 @@ class SliceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "4242\n")
         directory = self.home / "slices" / "asteria-ci"
-        args = self.out("args").splitlines()
-        self.assertEqual(args[0], "--parsable")
+        # No --export: a variable list there makes SLURM load the login
+        # environment on the node; the job's variables ride the default ALL.
+        self.assertEqual(self.out("args").splitlines(), ["--parsable"])
         self.assertRegex(
-            args[1],
-            rf"^--export=ALL,DCS_SLICE_PAYLOAD={directory}/payload\.\w+,DCS_SLICE_REPO={REPO},DCS_SLICE_REF=main$",
+            self.out("env"),
+            rf"^DCS_SLICE_PAYLOAD={directory}/payload\.\w+\nDCS_SLICE_REF=main\nDCS_SLICE_REPO={REPO}\n$",
         )
-        self.assertEqual(len(args), 2)
         self.assertEqual(self.out("script"), "main runner\n")
         # The payload is stdin, whole, although curl tried to read stdin too.
         self.assertEqual(self.out("payload"), "jitconfig")
@@ -95,8 +95,8 @@ class SliceTests(unittest.TestCase):
         result = self.slice(f"repo={REPO} ref={COMMIT} script=ci/dcs/other.sh {words}")
         self.assertEqual(result.returncode, 0, result.stderr)
         args = self.out("args").splitlines()
-        self.assertEqual(args[1:-1], words.split())
-        self.assertTrue(args[-1].endswith(f",DCS_SLICE_REF={COMMIT}"))
+        self.assertEqual(args[1:], words.split())
+        self.assertIn(f"DCS_SLICE_REF={COMMIT}\n", self.out("env"))
         self.assertEqual(self.out("script"), "other script\n")
         self.assertIn(f"ci/dcs/other.sh at {REPO} {COMMIT}", result.stderr)
 
