@@ -86,8 +86,9 @@ The asteria commit under test is `incast/asteria.ref`.
 
 ## Cluster
 
-The DCS key's forced command is `ci/dcs/slice.sh`, installed once at
-`~/asteria-ci/bin/slice.sh` and never edited on the cluster. It applies to
+The DCS key's forced command is `ci/dcs/slice.sh`, installed once wherever
+the key's `authorized_keys` line points (on DCS, the account's
+`~/astra-ci/bin/accept-runner.sh`) and never edited on the cluster. It applies to
 SLURM for a slice and runs a job script from a branch of this repository
 (or `caddyreverse/asteria`) on it, taken from GitHub at the branch's head
 when the slice is submitted, so a push changes what slices do. The SSH
@@ -105,13 +106,11 @@ account: push access to them, with the deploy key, is the trust
 boundary. The key alone cannot choose a commit outside their branches or
 an sbatch option outside the list.
 
-Install, or update the installed copy, from a pinned commit:
+Install, or update the installed copy, from a pinned commit, over the
+file the key's line names:
 
 ```sh
-f=~/asteria-ci/bin/slice.sh; mkdir -p ~/asteria-ci/bin
+f=~/astra-ci/bin/accept-runner.sh
 curl -fsSL -o "$f.new" https://raw.githubusercontent.com/BulkyCI/asteria-ci/<commit>/ci/dcs/slice.sh
 chmod 700 "$f.new" && bash -n "$f.new" && mv "$f.new" "$f"
 ```
-
-and point the key's `authorized_keys` line at it:
-`command="/home/<user>/asteria-ci/bin/slice.sh",restrict ssh-ed25519 ...`.
