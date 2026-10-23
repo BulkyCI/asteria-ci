@@ -88,23 +88,29 @@ The asteria commit under test is `incast/asteria.ref`.
 
 The DCS key's forced command is `ci/dcs/slice.sh`, installed once wherever
 the key's `authorized_keys` line points (on DCS, the account's
-`~/astra-ci/bin/accept-runner.sh`) and never edited on the cluster. It applies to
-SLURM for a slice and runs a job script from a branch of this repository
-(or `caddyreverse/asteria`) on it, taken from GitHub at the branch's head
-when the slice is submitted, so a push changes what slices do. The SSH
-command word is the job name followed by `key=value` options (`repo`,
-`branch`, `script`, `cpus`, `mem`, `time`, `nodes`, `ntasks`,
-`constraint`, `partition`, `qos`, `gres`, `test`; the script's header
-gives each one's bounds), and stdin is the job's payload, a runner's JIT
-config by default. Options left out come from the job script's own
-`#SBATCH` lines. The default script, `ci/dcs/runner-job.sbatch` from
-`main`, keeps job scratch, store and outbox under
-`<scratch base>/asteria/`, apart from astra-sim's.
+`~/astra-ci/bin/accept-runner.sh`) and never edited on the cluster. It serves
+every repository of the BulkyCI organization alike: it applies to SLURM for
+a slice and runs a job script from a branch of the named repository on it,
+taken from GitHub at the branch's head when the slice is submitted, so a
+push changes what slices do. The SSH command word is the job name
+followed by `key=value` options: `repo` (`BulkyCI/<name>`, required),
+`branch`, `script`, `cpus`, `mem`, `time`, `nodes`, `ntasks`, `array`,
+`exclusive`, `constraint`, `partition`, `qos`, `gres`, `account`,
+`dependency`, `test` and `auth` (the script's header gives each one's
+bounds). stdin is the job's payload, a runner's JIT config by default; for
+a private repository `auth=1` puts a GitHub token on stdin's first line,
+used only to read the repository and never stored. Options left out come
+from the job script's own `#SBATCH` lines. Each repository gets its own
+directory, `~/slices/<name>`, for its payloads and SLURM logs. The
+provision action sends `repo=` with this repository's name, so a copy of
+the action in another repository runs that repository's scripts. This
+repository's default script, `ci/dcs/runner-job.sbatch` from `main`, keeps
+job scratch, store and outbox under `<scratch base>/asteria/`.
 
-Whatever is on a branch of those two repositories can run on the
-account: push access to them, with the deploy key, is the trust
-boundary. The key alone cannot choose a commit outside their branches or
-an sbatch option outside the list.
+Whatever is on a branch of a BulkyCI repository can run on the account:
+push access to one, with the deploy key, is the trust boundary. The key
+alone cannot choose a commit outside those branches or an sbatch option
+outside the list.
 
 Install, or update the installed copy, from a pinned commit, over the
 file the key's line names:

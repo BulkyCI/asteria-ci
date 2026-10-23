@@ -81,8 +81,8 @@ runs:
       printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
       # The key is bound to the cluster's slice command (this repository's
       # ci/dcs/slice.sh), which reads the jitconfig from stdin and runs
-      # the runner job on a SLURM slice. The command word is never
-      # executed: its bare word, sanitized, is the SLURM job name so squeue
-      # identifies the experiment, and the slice options follow it.
+      # this repository's runner job on a SLURM slice. The command word is
+      # never executed: its bare word, sanitized, is the SLURM job name so
+      # squeue identifies the experiment, and the slice options follow it.
       printf '%s' "$jit" | ssh -i ~/.ssh/id_ci -o BatchMode=yes \
-        "$SSH_DEST" "asteria/$RUNNER_NAME${SLICE:+ $SLICE}"
+        "$SSH_DEST" "asteria/$RUNNER_NAME repo=$GITHUB_REPOSITORY${SLICE:+ $SLICE}"
