@@ -88,6 +88,7 @@ jobs:
         STAGES: ${{ inputs.stages }}
         RECORD_FILTER: ${{ inputs.record_filter }}
         RUNS_PER_SHARD: ${{ inputs.runs_per_shard }}
+        MAX_PARALLEL: ${{ inputs.max_parallel }}
         RUNNER_KIND: ${{ inputs.runner }}
       run: |
         set -euo pipefail
@@ -103,7 +104,10 @@ jobs:
           python3 incast/profiles.py write --out "profiles/$stage" --stage "$stage" --filter="$RECORD_FILTER" \
             "${args[@]}"
         done
-        python3 incast/shards.py profiles --runs-per-shard "$RUNS_PER_SHARD" --out profiles/shards.json
+        # Every cluster runner is provisioned up front (shards.py).
+        at_once=()
+        [[ "$RUNNER_KIND" == dcs ]] && at_once=(--at-once "$MAX_PARALLEL")
+        python3 incast/shards.py profiles --runs-per-shard "$RUNS_PER_SHARD" "${at_once[@]}" --out profiles/shards.json
         # A stage profiles.py pins builds at its own asteria commit; one run
         # builds one commit.
         default_ref=$(tr -d '[:space:]' < incast/asteria.ref)

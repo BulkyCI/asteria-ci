@@ -549,6 +549,29 @@ class Candidates(unittest.TestCase):
         # The 28 gate cells and 4 healthy pairs by 4 arms by 3 seeds.
         self.assertEqual(len(keys), (28 + 4) * 4 * 3)
 
+    def test_shards_beyond_those_run_at_once_are_refused(self):
+        # On the cluster a shard that cannot start with the others outwaits
+        # its runner; --at-once refuses such a plan.
+        here = Path(profiles.__file__).parent
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "stage").mkdir()
+            (root / "stage" / "runs.json").write_text(json.dumps([{"key": f"stage-r{i}", "k": 1} for i in range(9)]))
+
+            def plan(*extra):
+                return subprocess.run(
+                    [sys.executable, str(here / "shards.py"), str(root), "--runs-per-shard", "3", *extra,
+                     "--out", str(root / "shards.json")],
+                    capture_output=True, text=True,
+                )
+
+            refused = plan("--at-once", "2")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("3 shards, but 2 run at once", refused.stderr)
+            self.assertEqual(plan("--at-once", "3").returncode, 0)
+            self.assertEqual(len(json.loads((root / "shards.json").read_text())), 3)
+            self.assertEqual(plan().returncode, 0)
+
 
 class Receiver(unittest.TestCase):
     def test_runs_and_settings(self):
