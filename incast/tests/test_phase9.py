@@ -71,7 +71,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # stage's 3 arms on multi_loss1e3 and healthy.
                  "a2a_wide256_od_4k": 36, "a2a_wide256_od2_4k": 54, "a2a_wide256_rauto_od_4k": 24,
                  "a2a_wide32_rack_4k": 12, "a2a_wide32_rack2_4k": 24, "a2a_wide256_rack_4k": 78, "a2a_wide32_themis_4k": 36,
-                 "a2a_wide32_themis2_4k": 18, "a2a_wide32_themis3_4k": 18,
+                 "a2a_wide32_themis2_4k": 18, "a2a_wide32_themis3_4k": 18, "a2a_wide32_themis4_4k": 27,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2864,31 +2864,38 @@ class Wide(unittest.TestCase):
             self.assertEqual(balancing, expected, (arm, condition, seed))
             self.assertNotIn("sparse_hold_trace", document["network"])
             self.assertEqual(document["network"]["spine_count"], 32)
-        self.assertNotIn("a2a_wide32_themis_4k", profiles.A2A_STAGE_ASTERIA_REF)
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide32_themis_4k"],
+                         "db1e2d6bddf9df39709b289baf552d5113376eab")
 
     def test_themis2(self):
-        # The _psn arm and a floored threshold arm at 32 spines per stage:
-        # each run's profile is its a2a_wide32_themis_4k _psn twin's, with the
-        # floored arm's threshold and stash floor, and the same seeds and cells.
+        # The _psn arm and floored threshold arms at 32 spines per stage: each
+        # run's profile is its a2a_wide32_themis_4k _psn twin's, with the
+        # floored arm's keys, and the same seeds and cells. The read stages
+        # stay at the commits they built; a2a_wide32_themis4_4k builds at
+        # incast/asteria.ref.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         pilot = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
                  for r in profiles.a2a_stage_runs("a2a_wide32_themis_4k", committed, self.tuning)}
-        floored = {"a2a_wide32_themis2_4k": ("themis_t5f_od_rackdefer", 5, 24648),
-                   "a2a_wide32_themis3_4k": ("themis_t2f_od_rackdefer", 2, 6162)}
-        for stage, (arm, threshold, floor) in floored.items():
+        t2f = {"themis_ooo_threshold": 2, "themis_stash_min_ns": 6162}
+        floored = {"a2a_wide32_themis2_4k": {"themis_t5f_od_rackdefer": {"themis_ooo_threshold": 5,
+                                                                         "themis_stash_min_ns": 24648}},
+                   "a2a_wide32_themis3_4k": {"themis_t2f_od_rackdefer": t2f},
+                   "a2a_wide32_themis4_4k": {"themis_t2f_od_rackdefer": t2f,
+                                             "themis_t2fl_od_rackdefer": {**t2f, "themis_leaf_avoidance": True}}}
+        refs = {"a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
+                "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7"}
+        for stage, arms in floored.items():
             runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
-            self.assertEqual(len(runs), 18)
-            self.assertEqual({r["arm"] for r in runs}, {"themis_psn_od_rackdefer", arm})
+            self.assertEqual(len(runs), 9 * (1 + len(arms)))
+            self.assertEqual({r["arm"] for r in runs}, {"themis_psn_od_rackdefer", *arms})
             for run in runs:
                 document = profiles.a2a_stage_profile(run, committed)
                 twin = pilot[("themis_psn_od_rackdefer", run["condition"], run["seed"])]
-                expected = twin["network"]["load_balancing"]
-                if run["arm"] == arm:
-                    expected = {**expected, "themis_ooo_threshold": threshold, "themis_stash_min_ns": floor}
+                expected = {**twin["network"]["load_balancing"], **arms.get(run["arm"], {})}
                 self.assertEqual(document["network"]["load_balancing"], expected, (stage, run["arm"]))
                 self.assertEqual({k: v for k, v in document.items() if k not in ("name", "network")},
                                  {k: v for k, v in twin.items() if k not in ("name", "network")}, (stage, run["arm"]))
-            self.assertNotIn(stage, profiles.A2A_STAGE_ASTERIA_REF)
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF.get(stage), refs.get(stage), stage)
 
     def test_uid(self):
         # The healthy runs of seeds 309 and 311 of the receiver arm and its

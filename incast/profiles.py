@@ -1477,6 +1477,10 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   A2A_WIDE_THEMIS2_STAGE_ARMS), on the same cells and seeds.
 # - a2a_wide32_themis3_4k: the same with a threshold of 2 packets and a stash
 #   6,162 ns old (_t2f) in place of _t5f.
+# - a2a_wide32_themis4_4k: a2a_wide32_themis3_4k's two arms, built where a
+#   signal no longer repairs a send RACK has repaired, and _t2f with the host's
+#   connections to a leaf sharing their avoidance (_t2fl), on the same cells
+#   and seeds.
 # - a2a_wide256_mrc_4k: a2a_wide256_rack_4k's three _rackdefer arms with
 #   MRC's spraying over every spine (mrc_hold) in place of REPS's cached
 #   paths (A2A_WIDE_MRC_ARMS), the same keys otherwise, on loss1e2_down and
@@ -1602,12 +1606,17 @@ A2A_WIDE_THEMIS_PILOT_CELLS = (*A2A_WIDE_OD_CELLS, ("ep64", "256k", "loss1e2_dow
 A2A_WIDE_THEMIS_PILOT_STAGES = {"a2a_wide32_themis_4k": 32}
 # Each floored stage's arms: _t5f's stash floor is 2 base RTTs (2 x 12,324
 # ns); _t2f's is half a base RTT, so a lost head signals before the sender's
-# loss rule repairs it.
+# loss rule repairs it; _t2fl is _t2f with themis_leaf_avoidance.
 A2A_WIDE_THEMIS2_STAGE_ARMS = {
     "a2a_wide32_themis2_4k": {"themis_psn_od_rackdefer": A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"],
                               "themis_t5f_od_rackdefer": {"themis_ooo_threshold": 5, "themis_stash_min_ns": 24648}},
     "a2a_wide32_themis3_4k": {"themis_psn_od_rackdefer": A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"],
                               "themis_t2f_od_rackdefer": {"themis_ooo_threshold": 2, "themis_stash_min_ns": 6162}},
+}
+A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide32_themis4_4k"] = {
+    **A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide32_themis3_4k"],
+    "themis_t2fl_od_rackdefer": {"themis_ooo_threshold": 2, "themis_stash_min_ns": 6162,
+                                 "themis_leaf_avoidance": True},
 }
 A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arms in A2A_WIDE_THEMIS2_STAGE_ARMS.values() for arm in arms})
 A2A_WIDE_THEMIS2_STAGES = {stage: 32 for stage in A2A_WIDE_THEMIS2_STAGE_ARMS}
@@ -1659,7 +1668,9 @@ A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuni
 # stage whose runs pair across dispatches (a healthy run in one batch, its
 # faulted runs in later ones) stays at the commit its first runs built: a run
 # that schedules more than 2^32 events breaks ties after that point one way
-# with 32-bit event uids and another with 64-bit ones.
+# with 32-bit event uids and another with 64-bit ones. The Themis stages stay
+# at the commits their read runs built: after f13dafa a signal no longer
+# repairs a send RACK has repaired, which changes every arm that signals.
 A2A_STAGE_ASTERIA_REF = {
     "a2a_wide128_4k": "a6ec152a4f4d7ca1576edae22b63080cfd5e19fe",
     "a2a_wide256_rauto_4k": "a6ec152a4f4d7ca1576edae22b63080cfd5e19fe",
@@ -1671,6 +1682,9 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_rack2_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
     "a2a_wide256_rack_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
     "a2a_wide256_mrc_4k": "6268ca702026b7af170dfea97c4c2464500eb1f3",
+    "a2a_wide32_themis_4k": "db1e2d6bddf9df39709b289baf552d5113376eab",
+    "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
+    "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
 }
 
 
