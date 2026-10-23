@@ -86,7 +86,32 @@ The asteria commit under test is `incast/asteria.ref`.
 
 ## Cluster
 
-The DCS key's forced command routes the `asteria/` command word to
-`~/asteria-ci` (control root) and `~/asteria` (a clone of this repository),
-and `ci/dcs/runner-job.sbatch` keeps job scratch, store and outbox under
+The DCS key's forced command is `ci/dcs/slice.sh`, installed once at
+`~/asteria-ci/bin/slice.sh` and never edited on the cluster. It applies to
+SLURM for a slice and runs a job script from a branch of this repository
+(or `caddyreverse/asteria`) on it, taken from GitHub at the branch's head
+when the slice is submitted, so a push changes what slices do. The SSH
+command word is the job name followed by `key=value` options (`repo`,
+`branch`, `script`, `cpus`, `mem`, `time`, `nodes`, `ntasks`,
+`constraint`, `partition`, `qos`, `gres`, `test`; the script's header
+gives each one's bounds), and stdin is the job's payload, a runner's JIT
+config by default. Options left out come from the job script's own
+`#SBATCH` lines. The default script, `ci/dcs/runner-job.sbatch` from
+`main`, keeps job scratch, store and outbox under
 `<scratch base>/asteria/`, apart from astra-sim's.
+
+Whatever is on a branch of those two repositories can run on the
+account: push access to them, with the deploy key, is the trust
+boundary. The key alone cannot choose a commit outside their branches or
+an sbatch option outside the list.
+
+Install, or update the installed copy, from a pinned commit:
+
+```sh
+f=~/asteria-ci/bin/slice.sh; mkdir -p ~/asteria-ci/bin
+curl -fsSL -o "$f.new" https://raw.githubusercontent.com/BulkyCI/asteria-ci/<commit>/ci/dcs/slice.sh
+chmod 700 "$f.new" && bash -n "$f.new" && mv "$f.new" "$f"
+```
+
+and point the key's `authorized_keys` line at it:
+`command="/home/<user>/asteria-ci/bin/slice.sh",restrict ssh-ed25519 ...`.

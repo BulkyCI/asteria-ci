@@ -33,6 +33,13 @@ inputs:
   ssh-host-key:
     description: One pinned ssh-keyscan line for the destination host.
     required: true
+  slice:
+    description: >
+      Space-separated key=value options for the cluster's slice command
+      (cpus=, mem=, time=, branch=, ...; ci/dcs/slice.sh's header).
+      Empty runs runner-job.sbatch from main at its own resources.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -56,6 +63,7 @@ runs:
       SSH_HOST_KEY: ${{ inputs.ssh-host-key }}
       RUNNER_NAME: ${{ inputs.runner-name }}
       RUN_LABEL: ${{ inputs.run-label }}
+      SLICE: ${{ inputs.slice }}
     run: |
       set -euo pipefail
       # A JIT config registers a runner that executes exactly one job and
@@ -71,11 +79,10 @@ runs:
       # Pinned host key: a man in the middle could otherwise capture the
       # JIT config and impersonate the runner for this one job.
       printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
-      # The key is bound to a forced command on the cluster that reads a
-      # jitconfig from stdin and submits one SLURM runner job. The command
-      # word is never executed; the forced command sanitizes it and uses
-      # it as the SLURM job name so squeue identifies the experiment. The
-      # asteria/ prefix routes the job to this repository's own control
-      # root, checkout and scratch on the cluster account.
+      # The key is bound to the cluster's slice command (this repository's
+      # ci/dcs/slice.sh), which reads the jitconfig from stdin and runs
+      # the runner job on a SLURM slice. The command word is never
+      # executed: its bare word, sanitized, is the SLURM job name so squeue
+      # identifies the experiment, and the slice options follow it.
       printf '%s' "$jit" | ssh -i ~/.ssh/id_ci -o BatchMode=yes \
-        "$SSH_DEST" "asteria/$RUNNER_NAME"
+        "$SSH_DEST" "asteria/$RUNNER_NAME${SLICE:+ $SLICE}"

@@ -49,7 +49,7 @@ on:
         default: 64
         type: number
       dcs_cores:
-        description: Cores asked of SLURM for each DCS shard, named to the cluster as the runner's -c<N> suffix; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
+        description: Cores asked of SLURM for each DCS shard, with 4 GB each, as the slice's cpus= and mem=; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
         required: false
         default: 2
         type: number
@@ -240,9 +240,21 @@ jobs:
         sparse-checkout: .github/actions/dcs-provision
         sparse-checkout-cone-mode: false
 
+    # Above 2 cores, 4 GB each; at 2, runner-job.sbatch's own 2 cores and
+    # 16 GB.
+    - name: Size the slice
+      id: slice
+      env:
+        CORES: ${{ inputs.dcs_cores }}
+      run: |
+        if (( CORES > 2 )); then
+          echo "options=cpus=${CORES} mem=$((CORES * 4))G" >> "$GITHUB_OUTPUT"
+        fi
+
     - uses: ./.github/actions/dcs-provision
       with:
-        runner-name: dcs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard.id }}${{ inputs.dcs_cores > 2 && format('-c{0}', inputs.dcs_cores) || '' }}
+        slice: ${{ steps.slice.outputs.options }}
+        runner-name: dcs-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard.id }}
         run-label: dcs-r${{ github.run_id }}-${{ matrix.shard.id }}
         app-id: ${{ vars.DCS_APP_ID }}
         app-private-key: ${{ secrets.DCS_APP_PRIVATE_KEY }}
