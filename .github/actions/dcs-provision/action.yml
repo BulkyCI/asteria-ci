@@ -9,8 +9,8 @@ description: >
 inputs:
   runner-name:
     description: >
-      Display name for the runner and (sanitized by the forced command) the
-      SLURM job name, so squeue identifies what the runner serves.
+      Display name for the runner and the SLURM job name, so squeue
+      identifies what the runner serves.
     required: true
   run-label:
     description: >
@@ -35,9 +35,9 @@ inputs:
     required: true
   slice:
     description: >
-      Space-separated key=value options for the cluster's slice command
-      (cpus=, mem=, time=, branch=, ...; ci/dcs/slice.sh's header).
-      Empty runs runner-job.sbatch from main at its own resources.
+      Space-separated sbatch options for the slice (--cpus-per-task=64
+      --mem=256G ...; ci/dcs/slice.sh's header). Empty runs
+      runner-job.sbatch at its own #SBATCH resources.
     required: false
     default: ''
 
@@ -80,9 +80,9 @@ runs:
       # JIT config and impersonate the runner for this one job.
       printf '%s\n' "$SSH_HOST_KEY" > ~/.ssh/known_hosts
       # The key is bound to the cluster's slice command (this repository's
-      # ci/dcs/slice.sh), which reads the jitconfig from stdin and runs
-      # this repository's runner job on a SLURM slice. The command word is
-      # never executed: its bare word, sanitized, is the SLURM job name so
-      # squeue identifies the experiment, and the slice options follow it.
+      # ci/dcs/slice.sh), which hands sbatch this repository's runner job
+      # at this run's commit, with the jitconfig from stdin as its payload.
+      # The command word is never executed; the job name lets squeue
+      # identify the experiment.
       printf '%s' "$jit" | ssh -i ~/.ssh/id_ci -o BatchMode=yes \
-        "$SSH_DEST" "asteria/$RUNNER_NAME repo=$GITHUB_REPOSITORY${SLICE:+ $SLICE}"
+        "$SSH_DEST" "repo=$GITHUB_REPOSITORY ref=$GITHUB_SHA --job-name=$RUNNER_NAME${SLICE:+ $SLICE}"

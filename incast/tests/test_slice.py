@@ -1,7 +1,6 @@
-"""The cluster's fixed slice command: options, branch resolution, private
-repositories, refusals."""
+"""The cluster's fixed slice command: the words it reads, the job it hands
+sbatch, what it leaves behind."""
 
-import base64
 import os
 import shutil
 import subprocess
@@ -12,62 +11,27 @@ from pathlib import Path
 SCRIPT = Path(__file__).resolve().parents[2] / "ci" / "dcs" / "slice.sh"
 REPO = "BulkyCI/asteria-ci"
 OTHER = "BulkyCI/other-tool"
-PRIVATE = "BulkyCI/private-tool"
-MAIN = "a" * 40
-FEATURE = "b" * 40
-TOKEN = "ghs_" + "t" * 36
+COMMIT = "a" * 40
 
-# curl serves $FX/refs/<repo> and $FX/raw/<repo>/<commit>/<path>; for a
-# repository listed under $FX/private it wants the token's header, read
-# from stdin (-H @-). sbatch keeps what it was handed. Outputs go to
-# $FX/out, never under HOME.
+# curl serves $FX/raw/<repo>/<ref>/<path> and, like any careless reader,
+# swallows whatever stdin it is given. sbatch keeps its arguments, the
+# script it reads from stdin, the payload its job would read, and where it
+# ran. Outputs go to $FX/out, never under HOME.
 CURL = r"""#!/bin/bash
-headers=""
-while (( $# > 1 )); do
-    case "$1" in
-        -o) out=$2; shift ;;
-        -H) [[ "$2" == @- ]] && headers=$(cat); shift ;;
-    esac
-    shift
-done
-url=$1
+cat > /dev/null
 [[ -e "$FX/offline" ]] && exit 6
-case "$url" in
-    https://github.com/*.git/info/refs\?service=git-upload-pack)
-        repo=${url#https://github.com/}; repo=${repo%.git/info/refs*}
-        src="$FX/refs/$repo"; want="$FX/want-basic" ;;
-    https://raw.githubusercontent.com/*)
-        rest=${url#https://raw.githubusercontent.com/}
-        repo=$(cut -d/ -f1-2 <<< "$rest")
-        src="$FX/raw/$rest"; want="$FX/want-token" ;;
-    *) exit 3 ;;
-esac
-if [[ -e "$FX/private/$repo" ]]; then
-    [[ "$headers" == "$(cat "$want")" ]] || exit 22
-    echo "$repo authorized" >> "$FX/out/auth"
-fi
-cp "$src" "$out" 2>/dev/null || exit 22
+url=${!#}
+cat "$FX/raw/${url#https://raw.githubusercontent.com/}" 2>/dev/null || exit 22
 """
 SBATCH = r"""#!/bin/bash
 [[ -e "$FX/sbatch-fails" ]] && exit 1
-printf '%s\n' "$@" > "$FX/out/sbatch-args"
-cp "${@: -2:1}" "$FX/out/sbatch-script"
-cp "${@: -1}" "$FX/out/sbatch-payload"
-pwd > "$FX/out/sbatch-cwd"
+printf '%s\n' "$@" > "$FX/out/args"
+cat > "$FX/out/script"
+payload=$(tr ',' '\n' <<< "${*: -1}" | sed -n 's/^DCS_SLICE_PAYLOAD=//p')
+cp "$payload" "$FX/out/payload"
+pwd > "$FX/out/cwd"
 echo 4242
 """
-
-
-def advertisement(*refs: tuple[str, str]) -> bytes:
-    """A git-upload-pack ref advertisement as GitHub sends it."""
-
-    def pkt(text: bytes) -> bytes:
-        return b"%04x" % (len(text) + 4) + text
-
-    lines = [pkt(b"# service=git-upload-pack\n"), b"0000"]
-    lines.append(pkt(MAIN.encode() + b" HEAD\0multi_ack symref=HEAD:refs/heads/main\n"))
-    lines += [pkt(f"{sha} {ref}\n".encode()) for sha, ref in refs]
-    return b"".join(lines) + b"0000"
 
 
 class SliceTests(unittest.TestCase):
@@ -75,197 +39,113 @@ class SliceTests(unittest.TestCase):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root)
         self.home, self.fx, stubs = root / "home", root / "fx", root / "stubs"
-        for path in (self.home, self.fx / "out", self.fx / "private" / "BulkyCI", stubs):
+        for path in (self.home, self.fx / "out", stubs):
             path.mkdir(parents=True)
-        for repo in (REPO, OTHER, PRIVATE):
-            refs = self.fx / "refs" / repo
-            refs.parent.mkdir(parents=True, exist_ok=True)
-            refs.write_bytes(
-                advertisement(
-                    (FEATURE, "refs/heads/x/refs/heads/main"),
-                    (MAIN, "refs/heads/main"),
-                    (FEATURE, "refs/heads/feat/x"),
-                )
-            )
-        for repo, sha, path, text in (
-            (REPO, MAIN, "ci/dcs/runner-job.sbatch", "main runner\n"),
-            (REPO, FEATURE, "ci/dcs/other.sh", "other script\n"),
-            (OTHER, MAIN, "ci/dcs/runner-job.sbatch", "other tool's runner\n"),
-            (PRIVATE, MAIN, "ci/dcs/runner-job.sbatch", "private runner\n"),
+        for repo, ref, path, text in (
+            (REPO, "main", "ci/dcs/runner-job.sbatch", "main runner\n"),
+            (REPO, COMMIT, "ci/dcs/runner-job.sbatch", "pinned runner\n"),
+            (REPO, COMMIT, "ci/dcs/other.sh", "other script\n"),
+            (OTHER, "main", "ci/dcs/runner-job.sbatch", "other tool's runner\n"),
         ):
-            file = self.fx / "raw" / repo / sha / path
+            file = self.fx / "raw" / repo / ref / path
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(text)
-        (self.fx / "private" / PRIVATE).touch()
-        basic = base64.b64encode(f"x-access-token:{TOKEN}".encode()).decode()
-        (self.fx / "want-basic").write_text(f"Authorization: Basic {basic}")
-        (self.fx / "want-token").write_text(f"Authorization: token {TOKEN}")
         for name, body in (("curl", CURL), ("sbatch", SBATCH)):
             (stubs / name).write_text(body)
             (stubs / name).chmod(0o755)
         self.path = f"{stubs}:{os.environ['PATH']}"
+        # A file the word --constraint=* would match were the words globbed.
+        (root / "--constraint=globbed").touch()
+        self.cwd = root
 
     def slice(self, command: str, stdin: str = "jitconfig") -> subprocess.CompletedProcess:
         env = {"HOME": str(self.home), "PATH": self.path, "FX": str(self.fx), "SSH_ORIGINAL_COMMAND": command}
-        return subprocess.run(["bash", str(SCRIPT)], input=stdin, env=env, capture_output=True, text=True)
+        return subprocess.run(
+            ["bash", str(SCRIPT)], input=stdin, env=env, cwd=self.cwd, capture_output=True, text=True
+        )
 
     def out(self, name: str) -> str:
         return (self.fx / "out" / name).read_text()
 
-    def submitted(self) -> list[str]:
-        return self.out("sbatch-args").splitlines()
+    def left(self) -> list[str]:
+        """What stays under ~/slices, by repository and kind."""
+        slices = self.home / "slices"
+        return sorted(f"{p.parent.name}/{p.name.split('.')[0]}" for p in slices.rglob("*") if p.is_file())
 
-    def left(self, repo: str = REPO) -> list[str]:
-        """What stays in the repository's directory, by kind; a directory
-        left empty is removed."""
-        directory = self.home / "slices" / repo.split("/")[1]
-        if not directory.exists():
-            return []
-        left = sorted(p.name.split(".")[0] for p in directory.iterdir())
-        self.assertTrue(left, f"{directory} left empty")
-        return left
-
-    def test_runner_from_main_at_its_own_resources(self) -> None:
-        result = self.slice(f"asteria/dcs-1-1-s000 repo={REPO}")
+    def test_defaults_run_mains_runner_at_its_own_resources(self) -> None:
+        result = self.slice(f"repo={REPO}")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "4242\n")
-        args = self.submitted()
-        self.assertEqual(
-            args[:3],
-            [
-                "--parsable",
-                "--job-name=asteriadcs-1-1-s000",
-                f"--export=ALL,DCS_SLICE_REPO={REPO},DCS_SLICE_BRANCH=main,DCS_SLICE_SHA={MAIN}",
-            ],
+        directory = self.home / "slices" / "asteria-ci"
+        args = self.out("args").splitlines()
+        self.assertEqual(args[0], "--parsable")
+        self.assertRegex(
+            args[1],
+            rf"^--export=ALL,DCS_SLICE_PAYLOAD={directory}/payload\.\w+,DCS_SLICE_REPO={REPO},DCS_SLICE_REF=main$",
         )
-        self.assertEqual(len(args), 5)
-        self.assertEqual(self.out("sbatch-script"), "main runner\n")
-        self.assertEqual(self.out("sbatch-payload"), "jitconfig")
-        self.assertEqual(self.out("sbatch-cwd").strip(), str(self.home / "slices" / "asteria-ci"))
-        # The payload waits for the job; the script copy and refs are gone.
-        self.assertEqual(self.left(), ["payload"])
+        self.assertEqual(len(args), 2)
+        self.assertEqual(self.out("script"), "main runner\n")
+        # The payload is stdin, whole, although curl tried to read stdin too.
+        self.assertEqual(self.out("payload"), "jitconfig")
+        self.assertEqual(self.out("cwd").strip(), str(directory))
+        self.assertEqual(self.left(), ["asteria-ci/payload"])
+
+    def test_sbatch_options_pass_through_in_order(self) -> None:
+        words = "--job-name=dcs-1-1-s000 --cpus-per-task=64 --mem=256G --constraint=EPYC_9634|AMD_Epyc9754 --exclusive --constraint=*"
+        result = self.slice(f"repo={REPO} ref={COMMIT} script=ci/dcs/other.sh {words}")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = self.out("args").splitlines()
+        self.assertEqual(args[1:-1], words.split())
+        self.assertTrue(args[-1].endswith(f",DCS_SLICE_REF={COMMIT}"))
+        self.assertEqual(self.out("script"), "other script\n")
+        self.assertIn(f"ci/dcs/other.sh at {REPO} {COMMIT}", result.stderr)
 
     def test_any_repository_of_the_organization(self) -> None:
-        result = self.slice(f"name=n repo={OTHER}")
+        result = self.slice(f"repo={OTHER}")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"DCS_SLICE_REPO={OTHER},", self.submitted()[2])
-        self.assertEqual(self.out("sbatch-script"), "other tool's runner\n")
-        self.assertEqual(self.left(OTHER), ["payload"])
+        self.assertEqual(self.out("script"), "other tool's runner\n")
+        self.assertEqual(self.left(), ["other-tool/payload"])
 
-    def test_options_become_sbatch_options(self) -> None:
-        result = self.slice(
-            f"asteria/dcs-1-1-s000 repo={REPO} branch=feat/x script=ci/dcs/other.sh cpus=64 mem=256G"
-            " time=4-20:00:00 nodes=1 ntasks=2 array=0-99%10 exclusive=1"
-            " constraint=EPYC_9634|AMD_Epyc9754 partition=p1 qos=normal gres=gpu:a100:2"
-            " account=lab dependency=afterok:41:42"
-        )
+    def test_test_only_keeps_no_payload(self) -> None:
+        result = self.slice(f"repo={REPO} --cpus-per-task=64 --mem=256G --test-only")
         self.assertEqual(result.returncode, 0, result.stderr)
-        args = self.submitted()
-        self.assertEqual(
-            sorted(args[2:-3]),
-            sorted(
-                [
-                    "--cpus-per-task=64",
-                    "--mem=262144M",
-                    "--time=4-20:00:00",
-                    "--nodes=1",
-                    "--ntasks=2",
-                    "--array=0-99%10",
-                    "--exclusive",
-                    "--constraint=EPYC_9634|AMD_Epyc9754",
-                    "--partition=p1",
-                    "--qos=normal",
-                    "--gres=gpu:a100:2",
-                    "--account=lab",
-                    "--dependency=afterok:41:42",
-                ]
-            ),
-        )
-        self.assertIn(f"DCS_SLICE_BRANCH=feat/x,DCS_SLICE_SHA={FEATURE}", args[-3])
-        self.assertEqual(self.out("sbatch-script"), "other script\n")
-        self.assertIn(f"ci/dcs/other.sh at {REPO} feat/x {FEATURE}", result.stderr)
-
-    def test_memory_units(self) -> None:
-        for mem, expected in (("4096", "4096M"), ("512M", "512M"), ("2048G", "2097152M"), ("064G", "65536M")):
-            with self.subTest(mem=mem):
-                result = self.slice(f"repo={REPO} mem={mem}")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(f"--mem={expected}", self.submitted())
-
-    def test_test_only_submits_nothing_and_keeps_no_payload(self) -> None:
-        result = self.slice(f"name=probe repo={REPO} cpus=64 mem=256G test=1")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("--test-only", self.submitted())
+        self.assertIn("--test-only", self.out("args").splitlines())
         self.assertEqual(self.left(), [])
 
-    def test_private_repository_with_a_token_that_is_never_kept(self) -> None:
-        result = self.slice(f"name=n repo={PRIVATE} auth=1", stdin=f"{TOKEN}\njitconfig")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.out("auth").splitlines(), [f"{PRIVATE} authorized"] * 2)
-        self.assertEqual(self.out("sbatch-script"), "private runner\n")
-        self.assertEqual(self.out("sbatch-payload"), "jitconfig")
-        self.assertNotIn(TOKEN, self.out("sbatch-args"))
-        for file in self.home.rglob("*"):
-            if file.is_file():
-                self.assertNotIn(TOKEN.encode(), file.read_bytes(), file)
-
-    def test_private_repository_without_a_token_is_refused(self) -> None:
-        result = self.slice(f"name=n repo={PRIVATE}")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(f"cannot read {PRIVATE}", result.stderr)
-        self.assertEqual(self.left(PRIVATE), [])
-
     def test_refusals_submit_nothing_and_leave_nothing(self) -> None:
-        for command, stdin, reason in (
-            ("name=n", "x", "repo (none) is not BulkyCI/<name>"),
-            ("repo=someone/asteria-ci", "x", "repo someone/asteria-ci is not BulkyCI/<name>"),
-            ("repo=BulkyCI/../x", "x", "is not BulkyCI/<name>"),
-            ("repo=BulkyCI/a/b", "x", "is not BulkyCI/<name>"),
-            (f"repo={REPO} cpus=0", "x", "cpus 0 outside"),
-            (f"repo={REPO} cpus=257", "x", "cpus 257 outside"),
-            (f"repo={REPO} cpus=1x", "x", "cpus 1x outside"),
-            (f"repo={REPO} mem=2049G", "x", "mem 2049G outside"),
-            (f"repo={REPO} mem=1T", "x", "bad mem"),
-            (f"repo={REPO} time=abc", "x", "bad time"),
-            (f"repo={REPO} nodes=9", "x", "nodes 9 outside"),
-            (f"repo={REPO} ntasks=0", "x", "ntasks 0 outside"),
-            (f"repo={REPO} array=x1", "x", "bad array"),
-            (f"repo={REPO} constraint=a;b", "x", "bad constraint"),
-            (f"repo={REPO} gres=$(id)", "x", "bad gres"),
-            (f"repo={REPO} output=/tmp/x", "x", "unknown option output"),
-            (f"repo={REPO} wrap=id", "x", "unknown option wrap"),
-            (f"repo={REPO} test=2", "x", "test takes 1"),
-            (f"repo={REPO} exclusive=yes", "x", "exclusive takes 1"),
-            (f"repo={REPO} auth=1", "short\njitconfig", "auth=1 needs a token"),
-            (f"repo={REPO} branch=../x", "x", "bad branch"),
-            (f"repo={REPO} branch=-x", "x", "bad branch"),
-            (f"repo={REPO} script=/etc/passwd", "x", "bad script"),
-            (f"repo={REPO} script=ci/../x", "x", "bad script"),
-            (f"repo={REPO} cpus=2 cpus=4", "x", "cpus given twice"),
-            (f"repo={REPO} one two", "x", "name given twice"),
-            (f"repo={REPO} branch=nope", "x", "no branch nope"),
-            (f"repo={REPO} branch=x", "x", "no branch x"),
-            (f"repo={REPO} script=ci/dcs/missing.sh", "x", "no ci/dcs/missing.sh"),
-            ("repo=BulkyCI/absent", "x", "cannot read BulkyCI/absent"),
+        for command, reason in (
+            ("", "repo must be BulkyCI/<name>"),
+            ("--mem=1G", "repo must be BulkyCI/<name>"),
+            ("repo=someone/asteria-ci", "repo must be BulkyCI/<name>"),
+            ("repo=BulkyCI/a/b", "repo must be BulkyCI/<name>"),
+            ("repo=BulkyCI/..", "bad name BulkyCI/.."),
+            (f"repo={REPO} ref=../x", "bad name ../x"),
+            (f"repo={REPO} ref=-x", "bad name -x"),
+            (f"repo={REPO} script=/etc/passwd", "bad name /etc/passwd"),
+            (f"repo={REPO} script=ci/../x", "bad name ci/../x"),
+            (f"repo={REPO} asteria/dcs-1", "unknown word asteria/dcs-1"),
+            (f"repo={REPO} cpus=4", "unknown word cpus=4"),
+            (f"repo={REPO} ref=nope", "cannot fetch"),
+            (f"repo={REPO} script=ci/dcs/missing.sh", "cannot fetch"),
+            ("repo=BulkyCI/absent", "cannot fetch"),
         ):
             with self.subTest(command=command):
-                result = self.slice(command, stdin)
+                result = self.slice(command)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(reason, result.stderr)
-                self.assertFalse((self.fx / "out" / "sbatch-args").exists())
-                slices = self.home / "slices"
-                self.assertEqual(list(slices.iterdir()) if slices.exists() else [], [])
+                self.assertFalse((self.fx / "out" / "args").exists())
+                self.assertFalse((self.home / "slices").exists())
 
     def test_unreachable_github_is_refused(self) -> None:
         (self.fx / "offline").touch()
-        result = self.slice(f"name=n repo={REPO}")
+        result = self.slice(f"repo={REPO}")
         self.assertEqual(result.returncode, 1)
-        self.assertIn(f"cannot read {REPO}", result.stderr)
-        self.assertEqual(self.left(), [])
+        self.assertIn("cannot fetch", result.stderr)
+        self.assertFalse((self.home / "slices").exists())
 
     def test_failed_submission_keeps_no_payload(self) -> None:
         (self.fx / "sbatch-fails").touch()
-        result = self.slice(f"name=n repo={REPO}")
+        result = self.slice(f"repo={REPO}")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.left(), [])
 

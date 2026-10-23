@@ -5,7 +5,7 @@
 # (The per-job LTO link that once wanted more cores is gone: jobs
 # download the prebuilt runtime bundle instead of compiling.) Two, not
 # four: allocation - not load - is what blocks other cluster users. A
-# slice's cpus= and mem= override this and --mem (slice.sh).
+# slice's own sbatch options override this and --mem (slice.sh).
 #SBATCH --cpus-per-task=2
 # The simulator needs <1 GB; the rest is headroom for the last-resort
 # case where scratch selection below lands on tmpfs /tmp, whose bytes
@@ -30,7 +30,8 @@
 # 5-day Actions self-hosted job limit will never be hit in practice.
 set -euo pipefail
 
-jit_file=$1
+# The slice's payload is the runner's JIT config (slice.sh).
+jit_file=$DCS_SLICE_PAYLOAD
 jit=$(cat "$jit_file")
 rm -f "$jit_file"
 

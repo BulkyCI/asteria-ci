@@ -49,7 +49,7 @@ on:
         default: 64
         type: number
       dcs_cores:
-        description: Cores asked of SLURM for each DCS shard, with 4 GB each, as the slice's cpus= and mem=; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
+        description: Cores asked of SLURM for each DCS shard, with 4 GB each, as the slice's --cpus-per-task and --mem; with more than 2 granted, the shard runs one simulation per core but one, each its own job step
         required: false
         default: 2
         type: number
@@ -248,7 +248,7 @@ jobs:
         CORES: ${{ inputs.dcs_cores }}
       run: |
         if (( CORES > 2 )); then
-          echo "options=cpus=${CORES} mem=$((CORES * 4))G" >> "$GITHUB_OUTPUT"
+          echo "options=--cpus-per-task=${CORES} --mem=$((CORES * 4))G" >> "$GITHUB_OUTPUT"
         fi
 
     - uses: ./.github/actions/dcs-provision
