@@ -622,7 +622,7 @@ jobs:
         done
         # Each wide-leaf member's trims, spans against P = 8's, uplink load
         # and queues against their thresholds.
-        for wide in 32 128 256; do
+        for wide in 32 64 128 256; do
           stage="a2a_wide${wide}_validity_4k"
           if [[ ",${STAGES// /}," == *,$stage,* ]]; then
             python3 incast/analyze.py a2a_wide_validity --runs results/runs.json --out-root results \
