@@ -61,7 +61,9 @@ runs:
       SSH_KEY: ${{ inputs.ssh-key }}
       SSH_DEST: ${{ inputs.ssh-dest }}
       SSH_HOST_KEY: ${{ inputs.ssh-host-key }}
-      RUNNER_NAME: ${{ inputs.runner-name }}
+      # Not RUNNER_NAME: the runner sets its own RUNNER_* and GITHUB_*
+      # variables over any step's.
+      NAME: ${{ inputs.runner-name }}
       RUN_LABEL: ${{ inputs.run-label }}
       SLICE: ${{ inputs.slice }}
     run: |
@@ -70,7 +72,7 @@ runs:
       # then deregisters itself: runner lifetime equals job lifetime.
       jit="$(gh api -X POST \
         "repos/${GITHUB_REPOSITORY}/actions/runners/generate-jitconfig" \
-        -f name="$RUNNER_NAME" -F runner_group_id=1 -f work_folder=_work \
+        -f name="$NAME" -F runner_group_id=1 -f work_folder=_work \
         -f 'labels[]=dcs' -f "labels[]=${RUN_LABEL}" \
         --jq .encoded_jit_config)"
       install -d -m 700 ~/.ssh
@@ -85,4 +87,4 @@ runs:
       # The command word is never executed; the job name lets squeue
       # identify the experiment.
       printf '%s' "$jit" | ssh -i ~/.ssh/id_ci -o BatchMode=yes \
-        "$SSH_DEST" "repo=$GITHUB_REPOSITORY ref=$GITHUB_SHA --job-name=$RUNNER_NAME${SLICE:+ $SLICE}"
+        "$SSH_DEST" "repo=$GITHUB_REPOSITORY ref=$GITHUB_SHA --job-name=$NAME${SLICE:+ $SLICE}"

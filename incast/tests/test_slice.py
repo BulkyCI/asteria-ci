@@ -150,5 +150,19 @@ class SliceTests(unittest.TestCase):
         self.assertEqual(self.left(), [])
 
 
+class ProvisionActionTests(unittest.TestCase):
+    ACTION = Path(__file__).resolve().parents[2] / ".github" / "actions" / "dcs-provision" / "action.yml"
+
+    def test_no_variable_the_runner_sets_over_a_steps_own(self) -> None:
+        # The runner sets RUNNER_* and GITHUB_* itself, over a step's env, so
+        # a step variable of that name silently holds the runner's value.
+        keys = [line.split(":")[0].strip() for line in self.ACTION.read_text().splitlines() if line.startswith("      ") and ":" in line]
+        self.assertFalse([k for k in keys if k.startswith(("RUNNER_", "GITHUB_"))])
+
+    def test_command_word_is_the_slice_commands(self) -> None:
+        text = self.ACTION.read_text()
+        self.assertIn('"repo=$GITHUB_REPOSITORY ref=$GITHUB_SHA --job-name=$NAME${SLICE:+ $SLICE}"', text)
+
+
 if __name__ == "__main__":
     unittest.main()
