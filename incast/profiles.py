@@ -1521,6 +1521,12 @@ A2A_MULTI_FRACTION = 0.02
 A2A_MULTI_SEED = 1
 A2A_SPARSE_PREFIX = "sparse"
 A2A_SPARSE_FRACTION = 0.001
+# The many-downlink condition, down16_<loss kind>: the kind's loss from the
+# onset on the downlinks (spine to leaf) of sixteen distinct (leaf, spine)
+# pairs, two to each of the 8 leaves, on sixteen distinct spines below 32,
+# so the same links exist at every spine count of the wide fixtures.
+A2A_DOWNLINKS_PREFIX = "down16"
+A2A_DOWNLINKS = tuple((i % 8, (3 + 13 * i) % 32) for i in range(16))
 A2A_WIDE_CONDITIONS = ("loss1e3_up", "loss1e3_down", "loss1e2_down", "blackhole_up", "multi_loss1e3",
                        "multi_loss1e2")
 A2A_WIDE_CELLS = tuple((group, size, condition) for group, size in A2A_WIDE_PAIRS
@@ -1683,6 +1689,12 @@ A2A_TRANSPORT_ARMS.update({arm: base for arm, (base, _) in A2A_MATRIX_BASELINES.
 A2A_MATRIX_ARMS = (*A2A_MATRIX_BASELINES, *A2A_WIDE_MRC_ARMS)
 A2A_MATRIX_SPINES = (32, 64, 128, 256)
 A2A_MATRIX_STAGES = {f"a2a_wide{wide}_matrix_4k": wide for wide in A2A_MATRIX_SPINES}
+# The many-downlink cell at 256 spines, at the matrix's build: its
+# sender-only and receiver MRC arms and its MRC and REPS baselines, on
+# down16_loss1e2. The healthy pairs it lists are the matrix's own runs.
+A2A_DOWNLINKS_CELLS = (("ep64", "256k", f"{A2A_DOWNLINKS_PREFIX}_loss1e2"),)
+A2A_DOWNLINKS_ARMS = (*tuple(A2A_WIDE_MRC_ARMS)[:2], "mrc_spine_od_rackdefer", "reps_spine_od_rackdefer")
+A2A_DOWNLINKS_STAGES = {"a2a_wide256_down16_4k": 256}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1713,7 +1725,7 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
                                          A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES,
-                                         A2A_MATRIX_STAGES)
+                                         A2A_MATRIX_STAGES, A2A_DOWNLINKS_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1743,7 +1755,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
     "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
-    **{stage: "d68572320c38133238019796d6c675d0022532d0" for stage in A2A_MATRIX_STAGES},
+    **{stage: "d68572320c38133238019796d6c675d0022532d0" for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES)},
 }
 
 
@@ -1853,6 +1865,8 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
         return a2a_host_fault(condition)
     if condition.startswith((A2A_MULTI_PREFIX, A2A_SPARSE_PREFIX)):
         return a2a_multi_fault(condition)
+    if condition.startswith(A2A_DOWNLINKS_PREFIX + "_"):
+        return a2a_downlinks_fault(condition)
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
     if condition == "structural":
         return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
@@ -1893,6 +1907,16 @@ def a2a_multi_fault(condition: str) -> list[dict[str, Any]]:
         raise ValueError(f"unknown condition {condition}")
     return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
              "draw": {"fraction": fraction, "seed": A2A_MULTI_SEED}}]
+
+
+def a2a_downlinks_fault(condition: str) -> list[dict[str, Any]]:
+    """The link_failures of down16_<loss kind>: a gray loss at the kind's
+    rate from the onset on the downlink of every A2A_DOWNLINKS pair."""
+    prefix, _, loss = condition.partition("_")
+    if prefix != A2A_DOWNLINKS_PREFIX or loss not in A2A_LOSS_RATES:
+        raise ValueError(f"unknown condition {condition}")
+    return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
+             "spine": spine, "leaf": leaf, "direction": "down"} for leaf, spine in A2A_DOWNLINKS]
 
 
 def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2397,6 +2421,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{fair_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, A2A_WIDE_FAIR_STAGE_ARMS[fair_stage])
            for fair_stage in A2A_WIDE_FAIR_STAGES},
         **{matrix_stage: (A2A_WIDE_OD2_CELLS, A2A_MATRIX_ARMS) for matrix_stage in A2A_MATRIX_STAGES},
+        **{down_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_ARMS) for down_stage in A2A_DOWNLINKS_STAGES},
     }[stage]
 
 
@@ -2574,7 +2599,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_RACK2_STAGES, A2A_WIDE_RACK_STAGES,
                                                          A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
                                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES,
-                                                         A2A_WIDE_FAIR_STAGES, A2A_MATRIX_STAGES))
+                                                         A2A_WIDE_FAIR_STAGES, A2A_MATRIX_STAGES,
+                                                         A2A_DOWNLINKS_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2606,6 +2632,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_themis2_settings(stage, tuning) if stage in A2A_WIDE_THEMIS2_STAGES
                     else a2a_wide_fair_settings(stage, tuning) if stage in A2A_WIDE_FAIR_STAGES
                     else a2a_matrix_settings(tuning) if stage in A2A_MATRIX_STAGES
+                    else {arm: setting for arm, setting in a2a_matrix_settings(tuning).items()
+                          if arm in A2A_DOWNLINKS_ARMS} if stage in A2A_DOWNLINKS_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2631,6 +2659,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
                  or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
                  or stage in A2A_WIDE_THEMIS256_STAGES or stage in A2A_MATRIX_STAGES
+                 or stage in A2A_DOWNLINKS_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES

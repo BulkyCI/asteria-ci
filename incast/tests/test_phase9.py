@@ -77,6 +77,7 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide64_4k": 402, "a2a_wide64_calibration_4k": 6, "a2a_wide64_seeds_4k": 108,
                  "a2a_wide64_validity_4k": 2,
                  **{f"a2a_wide{wide}_matrix_4k": 144 for wide in (32, 64, 128, 256)},
+                 "a2a_wide256_down16_4k": 48,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2950,6 +2951,36 @@ class Wide(unittest.TestCase):
                     self.assertEqual(document, {**mrc[(arm, condition, seed)], "name": document["name"]}, arm)
             self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "d68572320c38133238019796d6c675d0022532d0")
 
+    def test_downlinks(self):
+        # Four of the 256-spine matrix's arms on 16 downlinks at 1e-2, each
+        # run's profile the matrix twin's but for its name and its faults, so
+        # the matrix's healthy runs are this cell's healthy pairs.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        matrix = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide256_matrix_4k", committed, self.tuning)}
+        runs = profiles.a2a_stage_runs("a2a_wide256_down16_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 48)
+        self.assertEqual({r["condition"] for r in runs}, {"down16_loss1e2", "healthy"})
+        self.assertEqual({r["arm"] for r in runs}, {"mrc_hold_auto_tail4_cover_spread64_od_rackdefer",
+                                                    "mrc_hold_auto_tail4_cover_rx_slots8_spread64_widen2_od_rackdefer",
+                                                    "mrc_spine_od_rackdefer", "reps_spine_od_rackdefer"})
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            twin = matrix[(r["arm"], "loss1e2_down" if r["condition"] != "healthy" else "healthy", r["seed"])]
+            faults = document["network"]["link_failures"]
+            if r["condition"] == "healthy":
+                self.assertEqual(faults, [])
+            else:
+                self.assertEqual(len({(f["leaf"], f["spine"]) for f in faults}), 16)
+                self.assertEqual({f["leaf"] for f in faults}, set(range(8)))
+                self.assertTrue(all(f["direction"] == "down" and f["error_rate"] == 1e-2 and f["spine"] < 32
+                                    and f["start_ns"] == profiles.DEGRADE_AT_NS for f in faults))
+            self.assertEqual(document, {**twin, "name": document["name"],
+                                        "network": {**twin["network"], "link_failures": faults}}, r["key"])
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_4k"],
+                         profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_matrix_4k"])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3243,7 +3274,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_uid_4k": set(profiles.A2A_WIDE_UID_ARMS),
                  "a2a_wide256_mrc_4k": set(profiles.A2A_WIDE_MRC_ARMS),
                  "a2a_wide32_fair_4k": set(profiles.A2A_WIDE_PSN_HOLD_ARMS),
-                 **{stage: set(profiles.A2A_WIDE_MRC_ARMS) for stage in profiles.A2A_MATRIX_STAGES}}
+                 **{stage: set(profiles.A2A_WIDE_MRC_ARMS) for stage in profiles.A2A_MATRIX_STAGES},
+                 "a2a_wide256_down16_4k": set(profiles.A2A_DOWNLINKS_ARMS[:2])}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
