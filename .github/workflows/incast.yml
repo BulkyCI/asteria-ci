@@ -359,6 +359,17 @@ jobs:
       run: |
         set -uo pipefail
         mkdir -p results
+        # The shared cluster scratch bounds how many runs fit at once, so a
+        # cluster shard records, every 5 minutes, what its runs hold there
+        # and what the volume has left.
+        sampler=""
+        if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+          while :; do
+            echo "$(date -u +%H:%M:%S) $(du -sm results | cut -f1) MB held, $(df -Pm results | awk 'NR == 2 {print $4}') MB free"
+            sleep 300
+          done > results/shard-${{ matrix.shard.id }}-scratch.txt 2>&1 &
+          sampler=$!
+        fi
         # The allocation SLURM granted, not the one asked for, sets the
         # parallelism: above 2 CPUs each simulation is its own job step on
         # one whole physical core, with an equal share of the job's memory,
@@ -395,6 +406,7 @@ jobs:
           sacct -j "$SLURM_JOB_ID" --format=JobID,Elapsed,MaxRSS,State -P \
             > results/shard-${{ matrix.shard.id }}-steps.txt || true
         fi
+        [[ -z "$sampler" ]] || kill "$sampler"
         echo "--- $(grep -c 'status 0,' results/shard-${{ matrix.shard.id }}.txt) of $(wc -w <<< "$KEYS") runs completed cleanly"
 
     - name: Upload the shard's results
