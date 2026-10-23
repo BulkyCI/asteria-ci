@@ -694,6 +694,9 @@ A2A_REPS_HOLD_ARMS = {
     "reps_flow_hold": ("reps_flow_hold", None),
     "mrc_hold_auto": ("mrc_hold", "auto"),
 }
+# Every base a loss-hold arm's setting is read under: the candidates, and
+# Themis's spraying with the loss hold, which is no candidate.
+A2A_LOSS_HOLD_BASES = {**A2A_REPS_HOLD_ARMS, "themis_hold_auto": ("themis_hold", "auto")}
 A2A_HELD_EXPLORATION = {"sentinel_mode": "duplicate", "hold_release": "sentinels"}
 # a2a_receiver's arms: each a candidate arm's setting, with the receiver's
 # hold (path sequences in the data headers, the receiver's hold reported in
@@ -1483,6 +1486,12 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   and seeds.
 # - a2a_wide256_themis_4k: a2a_wide32_themis4_4k's _psn and _t2fl arms at 256
 #   spines, on a2a_wide256_mrc_4k's cells and seeds.
+# - a2a_wide32_fair_4k: one spraying rule for every arm, Themis's: its _psn
+#   and _t2fl arms, and a2a_wide256_rack_4k's sender-only and receiver
+#   _rackdefer arms with their loss hold under selector themis_hold and no
+#   destination signal, and the sender-only one with _t2fl's signal
+#   (A2A_WIDE_PSN_HOLD_ARMS), on a2a_wide32_themis_4k's cells and seeds, at
+#   the asteria commit that adds themis_hold.
 # - a2a_wide256_mrc_4k: a2a_wide256_rack_4k's three _rackdefer arms with
 #   MRC's spraying over every spine (mrc_hold) in place of REPS's cached
 #   paths (A2A_WIDE_MRC_ARMS), the same keys otherwise, on loss1e2_down and
@@ -1626,6 +1635,21 @@ A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide256_themis_4k"] = {
 A2A_TRANSPORT_ARMS.update({arm: A2A_THEMIS for arms in A2A_WIDE_THEMIS2_STAGE_ARMS.values() for arm in arms})
 A2A_WIDE_THEMIS256_STAGES = {"a2a_wide256_themis_4k": 256}
 A2A_WIDE_THEMIS2_STAGES = {stage: A2A_WIDE_THEMIS256_STAGES.get(stage, 32) for stage in A2A_WIDE_THEMIS2_STAGE_ARMS}
+# The loss-hold arms on Themis's spraying (selector themis_hold), each with
+# the a2a_wide256_rack_4k arm whose setting it takes and the Themis keys it
+# adds: the sender-only and receiver arms with no destination signal, and
+# the sender-only arm with _t2fl's.
+A2A_WIDE_PSN_HOLD_ARMS = {
+    **{arm.replace("reps_hold_auto", "themis_hold_auto", 1): (arm, A2A_WIDE_THEMIS_ARMS["themis_psn_od_rackdefer"])
+       for arm in A2A_WIDE_RACK_ARMS[1:3]},
+    A2A_WIDE_RACK_ARMS[1].replace("reps_hold_auto", "themis_hold_auto", 1).replace("_od_rackdefer", "_t2fl_od_rackdefer"):
+        (A2A_WIDE_RACK_ARMS[1], A2A_WIDE_THEMIS2_STAGE_ARMS["a2a_wide32_themis4_4k"]["themis_t2fl_od_rackdefer"]),
+}
+A2A_TRANSPORT_ARMS.update({arm: "themis_hold_auto" for arm in A2A_WIDE_PSN_HOLD_ARMS})
+A2A_WIDE_FAIR_STAGE_ARMS = {
+    "a2a_wide32_fair_4k": ("themis_psn_od_rackdefer", "themis_t2fl_od_rackdefer", *A2A_WIDE_PSN_HOLD_ARMS),
+}
+A2A_WIDE_FAIR_STAGES = {"a2a_wide32_fair_4k": 32}
 A2A_WIDE_UID_ARMS = (A2A_WIDE_SPREAD_ARMS[1], f"{A2A_WIDE_SPREAD_ARMS[1]}_od")
 A2A_WIDE_UID_SEEDS = (309, 311)
 A2A_WIDE_UID_STAGES = {"a2a_wide256_uid_4k": 256}
@@ -1662,7 +1686,7 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_SPREAD_2M_STAGES, A2A_WIDE_OD_STAGES, A2A_WIDE_OD2_STAGES,
                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
                                          A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
-                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES)
+                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1691,6 +1715,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_themis_4k": "db1e2d6bddf9df39709b289baf552d5113376eab",
     "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
     "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
+    "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
 }
 
 
@@ -1767,11 +1792,12 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
 
 def a2a_traces_spine_loss(balancing: dict[str, Any]) -> bool:
     """Whether a run of the load balancing writes the sender loss trace, as
-    the generator reads it: the loss hold of reps_hold and mrc_hold, and
+    the generator reads it: the loss hold of reps_hold, mrc_hold and
+    themis_hold, and
     spray_policy's host-wide pool with loss thresholds outside the
     switch_queue cost source."""
     if balancing.get("mode") == "spray_uniform":
-        return balancing.get("selector") in ("reps_hold", "mrc_hold")
+        return balancing.get("selector") in ("reps_hold", "mrc_hold", "themis_hold")
     return (balancing.get("mode") == "spray_policy" and "loss_thresholds" in balancing
             and balancing.get("sender_pool_weight", 0) > 0 and balancing.get("grade_cost_source") != "switch_queue")
 
@@ -1873,7 +1899,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         return {"mode": "spray_uniform", "selector": "reps_spine"}
     if arm == A2A_THEMIS:
         return {"mode": "spray_uniform", "selector": "themis"}
-    if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_REPS_HOLD_ARMS:
+    if arm in A2A_TRANSPORT_ARMS and A2A_TRANSPORT_ARMS[arm] not in A2A_LOSS_HOLD_BASES:
         # The setting is the transport keys alone.
         return {**a2a_balancing(A2A_TRANSPORT_ARMS[arm], group, size, calibration, None, payload, wide),
                 **(setting or {})}
@@ -1886,7 +1912,7 @@ def a2a_balancing(arm: str, group: str, size: str, calibration: dict[str, Any] |
         # ack_loss_rtts where the arm has it.
         base = (A2A_RECEIVER_ARMS[arm][0] if arm in A2A_RECEIVER_ARMS
                 else A2A_TRICKLE_ARMS.get(arm, A2A_TRANSPORT_ARMS.get(arm, arm)))
-        selector, _ = A2A_REPS_HOLD_ARMS[base]
+        selector, _ = A2A_LOSS_HOLD_BASES[base]
         setting = dict(setting or {})
         entry = (calibration or {}).get("per_receiver", {}).get(a2a_cell_name(group, size, payload, wide=wide), {})
         return {
@@ -2230,6 +2256,16 @@ def a2a_wide_themis2_settings(stage: str, tuning: dict[str, Any] | None) -> dict
     return {arm: {**common, **keys} for arm, keys in A2A_WIDE_THEMIS2_STAGE_ARMS[stage].items()}
 
 
+def a2a_wide_fair_settings(stage: str, tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """A fair stage's arms: a2a_wide32_themis4_4k's Themis arms, and each
+    A2A_WIDE_PSN_HOLD_ARMS arm with its a2a_wide256_rack_4k arm's setting and
+    its Themis keys."""
+    themis = a2a_wide_themis2_settings("a2a_wide32_themis4_4k", tuning)
+    rack = a2a_wide_rack_settings(tuning)
+    hold = {arm: {**rack[base], **keys} for arm, (base, keys) in A2A_WIDE_PSN_HOLD_ARMS.items()}
+    return {arm: {**themis, **hold}[arm] for arm in A2A_WIDE_FAIR_STAGE_ARMS[stage]}
+
+
 def a2a_wide_mrc_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """a2a_wide256_mrc_4k's arms: each A2A_WIDE_MRC_ARMS arm with its
     a2a_wide256_rack_4k arm's setting."""
@@ -2322,6 +2358,8 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{themis2_stage: (A2A_WIDE_OD2_CELLS if themis2_stage in A2A_WIDE_THEMIS256_STAGES
                            else A2A_WIDE_THEMIS_PILOT_CELLS, tuple(A2A_WIDE_THEMIS2_STAGE_ARMS[themis2_stage]))
            for themis2_stage in A2A_WIDE_THEMIS2_STAGES},
+        **{fair_stage: (A2A_WIDE_THEMIS_PILOT_CELLS, A2A_WIDE_FAIR_STAGE_ARMS[fair_stage])
+           for fair_stage in A2A_WIDE_FAIR_STAGES},
     }[stage]
 
 
@@ -2498,7 +2536,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES,
                                                          A2A_WIDE_RACK2_STAGES, A2A_WIDE_RACK_STAGES,
                                                          A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
-                                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES))
+                                                         A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES,
+                                                         A2A_WIDE_FAIR_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2528,6 +2567,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_themis_settings(tuning) if stage in A2A_WIDE_THEMIS_PILOT_STAGES
                     else a2a_wide_mrc_settings(tuning) if stage in A2A_WIDE_MRC_STAGES
                     else a2a_wide_themis2_settings(stage, tuning) if stage in A2A_WIDE_THEMIS2_STAGES
+                    else a2a_wide_fair_settings(stage, tuning) if stage in A2A_WIDE_FAIR_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2557,6 +2597,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
                  or stage in A2A_WIDE_THEMIS_PILOT_STAGES or stage in A2A_WIDE_THEMIS2_STAGES
+                 or stage in A2A_WIDE_FAIR_STAGES
                  else A2A_SEEDS["comparison"])
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
