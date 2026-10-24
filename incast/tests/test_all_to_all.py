@@ -51,6 +51,19 @@ class Timing(unittest.TestCase):
             path.write_text(HEADER + "".join(f"{r},,{t},{i},{i},8,{s},{e}\n" for r, t, i, s, e in rows))
             return summarize.all_to_all_timing(path, iterations, list(group), collectives)
 
+    def test_a_row_cut_short_at_the_end_is_left_out(self):
+        # A simulator stopped by its time limit leaves its last row cut
+        # short: inside its end time (900), which read would close
+        # iteration 2, or before it, which read would have no end.
+        rows = "0,,all_to_all,1,1,8,100,400\n1,,all_to_all,1,1,8,150,500\n0,,all_to_all,2,2,8,600,700\n"
+        for cut in ("1,,all_to_all,2,2,8,600,9", "1,,all_to_all,2,2,8,6"):
+            with self.subTest(cut=cut), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "collective_events.csv"
+                path.write_text(HEADER + rows + cut)
+                timing = summarize.all_to_all_timing(path, 2, [0, 1])
+                self.assertEqual((timing["iterations_completed"], timing["complete"], timing["last_end_ns"]),
+                                 (1, False, 700))
+
     def test_span_over_ranks(self):
         rows = [
             (0, "all_to_all", 1, 100, 400), (1, "all_to_all", 1, 150, 500),

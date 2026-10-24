@@ -405,6 +405,15 @@ class Losses(unittest.TestCase):
         self.assertEqual(result["damaged_lines"], 1)
         self.assertEqual(result["cumulative_lost_reached_ns"], {"1": 100, "5": 300, "20": None})
 
+    def test_a_row_cut_short_at_the_end_is_left_out(self):
+        # A simulator stopped by its time limit leaves its last row cut
+        # short, here inside its lost count.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "spine_losses.csv"
+            path.write_text("time_ns,rank,spine,sent,lost,grade\n100,0,3,10,1,3\n300,0,3,10,")
+            result = summarize.spine_losses(path, 3, 50)
+        self.assertEqual((result["spines"], result["damaged_lines"]), ({"3": {"sent": 10, "lost": 1}}, 0))
+
 
 def run(arm, group, size, condition, seed, stage="a2a_gate", setting=None):
     return {"key": f"{stage}-{group}-{size}-{condition}-{arm}-s{seed}", "stage": stage, "arm": arm, "setting": setting,

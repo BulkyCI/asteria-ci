@@ -380,6 +380,12 @@ def nearest_rank(values: list[int], q: float) -> int:
     return ordered[max(0, math.ceil(q * len(ordered)) - 1)]
 
 
+def whole_lines(lines):
+    """The lines that end in a line end: where a stopped simulator left its
+    last row cut short, that row is left out."""
+    return (line for line in lines if line.endswith("\n"))
+
+
 def all_to_all_timing(path: Path, iterations: int, group: list[int], collectives: int = 1,
                       collective_type: str = "all_to_all") -> dict:
     """Per-iteration completion of the all-to-all (or of collective_type)
@@ -390,7 +396,7 @@ def all_to_all_timing(path: Path, iterations: int, group: list[int], collectives
     ranks: dict[int, dict[int, int]] = {}
     if path.is_file():
         with path.open() as handle:
-            for row in csv.DictReader(handle):
+            for row in csv.DictReader(whole_lines(handle)):
                 if row["collective_type"] != collective_type:
                     continue
                 step = int(row["training_step"])
@@ -444,7 +450,7 @@ def spine_losses(path: Path, spine: int | None, onset_ns: int | None) -> dict:
     # can leave runs of NUL bytes where rows were: such lines are counted,
     # never read as rows.
     with path.open() as handle:
-        for row in csv.DictReader(intact(handle)):
+        for row in csv.DictReader(intact(whole_lines(handle))):
             s = int(row["spine"])
             lost = int(row["lost"])
             cell = totals.setdefault(s, [0, 0])
