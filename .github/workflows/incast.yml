@@ -49,9 +49,14 @@ on:
         default: 64
         type: number
       dcs_cores:
-        description: CPUs asked of SLURM for each DCS shard, with 4 GB each, as the slice's --cpus-per-task and --mem; with more than 2 granted, the shard runs one simulation per physical core, each its own job step (on DCS, 2 CPUs to a core)
+        description: CPUs asked of SLURM for each DCS shard, as the slice's --cpus-per-task, with dcs_memory_gb for each 2 as its --mem; with more than 2 granted, the shard runs one simulation per physical core, each its own job step (on DCS, 2 CPUs to a core)
         required: false
         default: 2
+        type: number
+      dcs_memory_gb:
+        description: GB of memory for each simulation of a DCS shard above 2 CPUs; the shard runs no more simulations at once than its memory holds at this much each
+        required: false
+        default: 8
         type: number
       compiler_cache:
         description: Restore the newest compiler cache, or build the runtime without one
@@ -244,15 +249,16 @@ jobs:
         sparse-checkout: .github/actions/dcs-provision
         sparse-checkout-cone-mode: false
 
-    # Above 2 cores, 4 GB each; at 2, runner-job.sbatch's own 2 cores and
-    # 16 GB.
+    # Above 2 CPUs, dcs_memory_gb for each 2 (a core); at 2,
+    # runner-job.sbatch's own 2 CPUs and 16 GB.
     - name: Size the slice
       id: slice
       env:
         CORES: ${{ inputs.dcs_cores }}
+        MEMORY_GB: ${{ inputs.dcs_memory_gb }}
       run: |
         if (( CORES > 2 )); then
-          echo "options=--cpus-per-task=${CORES} --mem=$((CORES * 4))G" >> "$GITHUB_OUTPUT"
+          echo "options=--cpus-per-task=${CORES} --mem=$((CORES * MEMORY_GB / 2))G" >> "$GITHUB_OUTPUT"
         fi
 
     - uses: ./.github/actions/dcs-provision
@@ -353,6 +359,7 @@ jobs:
         KEYS: ${{ matrix.shard.keys }}
         PARALLEL: ${{ needs.plan.outputs.parallel }}
         SIMULATION_TIMEOUT_SECONDS: ${{ inputs.simulation_timeout_seconds }}
+        MEMORY_GB: ${{ inputs.dcs_memory_gb }}
         # Scoped to this step: the runtime's libraries would shadow the
         # system's for every later step's tooling.
         LD_LIBRARY_PATH: ${{ env.ASTRA_SIM_LD_LIBRARY_PATH }}
@@ -385,6 +392,12 @@ jobs:
           PARALLEL=$((cpus / threads))
           (( threads > 1 )) || PARALLEL=$((PARALLEL - 1))
           job_mem=${SLURM_MEM_PER_NODE:-$(( ${SLURM_MEM_PER_CPU:-0} * cpus ))}
+          # No more at once than the job's memory holds at MEMORY_GB each,
+          # or than the shard has runs: the steps share the memory.
+          fit=$((job_mem / (MEMORY_GB * 1024)))
+          (( fit > 0 && PARALLEL > fit )) && PARALLEL=$fit
+          runs=$(wc -w <<< "$KEYS")
+          (( PARALLEL > runs )) && PARALLEL=$runs
           step_mem=$((job_mem / PARALLEL))
           LAUNCH="srun --exact --ntasks=1 --cpus-per-task=${threads} --mem=${step_mem}M"
           # A step that cannot start leaves the runs to share the job's cores
