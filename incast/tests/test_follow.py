@@ -415,6 +415,10 @@ class RunOne(unittest.TestCase):
                 self.assertEqual(remaining(results / "k"), [])
                 self.assertFalse((results / "k" / "ns3" / summarize.COUNTS).exists())
                 self.assertFalse((results / "k.simulated").exists())
+                # The completion log stays, compressed.
+                self.assertFalse((results / "k" / "ns3" / "fct.txt").exists())
+                self.assertEqual(zstandard.ZstdDecompressor().decompressobj().decompress(
+                    (results / "k" / "ns3" / "fct.txt.zst").read_bytes()), b"")
                 if stream == "frames":
                     # The sealed segments went while the simulator ran.
                     self.assertEqual(json.loads((root / "kept.json").read_text()), names([2]))

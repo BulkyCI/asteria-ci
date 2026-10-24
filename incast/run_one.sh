@@ -64,19 +64,22 @@ json.dump(summary, open(path, "w"), indent=1)
 PY
     # A run of a sparse hold trace (manifest physical_topology
     # sparse_hold_trace) keeps its hold traces zstd-compressed, as
-    # traces.py reads them.
+    # traces.py reads them; every run keeps so its flow, completion and
+    # queue logs, which only analyze.py's validity table reads again, so
+    # that a shard's finished runs hold little of the cluster's scratch.
     "$python" - "$out" <<'PY'
 import json, sys
 from pathlib import Path
 import zstandard
 run = Path(sys.argv[1])
+paths = [run / "telemetry" / "flow_events.csv", run / "ns3" / "fct.txt", run / "ns3" / "qlen.txt"]
 if json.loads((run / "manifest.json").read_text())["physical_topology"].get("sparse_hold_trace"):
-    for name in ("spine_losses.csv", "receiver_holds.csv"):
-        path = run / "ns3" / name
-        if path.exists():
-            with path.open("rb") as source, path.with_name(name + ".zst").open("wb") as target:
-                zstandard.ZstdCompressor(level=10).copy_stream(source, target)
-            path.unlink()
+    paths += [run / "ns3" / "spine_losses.csv", run / "ns3" / "receiver_holds.csv"]
+for path in paths:
+    if path.exists():
+        with path.open("rb") as source, path.with_name(path.name + ".zst").open("wb") as target:
+            zstandard.ZstdCompressor(level=10).copy_stream(source, target)
+        path.unlink()
 PY
     rm -rf "$out/workload"
     echo "$key: simulator status $status, ${wall}s"

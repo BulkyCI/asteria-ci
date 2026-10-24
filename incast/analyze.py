@@ -1943,7 +1943,7 @@ def a2a_wide_validity(runs_files, out_root: Path, stage: str) -> list[dict]:
         deviations = [span / reference - 1 for span in spans]
         payload = (run.get("fixture") or {}).get("payload_bytes", A2A_DEFAULT_PAYLOAD_BYTES)
         attempted = 0
-        with (directory / "telemetry" / "flow_events.csv").open() as handle:
+        with traces.open_rows(directory / "telemetry" / "flow_events.csv") as handle:
             for row in csv.DictReader(handle):
                 attempted += int(row["data_attempted_bytes"])
         packets = attempted // payload
