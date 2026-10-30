@@ -65,10 +65,10 @@ jobs:
           --out-root combined/results --reference graded_per_connection > combined/results/cost.json
         cat combined/results/report.md >> "$GITHUB_STEP_SUMMARY"
 
-    # The tables and every run's summary and windows, and the sender loss,
-    # receiver hold and retransmission timeout traces the a2a_candidates
-    # measures read, small enough to read anywhere; the full bundle below
-    # also carries the per-report files.
+    # The tables and every run's summary, windows and link error drops, and
+    # the sender loss, receiver hold and retransmission timeout traces the
+    # a2a_candidates measures read, small enough to read anywhere; the full
+    # bundle below also carries the per-report files.
     - name: Keep the tables and summaries as an artifact
       uses: actions/upload-artifact@v7
       with:
@@ -82,6 +82,7 @@ jobs:
           combined/results/*/transients.json
           combined/results/*/spine_windows.csv
           combined/results/*/offered_windows.csv
+          combined/results/*/link_error_drops.csv
           combined/results/*/ns3/spine_losses.csv
           combined/results/*/ns3/receiver_holds.csv
           combined/results/*/ns3/rto_events.csv

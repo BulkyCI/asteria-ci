@@ -1,5 +1,6 @@
-"""The arrival windows counted while the simulator writes its event
-segments, against the run's whole stream read afterwards."""
+"""The arrival windows and link error drops counted while the simulator
+writes its event segments, against the run's whole stream read
+afterwards."""
 
 import io
 import json
@@ -27,23 +28,28 @@ except ImportError:
 HEADER = ("time_ns,event,plane,protocol,node,node_type,interface,source_host,"
           "destination_host,source_port,sequence,packet_bytes,queue\n")
 # Two leaves of four hosts under two spines: hosts 0 to 7, leaves 8 and 9,
-# spines 10 and 11, a leaf's spine ports 5 and 6; leaf 1 receives.
+# spines 10 and 11, a leaf's spine ports 5 and 6, a spine's leaf ports 1 and
+# 2; leaf 1 receives.
 PROFILE = {
     "network": {"hosts_per_leaf": 4, "spine_count": 2},
     "parallelism": {"dp": 8},
     "workload": {"kind": "incast", "receiver_leaf": 1, "fan_in": 4},
 }
 ROWS_PER_SEGMENT = 2000
+# The events of rows, by event and plane.
+EVENTS = ("data_arrival,data", "data_arrival,data", "data_deliver,data", "link_error_drop,data",
+          "link_error_drop,control")
 
 
 def rows(count: int, seed: int = 1) -> list[str]:
     """Event rows over about 25 windows: data arrivals at the receiving
     leaf (on spine ports and others), at the other leaf and at the spines
-    for every host, among other events."""
+    for every host, and link error drops on either plane at every switch
+    port, among other events."""
     draw = random.Random(seed)
     return [
-        f"{i * 50 + draw.randrange(50)},{draw.choice(('data_arrival', 'data_arrival', 'data_deliver'))},"
-        f"data,rdma,{draw.choice((8, 9, 9, 10, 11))},1,{draw.randrange(1, 8)},{draw.randrange(8)},"
+        f"{i * 50 + draw.randrange(50)},{draw.choice(EVENTS)},"
+        f"rdma,{draw.choice((8, 9, 9, 10, 11))},1,{draw.randrange(1, 8)},{draw.randrange(8)},"
         f"{draw.randrange(8)},{draw.randrange(1000)},{i},{draw.choice((64, 1000, 4160))},0\n"
         for i in range(count)
     ]
@@ -141,7 +147,8 @@ def main(*arguments) -> int:
 
 
 def outputs(run: Path) -> dict[str, bytes]:
-    return {name: (run / name).read_bytes() for name in ("spine_windows.csv", "offered_windows.csv")}
+    return {name: (run / name).read_bytes()
+            for name in ("spine_windows.csv", "offered_windows.csv", "link_error_drops.csv")}
 
 
 def layout() -> dict:
@@ -149,9 +156,9 @@ def layout() -> dict:
 
 
 def counted(text: str):
-    """count_arrivals' counts of text as one whole stream."""
-    counts = ({}, {})
-    summarize.count_arrivals(io.BytesIO(zstandard.ZstdCompressor().compress(text.encode())), counts, **layout())
+    """count_events' counts of text as one whole stream."""
+    counts = ({}, {}, {})
+    summarize.count_events(io.BytesIO(zstandard.ZstdCompressor().compress(text.encode())), counts, **layout())
     return counts
 
 
@@ -161,6 +168,26 @@ def remaining(run: Path) -> list[str]:
 
 def names(indices) -> list[str]:
     return [summarize.segment(Path(), index).name for index in indices]
+
+
+# Rows of PROFILE's fabric with link error drops of every kind: data drops at
+# leaf 1's port from spine 1, twice, at spine 0's port from leaf 0, and at spine
+# 1's port from leaf 1 of a packet for a host that does not receive; an
+# acknowledgement's drop; and data drops on the links of host 1 (at leaf 0's
+# port 2) and of host 4 (at its own port).
+DROP_ROWS = [
+    "100,data_arrival,data,17,9,1,5,0,4,1,0,1000,-1\n",
+    "200,link_error_drop,data,17,9,1,6,0,4,1,1,1000,-1\n",
+    "300,link_error_drop,data,17,10,1,1,1,5,1,0,1000,-1\n",
+    "400,link_error_drop,control,252,10,1,1,5,1,1,0,60,-1\n",
+    "500,link_error_drop,data,17,9,1,6,0,4,1,2,64,-1\n",
+    "600,link_error_drop,data,17,11,1,2,6,2,1,0,1000,-1\n",
+    "700,link_error_drop,data,17,8,1,2,1,4,1,0,1000,-1\n",
+    "800,link_error_drop,data,17,4,0,1,0,4,1,0,1000,-1\n",
+]
+DROPS = {(1, 1, "down", 0, 4): [2, 1064], (0, 0, "up", 1, 5): [1, 1000], (1, 1, "up", 6, 2): [1, 1000]}
+DROPS_CSV = ("leaf,spine,direction,source_host,destination_host,packets,bytes\n"
+             "0,0,up,1,5,1,1000\n1,1,down,0,4,2,1064\n1,1,up,6,2,1,1000\n")
 
 
 @unittest.skipIf(zstandard is None, "no zstandard")
@@ -223,12 +250,13 @@ class Following(unittest.TestCase):
         self.assertEqual(remaining(whole), names(range(len(segments))))
         saved, next_segment = summarize.load_counts(followed / "ns3" / summarize.COUNTS)
         self.assertEqual(next_segment, len(segments))
-        self.assertEqual(saved, summarize.windows(whole / "ns3", layout()))
+        self.assertEqual(saved, summarize.stream_counts(whole / "ns3", layout()))
         for run in (followed, whole):
             finish(run)
             main(run, "--profile", self.profile)
         self.assertEqual(outputs(followed), outputs(whole))
         self.assertGreater(json.loads((followed / "summary.json").read_text())["leaf_arrival_packets"], 0)
+        self.assertGreater(len((followed / "link_error_drops.csv").read_text().splitlines()), 1)
         self.assertEqual(sorted(path.name for path in (followed / "ns3").iterdir()),
                          ["fct.txt", "transport_summary.csv"])
 
@@ -243,8 +271,8 @@ class Following(unittest.TestCase):
         expected = counted(decodable[:decodable.rindex("\n") + 1])
         # Counted, the cut row would add a packet.
         self.assertNotEqual(counted(decodable + "\n"), expected)
-        self.assertEqual(summarize.windows(followed / "ns3", layout()), expected)
-        self.assertEqual(summarize.windows(whole / "ns3", layout()), expected)
+        self.assertEqual(summarize.stream_counts(followed / "ns3", layout()), expected)
+        self.assertEqual(summarize.stream_counts(whole / "ns3", layout()), expected)
         for run in (followed, whole):
             finish(run)
             main(run, "--profile", self.profile)
@@ -273,14 +301,14 @@ class Following(unittest.TestCase):
         play([whole], segments)
         finish(whole)
         main(whole, "--profile", self.profile)
-        count_arrivals, save_counts = summarize.count_arrivals, summarize.save_counts
+        count_events, save_counts = summarize.count_events, summarize.save_counts
         calls = []
 
         def reading_segment_2(*arguments, **keywords):
             calls.append(1)
             if len(calls) == 3:
                 raise OSError("stopped")
-            return count_arrivals(*arguments, **keywords)
+            return count_events(*arguments, **keywords)
 
         def saving_segment_2(*arguments, **keywords):
             save_counts(*arguments, **keywords)
@@ -290,7 +318,7 @@ class Following(unittest.TestCase):
 
         # Stopped reading segment 2, it has saved through segment 1; stopped
         # between saving through segment 2 and deleting it, it keeps it.
-        for name, stop, kept, next_segment in (("count_arrivals", reading_segment_2, 2, 2),
+        for name, stop, kept, next_segment in (("count_events", reading_segment_2, 2, 2),
                                                ("save_counts", saving_segment_2, 2, 3)):
             with self.subTest(stopped_in=name):
                 run = self.root / name
@@ -318,11 +346,31 @@ class Following(unittest.TestCase):
         # Nothing is deleted or saved: the summary reads the stream whole.
         self.assertEqual(len(remaining(run)), len(segments))
         self.assertFalse((run / "ns3" / summarize.COUNTS).exists())
-        self.assertEqual(summarize.windows(run / "ns3", layout()), counted("".join(segment_texts())))
+        self.assertEqual(summarize.stream_counts(run / "ns3", layout()), counted("".join(segment_texts())))
         for directory in (run, whole):
             finish(directory)
             main(directory, "--profile", self.profile)
         self.assertEqual(outputs(run), outputs(whole))
+
+    def test_the_data_drops_of_each_leaf_spine_link_direction(self):
+        counts = counted(HEADER + "".join(DROP_ROWS))
+        self.assertEqual(counts, ({(0, 0): [1, 1000]}, {}, DROPS))
+        # A drop row cut short, where a killed simulator stops, is left out.
+        cut = DROP_ROWS[1].rstrip("\n")
+        self.assertEqual(counted(HEADER + "".join(DROP_ROWS) + cut), counts)
+
+    def test_the_drops_followed_and_read_after_the_run(self):
+        # Leaf 1's drops from spine 1 fall in both segments.
+        segments, _ = frames([HEADER + "".join(DROP_ROWS[:3]), "".join(DROP_ROWS[3:])])
+        followed, whole = self.root / "followed", self.root / "whole"
+        play([followed, whole], segments)
+        self.done.touch()
+        summarize.follow(followed / "ns3", self.done, layout())
+        self.assertEqual(remaining(followed), [])
+        for run in (followed, whole):
+            finish(run)
+            main(run, "--profile", self.profile)
+            self.assertEqual((run / "link_error_drops.csv").read_text(), DROPS_CSV)
 
 
 class Reading(unittest.TestCase):
@@ -434,7 +482,8 @@ class Layout(unittest.TestCase):
         leaves, parameters = summarize.window_layout(PROFILE)
         self.assertEqual(leaves, [1])
         self.assertEqual(parameters, {"leaf_nodes": {9: 1}, "first_spine_port": 5, "first_spine_node": 10,
-                                      "spines": 2, "receivers": {4, 5, 6, 7}, "hosts_per_leaf": 4})
+                                      "spines": 2, "receivers": {4, 5, 6, 7}, "hosts_per_leaf": 4,
+                                      "first_leaf_node": 8, "first_leaf_port": 1})
         for kind in ("all_to_all", "sequential_dp_all_reduce"):
             leaves, parameters = summarize.window_layout({**PROFILE, "workload": {"kind": kind}})
             self.assertEqual(leaves, [0])

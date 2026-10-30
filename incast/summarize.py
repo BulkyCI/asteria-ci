@@ -11,9 +11,14 @@ base RTTs: every data packet arriving at a receiving leaf from a spine
 data packet for a receiving host arriving at a spine (what the senders
 offered each spine, per receiving leaf). The receivers are every host of
 workload.receiver_leaf, or the first workload.receiver_count hosts of each
-of workload.receiver_leaves. Writes RUN_DIR/summary.json,
-RUN_DIR/spine_windows.csv and RUN_DIR/offered_windows.csv, and deletes the
-segments unless --keep-events.
+of workload.receiver_leaves. Also counts the data packets of the stream
+that a leaf-spine link's error model dropped, per link direction (leaf,
+spine, up from the leaf or down to it) and (source host, destination host);
+the stream holds the packets from or to the simulator's
+TRANSPORT_EVENT_HOSTS. Writes RUN_DIR/summary.json,
+RUN_DIR/spine_windows.csv, RUN_DIR/offered_windows.csv and
+RUN_DIR/link_error_drops.csv, and deletes the segments unless
+--keep-events.
 
 With --follow, it bins the segments while the simulator writes them
 instead, and returns once the file DONE exists (run_one.sh writes it when
@@ -21,7 +26,7 @@ the simulator has exited) and every segment is read. The writer seals a
 segment, one zstd frame of whole rows, when it opens the next, and the
 last when it exits; a sealed segment read to its end is deleted once the
 counts so far and the next segment's index are saved to
-RUN_DIR/ns3/arrival_counts.json. A run summarized afterwards starts from
+RUN_DIR/ns3/event_counts.json. A run summarized afterwards starts from
 those counts and reads the segments from that index on, so a follower
 that stopped anywhere leaves no row uncounted or counted twice.
 
@@ -90,7 +95,7 @@ RUN_LENGTH = 5
 
 SEGMENTS = "transport_events.csv.zst.*"
 # The follower's counts, in RUN_DIR/ns3.
-COUNTS = "arrival_counts.json"
+COUNTS = "event_counts.json"
 # How long the follower sleeps between looks at a segment with no new
 # bytes, each a read and at most two stats.
 FOLLOW_INTERVAL_S = 1.0
@@ -188,35 +193,60 @@ def segment(ns3: Path, index: int) -> Path:
     return ns3 / f"transport_events.csv.zst.{index:03d}"
 
 
-def count_arrivals(raw, counts, leaf_nodes: dict[int, int], first_spine_port: int, first_spine_node: int,
-                   spines: int, receivers: set[int], hosts_per_leaf: int) -> bool:
-    """Add to counts, (delivered, offered), the packets and bytes of the
-    zstd-compressed event rows read from raw that were delivered to the
-    receiving leaves from each spine, per (window, spine), and offered to
-    each spine for the receiving hosts, per (window, receiving leaf,
-    spine). leaf_nodes maps a receiving leaf's node id to its leaf index.
-    A last row without its line end, where the stream of a killed simulator
-    stops, is not counted; returns whether the rows ended whole."""
+def count_events(raw, counts, leaf_nodes: dict[int, int], first_spine_port: int, first_spine_node: int,
+                 spines: int, receivers: set[int], hosts_per_leaf: int, first_leaf_node: int,
+                 first_leaf_port: int) -> bool:
+    """Add to counts, (delivered, offered, link_error_drops), the packets
+    and bytes of the zstd-compressed event rows read from raw that were
+    delivered to the receiving leaves from each spine, per (window, spine),
+    offered to each spine for the receiving hosts, per (window, receiving
+    leaf, spine), and dropped by the link error model on the data plane, per
+    (leaf, spine, "up" or "down", source host, destination host).
+    leaf_nodes maps a receiving leaf's node id to its leaf index. A last row
+    without its line end, where the stream of a killed simulator stops, is
+    not counted; returns whether the rows ended whole."""
     import zstandard
 
-    delivered, offered = counts
+    delivered, offered, link_error_drops = counts
     spine_nodes = range(first_spine_node, first_spine_node + spines)
+    leaves = first_spine_node - first_leaf_node
     line = ""
-    # The header row, the first of segment .000, is no data arrival.
+    # The header row, the first of segment .000, is neither event.
     for line in io.TextIOWrapper(zstandard.ZstdDecompressor().stream_reader(raw)):
-        if ",data_arrival," not in line or not line.endswith("\n"):
-            continue
-        f = line.split(",")
-        node = int(f[4])
-        window = int(f[0]) // WINDOW_NS
-        if node in leaf_nodes:
-            spine = int(f[6]) - first_spine_port
-            if not 0 <= spine < spines:
+        if ",data_arrival," in line:
+            if not line.endswith("\n"):
                 continue
-            cell = delivered.setdefault((window, spine), [0, 0])
-        elif node in spine_nodes and int(f[8]) in receivers:
-            leaf = int(f[8]) // hosts_per_leaf
-            cell = offered.setdefault((window, leaf, node - first_spine_node), [0, 0])
+            f = line.split(",")
+            node = int(f[4])
+            window = int(f[0]) // WINDOW_NS
+            if node in leaf_nodes:
+                spine = int(f[6]) - first_spine_port
+                if not 0 <= spine < spines:
+                    continue
+                cell = delivered.setdefault((window, spine), [0, 0])
+            elif node in spine_nodes and int(f[8]) in receivers:
+                leaf = int(f[8]) // hosts_per_leaf
+                cell = offered.setdefault((window, leaf, node - first_spine_node), [0, 0])
+            else:
+                continue
+        elif ",link_error_drop,data," in line:
+            if not line.endswith("\n"):
+                continue
+            f = line.split(",")
+            node, port = int(f[4]), int(f[6])
+            # The error model drops a packet at the device receiving it: a
+            # leaf's spine port ends the link down from that spine, a spine's
+            # port the link up from that leaf. A drop on a host's link is
+            # left out.
+            if first_leaf_node <= node < first_spine_node:
+                leaf, spine, direction = node - first_leaf_node, port - first_spine_port, "down"
+            elif node in spine_nodes:
+                leaf, spine, direction = port - first_leaf_port, node - first_spine_node, "up"
+            else:
+                continue
+            if not (0 <= leaf < leaves and 0 <= spine < spines):
+                continue
+            cell = link_error_drops.setdefault((leaf, spine, direction, int(f[7]), int(f[8])), [0, 0])
         else:
             continue
         cell[0] += 1
@@ -227,12 +257,13 @@ def count_arrivals(raw, counts, leaf_nodes: dict[int, int], first_spine_port: in
 def save_counts(path: Path, counts, next_segment: int) -> None:
     """Replace path, whole, with counts and the index of the first segment
     they leave out."""
-    delivered, offered = counts
+    delivered, offered, link_error_drops = counts
     partial = path.with_name(path.name + ".partial")
     partial.write_text(json.dumps({
         "next_segment": next_segment,
         "delivered": [[*key, *cell] for key, cell in delivered.items()],
         "offered": [[*key, *cell] for key, cell in offered.items()],
+        "link_error_drops": [[*key, *cell] for key, cell in link_error_drops.items()],
     }))
     partial.replace(path)
 
@@ -243,14 +274,17 @@ def load_counts(path: Path):
     delivered = {(window, spine): [packets, size] for window, spine, packets, size in saved["delivered"]}
     offered = {(window, leaf, spine): [packets, size]
                for window, leaf, spine, packets, size in saved["offered"]}
-    return (delivered, offered), saved["next_segment"]
+    link_error_drops = {(leaf, spine, direction, source, destination): [packets, size]
+                        for leaf, spine, direction, source, destination, packets, size
+                        in saved["link_error_drops"]}
+    return (delivered, offered, link_error_drops), saved["next_segment"]
 
 
-def windows(ns3: Path, layout: dict):
-    """The counts of count_arrivals over the run's whole stream: those the
+def stream_counts(ns3: Path, layout: dict):
+    """The counts of count_events over the run's whole stream: those the
     follower saved, if it ran, and the segments it left from its next index
-    on. layout holds count_arrivals' parameters (window_layout)."""
-    counts, first = load_counts(ns3 / COUNTS) if (ns3 / COUNTS).is_file() else (({}, {}), 0)
+    on. layout holds count_events' parameters (window_layout)."""
+    counts, first = load_counts(ns3 / COUNTS) if (ns3 / COUNTS).is_file() else (({}, {}, {}), 0)
     found = sorted((int(path.name.rsplit(".", 1)[1]), path) for path in ns3.glob(SEGMENTS))
     # A segment below first is counted already, kept by a follower stopped
     # between saving its counts and deleting it.
@@ -259,7 +293,7 @@ def windows(ns3: Path, layout: dict):
         raise ValueError(f"{ns3}: segments {[index for index, _ in rest]} do not follow from {first}")
     # In order, as one stream.
     with Concatenation(path for _, path in rest) as raw:
-        count_arrivals(raw, counts, **layout)
+        count_events(raw, counts, **layout)
     return counts
 
 
@@ -282,7 +316,7 @@ def follow(ns3: Path, done: Path, layout: dict) -> None:
     """Bin the segments while the simulator writes them, until the file
     done exists and every segment is read, saving the counts and deleting
     each segment once it is read to its end (see the module docstring)."""
-    counts = ({}, {})
+    counts = ({}, {}, {})
     index = 0
     while True:
         path = segment(ns3, index)
@@ -296,7 +330,7 @@ def follow(ns3: Path, done: Path, layout: dict) -> None:
             continue
         later = segment(ns3, index + 1)
         with Following(path, later, done) as raw:
-            whole = count_arrivals(raw, counts, **layout)
+            whole = count_events(raw, counts, **layout)
         # The writer ends a segment's frame after a whole row before it
         # opens the next (rotate_transport_event_raw_segment in the
         # simulator), so the rest of the stream reads on its own from the
@@ -330,6 +364,14 @@ def write_offered(path: Path, counts, leaves: list[int], spines: int) -> None:
                     writer.writerow([window, window * WINDOW_NS, leaf, spine, packets, size])
 
 
+def write_link_error_drops(path: Path, counts) -> None:
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["leaf", "spine", "direction", "source_host", "destination_host", "packets", "bytes"])
+        for key in sorted(counts):
+            writer.writerow([*key, *counts[key]])
+
+
 def receiving_hosts(workload: dict, hosts_per_leaf: int) -> tuple[list[int], set[int]]:
     """The receiving leaves and the receiving hosts' node ids."""
     if "receiver_leaves" in workload:
@@ -342,9 +384,10 @@ def receiving_hosts(workload: dict, hosts_per_leaf: int) -> tuple[list[int], set
 
 
 def window_layout(profile: dict) -> tuple[list[int], dict]:
-    """The run's receiving leaves, and count_arrivals' parameters for its
-    windows: leaf 0's hosts under an all-to-all or a sequential all-reduce,
-    the workload's receivers otherwise."""
+    """The run's receiving leaves, and count_events' parameters: the
+    fabric's node and device layout, and the receivers of its windows, leaf
+    0's hosts under an all-to-all or a sequential all-reduce, the workload's
+    receivers otherwise."""
     network = profile["network"]
     hosts_per_leaf = network["hosts_per_leaf"]
     hosts = profile["parallelism"]["dp"]
@@ -352,8 +395,9 @@ def window_layout(profile: dict) -> tuple[list[int], dict]:
         leaves, receivers = [0], set(range(hosts_per_leaf))
     else:
         leaves, receivers = receiving_hosts(profile["workload"], hosts_per_leaf)
-    # Node ids follow topology.txt: hosts, then leaves, then spines; and a
-    # leaf's devices its hosts, then its spines.
+    # Node ids follow topology.txt: hosts, then leaves, then spines; and
+    # past every node's loopback device 0, a leaf's devices its hosts, then
+    # its spines, and a spine's its leaves.
     return leaves, {
         "leaf_nodes": {hosts + leaf: leaf for leaf in leaves},
         "first_spine_port": hosts_per_leaf + 1,
@@ -361,6 +405,8 @@ def window_layout(profile: dict) -> tuple[list[int], dict]:
         "spines": network["spine_count"],
         "receivers": receivers,
         "hosts_per_leaf": hosts_per_leaf,
+        "first_leaf_node": hosts,
+        "first_leaf_port": 1,
     }
 
 
@@ -729,9 +775,10 @@ def main() -> int:
             failures[0]["start_ns"] if failures else None,
         )
 
-    delivered, offered = windows(ns3, layout)
+    delivered, offered, link_error_drops = stream_counts(ns3, layout)
     write_windows(arguments.run_dir / "spine_windows.csv", delivered, spines)
     write_offered(arguments.run_dir / "offered_windows.csv", offered, receiving_leaves, spines)
+    write_link_error_drops(arguments.run_dir / "link_error_drops.csv", link_error_drops)
     measured = transients(profile, offered, receiving_leaves)
     if measured is not None:
         (arguments.run_dir / "transients.json").write_text(json.dumps(measured, indent=1) + "\n")
