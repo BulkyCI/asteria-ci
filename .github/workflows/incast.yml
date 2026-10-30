@@ -367,12 +367,14 @@ jobs:
         set -uo pipefail
         mkdir -p results
         # The shared cluster scratch bounds how many runs fit at once, so a
-        # cluster shard records, every 5 minutes, what its runs hold there
-        # and what the volume has left.
+        # cluster shard records, every 5 minutes, what its runs hold there,
+        # what its whole job tree holds (checkout, runtime, Python
+        # environment and cache, runs) and what the volume has left.
         sampler=""
         if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+          tree="${RUNNER_WORKSPACE%/_work/*}"
           while :; do
-            echo "$(date -u +%H:%M:%S) $(du -sm results | cut -f1) MB held, $(df -Pm results | awk 'NR == 2 {print $4}') MB free"
+            echo "$(date -u +%H:%M:%S) $(du -sm results | cut -f1) MB held, $(du -sm "$tree" 2>/dev/null | cut -f1) MB in the job tree, $(df -Pm results | awk 'NR == 2 {print $4}') MB free"
             sleep 300
           done > results/shard-${{ matrix.shard.id }}-scratch.txt 2>&1 &
           sampler=$!
