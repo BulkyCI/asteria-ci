@@ -1507,6 +1507,25 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   arm (A2A_WIDE_UID_ARMS), at the default asteria commit: an arm whose
 #   overdue repair never acts against the same arm without it, with 64-bit
 #   event uids.
+# - a2a_wide128_spread2m_seeds_4k: seeds 304-315 (A2A_WIDE_SEEDS_2M_SEEDS) of
+#   a2a_wide128_spread2m_4k's two _spread64 arms on 2 MiB multi_loss1e3
+#   (A2A_WIDE_SEEDS_2M_CELLS), each with its healthy pair, at that stage's
+#   settings and commit: each run's profile is that stage's run of its arm
+#   and cell but for its name, so its runs pool with that stage's seeds
+#   301-303.
+# - a2a_wide128_seeds2m_4k: the same seeds and cell of a2a_wide128_4k's
+#   reps_hold_auto_tail4_cover_rx (A2A_WIDE_SEEDS_2M_ARMS), each with its
+#   healthy pair, at a2a_wide128_4k's settings and commit: each run's
+#   profile is that stage's run of its arm and cell but for its name.
+# - a2a_wide<P>_long_4k, P of 128 and 256 (A2A_WIDE_LONG_STAGES):
+#   a2a_wide<P>_matrix_4k's sender-only and receiver MRC arms
+#   (A2A_WIDE_LONG_ARMS) on 256 KiB loss1e2_down (A2A_WIDE_LONG_CELLS),
+#   seeds 307-312, at A2A_WIDE_LONG_ITERATIONS iterations, four times the
+#   matrix's, at the matrix's commit: each run's profile is its matrix
+#   twin's but for its name and its iteration count, so the onset, a time
+#   (DEGRADE_AT_NS), falls where it does in the twin. It lists no healthy
+#   run, and analyze.py a2a_costs pairs runs of one iteration count only,
+#   so its runs have no healthy pair.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1695,6 +1714,15 @@ A2A_MATRIX_STAGES = {f"a2a_wide{wide}_matrix_4k": wide for wide in A2A_MATRIX_SP
 A2A_DOWNLINKS_CELLS = (("ep64", "256k", f"{A2A_DOWNLINKS_PREFIX}_loss1e2"),)
 A2A_DOWNLINKS_ARMS = (*tuple(A2A_WIDE_MRC_ARMS)[:2], "mrc_spine_od_rackdefer", "reps_spine_od_rackdefer")
 A2A_DOWNLINKS_STAGES = {"a2a_wide256_down16_4k": 256}
+A2A_WIDE_SEEDS_2M_CELLS = (("ep64", "2m", "multi_loss1e3"),)
+A2A_WIDE_SEEDS_2M_SEEDS = tuple(range(304, 316))
+A2A_WIDE_SPREAD_2M_SEEDS_STAGES = {"a2a_wide128_spread2m_seeds_4k": 128}
+A2A_WIDE_SEEDS_2M_ARMS = ("reps_hold_auto_tail4_cover_rx",)
+A2A_WIDE_SEEDS_2M_STAGES = {"a2a_wide128_seeds2m_4k": 128}
+A2A_WIDE_LONG_CELLS = (("ep64", "256k", "loss1e2_down"),)
+A2A_WIDE_LONG_ARMS = tuple(A2A_WIDE_MRC_ARMS)[:2]
+A2A_WIDE_LONG_ITERATIONS = 160
+A2A_WIDE_LONG_STAGES = {f"a2a_wide{wide}_long_4k": wide for wide in (128, 256)}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1725,7 +1753,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_RAUTO_OD_STAGES, A2A_WIDE_RACK_PILOT_STAGES, A2A_WIDE_RACK2_STAGES,
                                          A2A_WIDE_RACK_STAGES, A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES,
-                                         A2A_MATRIX_STAGES, A2A_DOWNLINKS_STAGES)
+                                         A2A_MATRIX_STAGES, A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
+                                         A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1742,8 +1771,10 @@ A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuni
 # repairs a send RACK has repaired, which changes every arm that signals.
 A2A_STAGE_ASTERIA_REF = {
     "a2a_wide128_4k": "a6ec152a4f4d7ca1576edae22b63080cfd5e19fe",
+    "a2a_wide128_seeds2m_4k": "a6ec152a4f4d7ca1576edae22b63080cfd5e19fe",
     "a2a_wide256_rauto_4k": "a6ec152a4f4d7ca1576edae22b63080cfd5e19fe",
     "a2a_wide128_spread2m_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
+    "a2a_wide128_spread2m_seeds_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
     "a2a_wide256_od_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
     "a2a_wide256_od2_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
     "a2a_wide256_rauto_od_4k": "7b44702f887f5c47f831f94c1bd4baa81ad6ca4f",
@@ -1755,7 +1786,8 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_themis2_4k": "973dcc9f26ac0139e8e1bfed9bb6a423e443fe43",
     "a2a_wide32_themis3_4k": "f13dafaecc651b15af7f297c40df142299adb6d7",
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
-    **{stage: "d68572320c38133238019796d6c675d0022532d0" for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES)},
+    **{stage: "d68572320c38133238019796d6c675d0022532d0"
+       for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES)},
 }
 
 
@@ -2422,14 +2454,22 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for fair_stage in A2A_WIDE_FAIR_STAGES},
         **{matrix_stage: (A2A_WIDE_OD2_CELLS, A2A_MATRIX_ARMS) for matrix_stage in A2A_MATRIX_STAGES},
         **{down_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_ARMS) for down_stage in A2A_DOWNLINKS_STAGES},
+        **{spread_seeds_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SPREAD_ARMS)
+           for spread_seeds_stage in A2A_WIDE_SPREAD_2M_SEEDS_STAGES},
+        **{seeds_2m_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SEEDS_2M_ARMS)
+           for seeds_2m_stage in A2A_WIDE_SEEDS_2M_STAGES},
+        **{long_stage: (A2A_WIDE_LONG_CELLS, A2A_WIDE_LONG_ARMS) for long_stage in A2A_WIDE_LONG_STAGES},
     }[stage]
 
 
 def a2a_read_cells_4k(stage: str) -> tuple[tuple[str, str, str], ...]:
     """The (group, size, condition) cells a 4096-byte stage other than a
     probe or a calibration pass reads: its faulted cells, then their
-    healthy pairs (condition healthy)."""
+    healthy pairs (condition healthy), but for a long stage
+    (A2A_WIDE_LONG_STAGES), which lists no healthy run."""
     cells, _ = a2a_faulted_4k(stage)
+    if stage in A2A_WIDE_LONG_STAGES:
+        return cells
     return cells + tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
 
 
@@ -2600,7 +2640,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_THEMIS_PILOT_STAGES, A2A_WIDE_UID_STAGES,
                                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES,
                                                          A2A_WIDE_FAIR_STAGES, A2A_MATRIX_STAGES,
-                                                         A2A_DOWNLINKS_STAGES))
+                                                         A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
+                                                         A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2617,9 +2658,10 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_noack_settings(tuning) if stage == A2A_NOACK_STAGE
                     else a2a_wide_settings(tuning) if stage in A2A_WIDE_STAGES
                     else {arm: setting for arm, setting in a2a_wide_settings(tuning).items()
-                          if arm in A2A_WIDE_SEEDS_ARMS} if stage in A2A_WIDE_SEEDS_STAGES
+                          if arm in arms} if stage in A2A_WIDE_SEEDS_STAGES or stage in A2A_WIDE_SEEDS_2M_STAGES
                     else a2a_wide_spread_settings(tuning)
                     if stage in A2A_WIDE_SPREAD_STAGES or stage in A2A_WIDE_SPREAD_2M_STAGES
+                    or stage in A2A_WIDE_SPREAD_2M_SEEDS_STAGES
                     else a2a_wide_widen_settings(tuning) if stage in A2A_WIDE_WIDEN_STAGES
                     else a2a_wide_rauto_settings(tuning) if stage in A2A_WIDE_RAUTO_STAGES
                     else a2a_wide_od_settings(tuning) if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES
@@ -2633,7 +2675,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_wide_fair_settings(stage, tuning) if stage in A2A_WIDE_FAIR_STAGES
                     else a2a_matrix_settings(tuning) if stage in A2A_MATRIX_STAGES
                     else {arm: setting for arm, setting in a2a_matrix_settings(tuning).items()
-                          if arm in A2A_DOWNLINKS_ARMS} if stage in A2A_DOWNLINKS_STAGES
+                          if arm in arms} if stage in A2A_DOWNLINKS_STAGES or stage in A2A_WIDE_LONG_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2652,6 +2694,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
+                 else A2A_WIDE_SEEDS_2M_SEEDS
+                 if stage in A2A_WIDE_SPREAD_2M_SEEDS_STAGES or stage in A2A_WIDE_SEEDS_2M_STAGES
                  else A2A_WIDE_SPREAD_SEEDS if stage in A2A_WIDE_SPREAD_STAGES
                  else A2A_WIDE_WIDEN_SEEDS if stage in A2A_WIDE_WIDEN_STAGES
                  else A2A_WIDE_RAUTO_SEEDS if stage in A2A_WIDE_RAUTO_STAGES
@@ -2659,19 +2703,20 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  if stage in A2A_WIDE_OD_STAGES or stage in A2A_WIDE_OD2_STAGES or stage in A2A_WIDE_RAUTO_OD_STAGES
                  or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
                  or stage in A2A_WIDE_THEMIS256_STAGES or stage in A2A_MATRIX_STAGES
-                 or stage in A2A_DOWNLINKS_STAGES
+                 or stage in A2A_DOWNLINKS_STAGES or stage in A2A_WIDE_LONG_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES
                  or stage in A2A_WIDE_THEMIS_PILOT_STAGES or stage in A2A_WIDE_THEMIS2_STAGES
                  or stage in A2A_WIDE_FAIR_STAGES
                  else A2A_SEEDS["comparison"])
+        iterations = A2A_WIDE_LONG_ITERATIONS if stage in A2A_WIDE_LONG_STAGES else None
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
                 if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):
                     continue
                 if (group, size, condition) not in shared:
-                    add(arm, group, size, condition, seed, setting)
+                    add(arm, group, size, condition, seed, setting, iterations=iterations)
     elif stage == A2A_RS3_STAGE:
         for seed, (arm, setting) in itertools.product(A2A_SEEDS["comparison"], a2a_rs3_settings(tuning).items()):
             for group, size in A2A_RS3_CELLS:

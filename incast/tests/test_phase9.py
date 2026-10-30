@@ -78,6 +78,11 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide64_validity_4k": 2,
                  **{f"a2a_wide{wide}_matrix_4k": 144 for wide in (32, 64, 128, 256)},
                  "a2a_wide256_down16_4k": 48,
+                 # More seeds at 128 spines: 12 seeds of 2 arms, and of 1, on
+                 # 2 MiB multi_loss1e3 and healthy.
+                 "a2a_wide128_spread2m_seeds_4k": 48, "a2a_wide128_seeds2m_4k": 24,
+                 # The long runs: 6 seeds of 2 arms on 256 KiB loss1e2_down.
+                 **{f"a2a_wide{wide}_long_4k": 12 for wide in (128, 256)},
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2990,6 +2995,33 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_4k"],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_matrix_4k"])
 
+    def test_long(self):
+        # The matrix's sender-only and receiver MRC arms on 256 KiB
+        # loss1e2_down, seeds 307-312, at 128 and 256 spines, at 160
+        # iterations against the matrix's 40 and with no healthy run: each
+        # run's profile is its matrix twin's but for its name and its
+        # iteration count, so the onset, a time, stays where the twin has it.
+        # Each stage builds at the matrix's commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        arms = ("mrc_hold_auto_tail4_cover_spread64_od_rackdefer",
+                "mrc_hold_auto_tail4_cover_rx_slots8_spread64_widen2_od_rackdefer")
+        for wide in (128, 256):
+            stage, matrix_stage = f"a2a_wide{wide}_long_4k", f"a2a_wide{wide}_matrix_4k"
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(sorted((r["arm"], r["group"], r["size"], r["condition"], r["seed"]) for r in runs),
+                             sorted((arm, "ep64", "256k", "loss1e2_down", seed)
+                                    for arm in arms for seed in range(307, 313)))
+            matrix = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                      for r in profiles.a2a_stage_runs(matrix_stage, committed, self.tuning)}
+            for r in runs:
+                document = profiles.a2a_stage_profile(r, committed)
+                twin = matrix[(r["arm"], r["condition"], r["seed"])]
+                self.assertEqual((twin["steps"], twin["workload"]["iterations"]), (40, 40))
+                self.assertEqual(document, {**twin, "name": document["name"], "steps": 160,
+                                            "workload": {**twin["workload"], "iterations": 160}}, r["key"])
+                self.assertEqual(document["network"]["link_failures"][0]["start_ns"], profiles.DEGRADE_AT_NS)
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[matrix_stage])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3149,6 +3181,30 @@ class Wide(unittest.TestCase):
             self.assertEqual(document, {**pair, "name": document["name"],
                                         "network": {**pair["network"], "load_balancing": balancing}}, r["key"])
 
+    def test_seeds_2m(self):
+        # Seeds 304-315 of a2a_wide128_spread2m_4k's two arms, and of
+        # a2a_wide128_4k's rx arm, on 2 MiB multi_loss1e3, each with its
+        # healthy pair: each run's profile is its parent stage's run of its
+        # arm and condition but for its name (the multi-fault draw takes its
+        # own seed, not the run's), and each stage builds at its parent's
+        # commit, whose seeds 301-303 its runs pool with.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        for stage, parent, arms in (("a2a_wide128_spread2m_seeds_4k", "a2a_wide128_spread2m_4k",
+                                     ("reps_hold_auto_tail4_cover_spread64",
+                                      "reps_hold_auto_tail4_cover_rx_slots8_spread64")),
+                                    ("a2a_wide128_seeds2m_4k", "a2a_wide128_4k", ("reps_hold_auto_tail4_cover_rx",))):
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(sorted((r["arm"], r["group"], r["size"], r["condition"], r["seed"]) for r in runs),
+                             sorted((arm, "ep64", "2m", condition, seed) for arm in arms
+                                    for condition in ("multi_loss1e3", "healthy") for seed in range(304, 316)))
+            parents = {(r["arm"], r["group"], r["size"], r["condition"]): profiles.a2a_stage_profile(r, committed)
+                       for r in profiles.a2a_stage_runs(parent, committed, self.tuning) if r["seed"] == 301}
+            for r in runs:
+                document = profiles.a2a_stage_profile(r, committed)
+                pair = parents[(r["arm"], r["group"], r["size"], r["condition"])]
+                self.assertEqual({**document, "name": pair["name"]}, pair, r["key"])
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[parent])
+
     def test_spread(self):
         # Seeds 301-312 of S and rx with 8 slots, each with a sentinel
         # spread of 64, on 256 KiB loss1e2_down and the sparse draw with
@@ -3284,7 +3340,10 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_mrc_4k": set(profiles.A2A_WIDE_MRC_ARMS),
                  "a2a_wide32_fair_4k": set(profiles.A2A_WIDE_PSN_HOLD_ARMS),
                  **{stage: set(profiles.A2A_WIDE_MRC_ARMS) for stage in profiles.A2A_MATRIX_STAGES},
-                 "a2a_wide256_down16_4k": set(profiles.A2A_DOWNLINKS_ARMS[:2])}
+                 "a2a_wide256_down16_4k": set(profiles.A2A_DOWNLINKS_ARMS[:2]),
+                 "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
+                 "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
+                 **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
