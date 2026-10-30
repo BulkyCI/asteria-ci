@@ -84,6 +84,8 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # REPS's arms on the down16 cell: 4 arms, 12 seeds, on
                  # down16_loss1e2 and healthy.
                  "a2a_wide256_down16_reps_4k": 96,
+                 # The answer-order test: 2 arms, 3 seeds, healthy only.
+                 "a2a_wide256_answer_order_4k": 6,
                  # More seeds at 128 spines: 12 seeds of 2 arms, and of 1, on
                  # 2 MiB multi_loss1e3 and healthy.
                  "a2a_wide128_spread2m_seeds_4k": 48, "a2a_wide128_seeds2m_4k": 24,
@@ -3073,6 +3075,35 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_4k"])
 
+    def test_answer_order(self):
+        # The matrix's sender-only MRC arm, healthy only, 10 iterations: the
+        # sprayed arm's runs are the matrix's healthy runs but for their
+        # names and iteration count; the data_spine twin differs from them
+        # in ack_route only.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        (base, _), (twin, of) = profiles.A2A_ANSWER_ORDER_ARMS.items()
+        self.assertEqual(base, "mrc_hold_auto_tail4_cover_spread64_od_rackdefer")
+        self.assertEqual((twin, of), ("mrc_hold_auto_tail4_cover_spread64_ackdata_od_rackdefer", base))
+        matrix = {r["seed"]: profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide256_matrix_4k", committed, self.tuning)
+                  if r["arm"] == base and r["condition"] == "healthy"}
+        runs = profiles.a2a_stage_runs("a2a_wide256_answer_order_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 6)
+        self.assertEqual({r["condition"] for r in runs}, {"healthy"})
+        self.assertEqual({r["seed"] for r in runs}, {307, 308, 309})
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            source = matrix[r["seed"]]
+            self.assertEqual(document["workload"]["iterations"], 10)
+            expected = {**source, "name": document["name"], "steps": 10,
+                        "workload": {**source["workload"], "iterations": 10}}
+            if r["arm"] == twin:
+                expected["network"] = {**source["network"], "load_balancing": {
+                    **source["network"]["load_balancing"], "ack_route": "data_spine"}}
+            self.assertEqual(document, expected, r["key"])
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_answer_order_4k"],
+                         profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_matrix_4k"])
+
     def test_long(self):
         # The matrix's sender-only and receiver MRC arms on 256 KiB
         # loss1e2_down, seeds 307-312, at 128 and 256 spines, at 160
@@ -3421,6 +3452,7 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_down16_4k": set(profiles.A2A_DOWNLINKS_ARMS[:2]),
                  "a2a_wide256_down16_hs_4k": set(profiles.A2A_DOWNLINKS_HS_ARMS),
                  "a2a_wide256_down16_reps_4k": set(profiles.A2A_DOWNLINKS_REPS_ARMS[1:]),
+                 "a2a_wide256_answer_order_4k": set(profiles.A2A_ANSWER_ORDER_ARMS),
                  "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
                  **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES}}
