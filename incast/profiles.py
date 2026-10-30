@@ -1722,8 +1722,9 @@ A2A_DOWNLINKS_STAGES = {"a2a_wide256_down16_4k": 256}
 # The many-downlink cell's receiver arm with a held-spine sentinel every
 # A2A_DOWNLINKS_HS_INTERVAL_NS in place of A2A_SENTINEL_INTERVAL_NS, which
 # sets the copies sent on the spines the receivers hold as well as the
-# sender's own; on the cell's seeds, at the matrix's build. A healthy run
-# holds nothing and sends no sentinel, so the matrix's healthy runs pair it.
+# sender's own; on the cell's seeds, at the matrix's build. Job hosts hold
+# nothing in a healthy run, but background senders can, and their sentinels
+# follow this interval, so a healthy run here differs from the matrix's.
 A2A_DOWNLINKS_HS_INTERVAL_NS = 4_000_000  # 4 ms
 A2A_DOWNLINKS_HS_ARMS = {A2A_DOWNLINKS_ARMS[1].replace("_od_rackdefer", "_hs4ms_od_rackdefer", 1): A2A_DOWNLINKS_ARMS[1]}
 A2A_TRANSPORT_ARMS.update({arm: "mrc_hold_auto" for arm in A2A_DOWNLINKS_HS_ARMS})
