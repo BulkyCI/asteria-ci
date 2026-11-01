@@ -1536,6 +1536,11 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   healthy pair, at the matrix's commit: reps_spine's runs are the down16
 #   stage's but for their names, and the hold arms' are a2a_wide256_rack_4k's
 #   settings on the down16 cell.
+# - a2a_wide256_down16_reps_loss_4k (A2A_DOWNLINKS_REPS_LOSS_STAGES): reps_spine
+#   and the receiver arm at a 4 ms sentinel interval
+#   (A2A_DOWNLINKS_REPS_LOSS_ARMS) on the down16 cell, on 12 further seeds:
+#   each run's profile is a2a_wide256_down16_reps_4k's run of its arm but for
+#   its name.
 # - a2a_wide256_answer_order_4k (A2A_ANSWER_ORDER_STAGES): the matrix's
 #   sender-only MRC arm with sprayed answers and with ack_route data_spine
 #   (A2A_ANSWER_ORDER_ARMS), healthy only, 10 iterations, 3 seeds, at the
@@ -1749,6 +1754,12 @@ A2A_DOWNLINKS_REPS_ARMS = ("reps_spine_od_rackdefer", *A2A_WIDE_RACK_ARMS[1:3],
 A2A_TRANSPORT_ARMS.update({A2A_DOWNLINKS_REPS_ARMS[3]: "reps_hold_auto"})
 A2A_DOWNLINKS_REPS_SEEDS = tuple(range(307, 319))
 A2A_DOWNLINKS_REPS_STAGES = {"a2a_wide256_down16_reps_4k": 256}
+# reps_spine and the receiver arm at A2A_DOWNLINKS_HS_INTERVAL_NS from
+# A2A_DOWNLINKS_REPS_ARMS on A2A_DOWNLINKS_REPS_LOSS_SEEDS, at the matrix's
+# build.
+A2A_DOWNLINKS_REPS_LOSS_ARMS = (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[3])
+A2A_DOWNLINKS_REPS_LOSS_SEEDS = tuple(range(319, 331))
+A2A_DOWNLINKS_REPS_LOSS_STAGES = {"a2a_wide256_down16_reps_loss_4k": 256}
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed
 # as the matrix sends them and with ack_route data_spine, each answer on its
 # data packet's spine; A2A_ANSWER_ORDER_ITERATIONS iterations on
@@ -1800,7 +1811,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_MRC_STAGES, A2A_WIDE_THEMIS2_STAGES, A2A_WIDE_FAIR_STAGES,
                                          A2A_MATRIX_STAGES, A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES, A2A_DOWNLINKS_HS_STAGES,
-                                         A2A_DOWNLINKS_REPS_STAGES, A2A_ANSWER_ORDER_STAGES)
+                                         A2A_DOWNLINKS_REPS_STAGES, A2A_DOWNLINKS_REPS_LOSS_STAGES,
+                                         A2A_ANSWER_ORDER_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1834,7 +1846,7 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
     **{stage: "d68572320c38133238019796d6c675d0022532d0"
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
-                     *A2A_DOWNLINKS_REPS_STAGES, *A2A_ANSWER_ORDER_STAGES)},
+                     *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES)},
 }
 
 
@@ -2530,6 +2542,8 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{down_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_ARMS) for down_stage in A2A_DOWNLINKS_STAGES},
         **{hs_stage: (A2A_DOWNLINKS_CELLS, tuple(A2A_DOWNLINKS_HS_ARMS)) for hs_stage in A2A_DOWNLINKS_HS_STAGES},
         **{reps_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_REPS_ARMS) for reps_stage in A2A_DOWNLINKS_REPS_STAGES},
+        **{loss_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_REPS_LOSS_ARMS)
+           for loss_stage in A2A_DOWNLINKS_REPS_LOSS_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
         **{spread_seeds_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SPREAD_ARMS)
@@ -2721,7 +2735,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
                                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
-                                                         A2A_ANSWER_ORDER_STAGES))
+                                                         A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2758,6 +2772,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           if arm in arms} if stage in A2A_DOWNLINKS_STAGES or stage in A2A_WIDE_LONG_STAGES
                     else a2a_downlinks_hs_settings(tuning) if stage in A2A_DOWNLINKS_HS_STAGES
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
+                    else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
+                          if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
@@ -2778,6 +2794,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES
+                 else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                  else A2A_ANSWER_ORDER_SEEDS if stage in A2A_ANSWER_ORDER_STAGES
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
                  else A2A_WIDE_SEEDS_2M_SEEDS

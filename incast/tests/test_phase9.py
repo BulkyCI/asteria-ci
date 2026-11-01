@@ -84,6 +84,9 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # REPS's arms on the down16 cell: 4 arms, 12 seeds, on
                  # down16_loss1e2 and healthy.
                  "a2a_wide256_down16_reps_4k": 96,
+                 # reps_spine and the 4 ms receiver arm on the down16 cell: 2
+                 # arms, 12 further seeds, on down16_loss1e2 and healthy.
+                 "a2a_wide256_down16_reps_loss_4k": 48,
                  # The answer-order test: 2 arms, 3 seeds, healthy only.
                  "a2a_wide256_answer_order_4k": 6,
                  # More seeds at 128 spines: 12 seeds of 2 arms, and of 1, on
@@ -3075,6 +3078,34 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_4k"])
 
+    def test_downlinks_reps_loss(self):
+        # reps_spine and the 4 ms receiver arm on the down16 cell, 12 further
+        # seeds: each run's profile is the REPS stage's run of its arm and
+        # condition but for its name, which carries the stage and the seed.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        stage = "a2a_wide256_down16_reps_loss_4k"
+        reps, _, _, slow = profiles.A2A_DOWNLINKS_REPS_ARMS
+        self.assertEqual(profiles.A2A_DOWNLINKS_REPS_LOSS_ARMS, (reps, slow))
+        runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+        self.assertEqual(len(runs), 48)
+        self.assertEqual({r["seed"] for r in runs}, set(range(319, 331)))
+        self.assertEqual({r["condition"] for r in runs}, {"down16_loss1e2", "healthy"})
+        self.assertFalse({r["seed"] for r in runs} & set(profiles.A2A_DOWNLINKS_REPS_SEEDS))
+        source = {(r["arm"], r["condition"]): profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide256_down16_reps_4k", committed, self.tuning)
+                  if r["seed"] == 307}
+
+        def unnamed(document):
+            return {key: value for key, value in document.items() if key != "name"}
+
+        for run in runs:
+            document = profiles.a2a_stage_profile(run, committed)
+            self.assertEqual(document["name"],
+                             f"{stage}-ep64-256k-{run['condition']}-{run['arm']}-s{run['seed']}")
+            self.assertEqual(unnamed(document), unnamed(source[(run["arm"], run["condition"])]), document["name"])
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
+                         profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"])
+
     def test_answer_order(self):
         # The matrix's sender-only MRC arm, healthy only, 10 iterations: the
         # sprayed arm's runs are the matrix's healthy runs but for their
@@ -3452,6 +3483,7 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_down16_4k": set(profiles.A2A_DOWNLINKS_ARMS[:2]),
                  "a2a_wide256_down16_hs_4k": set(profiles.A2A_DOWNLINKS_HS_ARMS),
                  "a2a_wide256_down16_reps_4k": set(profiles.A2A_DOWNLINKS_REPS_ARMS[1:]),
+                 "a2a_wide256_down16_reps_loss_4k": set(profiles.A2A_DOWNLINKS_REPS_LOSS_ARMS[1:]),
                  "a2a_wide256_answer_order_4k": set(profiles.A2A_ANSWER_ORDER_ARMS),
                  "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
