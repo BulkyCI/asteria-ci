@@ -1546,6 +1546,13 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   (A2A_ANSWER_ORDER_ARMS), healthy only, 10 iterations, 3 seeds, at the
 #   matrix's commit: the sprayed arm's runs are the matrix's healthy runs
 #   but for their names and iteration count.
+# - a2a_wide256_path_defer_4k (A2A_PATH_DEFER_STAGES): the answer-order
+#   stage's sprayed arm and its twin with path_defer_loss
+#   (A2A_PATH_DEFER_ARMS), healthy only, on that stage's seeds and iteration
+#   count, at the build that reads path_defer_loss.
+# - a2a_wide256_path_defer_fault_4k (A2A_PATH_DEFER_FAULT_STAGES): the twin
+#   with path_defer_loss on 256 KiB loss1e2_down and healthy, 40 iterations,
+#   on A2A_PATH_DEFER_FAULT_SEEDS, at the same build.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1770,6 +1777,15 @@ A2A_TRANSPORT_ARMS.update({arm: "mrc_hold_auto" for arm in A2A_ANSWER_ORDER_ARMS
 A2A_ANSWER_ORDER_ITERATIONS = 10
 A2A_ANSWER_ORDER_SEEDS = (307, 308, 309)
 A2A_ANSWER_ORDER_STAGES = {"a2a_wide256_answer_order_4k": 256}
+# The matrix's sender-only MRC arm with sprayed answers, and its twin whose
+# per-path loss rule tells the path selector of its declarations after the
+# tail guard (path_defer_loss).
+A2A_PATH_DEFER_ARMS = {arm: base for base in tuple(A2A_WIDE_MRC_ARMS)[:1]
+                       for arm in (base, base.replace("_od_rackdefer", "_pathdefer_od_rackdefer", 1))}
+A2A_TRANSPORT_ARMS.update({arm: "mrc_hold_auto" for arm in A2A_PATH_DEFER_ARMS})
+A2A_PATH_DEFER_STAGES = {"a2a_wide256_path_defer_4k": 256}
+A2A_PATH_DEFER_FAULT_SEEDS = tuple(range(307, 313))
+A2A_PATH_DEFER_FAULT_STAGES = {"a2a_wide256_path_defer_fault_4k": 256}
 A2A_WIDE_SEEDS_2M_CELLS = (("ep64", "2m", "multi_loss1e3"),)
 A2A_WIDE_SEEDS_2M_SEEDS = tuple(range(304, 316))
 A2A_WIDE_SPREAD_2M_SEEDS_STAGES = {"a2a_wide128_spread2m_seeds_4k": 128}
@@ -1812,7 +1828,8 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_MATRIX_STAGES, A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES, A2A_DOWNLINKS_HS_STAGES,
                                          A2A_DOWNLINKS_REPS_STAGES, A2A_DOWNLINKS_REPS_LOSS_STAGES,
-                                         A2A_ANSWER_ORDER_STAGES)
+                                         A2A_ANSWER_ORDER_STAGES, A2A_PATH_DEFER_STAGES,
+                                         A2A_PATH_DEFER_FAULT_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
@@ -1847,6 +1864,8 @@ A2A_STAGE_ASTERIA_REF = {
     **{stage: "d68572320c38133238019796d6c675d0022532d0"
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
                      *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES)},
+    **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
+       for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
 }
 
 
@@ -2444,6 +2463,14 @@ def a2a_answer_order_settings(tuning: dict[str, Any] | None) -> dict[str, dict[s
             for arm, base in A2A_ANSWER_ORDER_ARMS.items()}
 
 
+def a2a_path_defer_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """A2A_PATH_DEFER_ARMS: the matrix arm's setting, and its twin's with
+    path_defer_loss."""
+    matrix = a2a_matrix_settings(tuning)
+    return {arm: matrix[base] if arm == base else {**matrix[base], "path_defer_loss": True}
+            for arm, base in A2A_PATH_DEFER_ARMS.items()}
+
+
 def a2a_wide_mrc_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """a2a_wide256_mrc_4k's arms: each A2A_WIDE_MRC_ARMS arm with its
     a2a_wide256_rack_4k arm's setting."""
@@ -2546,6 +2573,10 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for loss_stage in A2A_DOWNLINKS_REPS_LOSS_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
+        **{defer_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS))
+           for defer_stage in A2A_PATH_DEFER_STAGES},
+        **{fault_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS)[1:])
+           for fault_stage in A2A_PATH_DEFER_FAULT_STAGES},
         **{spread_seeds_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SPREAD_ARMS)
            for spread_seeds_stage in A2A_WIDE_SPREAD_2M_SEEDS_STAGES},
         **{seeds_2m_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SEEDS_2M_ARMS)
@@ -2735,7 +2766,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_STAGES, A2A_WIDE_SPREAD_2M_SEEDS_STAGES,
                                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
-                                                         A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES))
+                                                         A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
+                                                         A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2775,6 +2807,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
                           if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
+                    else {arm: setting for arm, setting in a2a_path_defer_settings(tuning).items()
+                          if arm in arms} if stage in A2A_PATH_DEFER_STAGES or stage in A2A_PATH_DEFER_FAULT_STAGES
                     else {arm: setting for arm, setting in
                           {**a2a_wide_widen_settings(tuning), **a2a_wide_od_settings(tuning)}.items()
                           if arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
@@ -2791,11 +2825,13 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           else {arm: () for arm in A2A_WIDE_UID_ARMS} if stage in A2A_WIDE_UID_STAGES
                           else {A2A_WIDE_RACK_ARMS[0]: ()} if stage in A2A_WIDE_RACK_STAGES
                           else {arm: () for arm in A2A_ANSWER_ORDER_ARMS} if stage in A2A_ANSWER_ORDER_STAGES
+                          else {arm: () for arm in A2A_PATH_DEFER_ARMS} if stage in A2A_PATH_DEFER_STAGES
                           else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES
                  else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
-                 else A2A_ANSWER_ORDER_SEEDS if stage in A2A_ANSWER_ORDER_STAGES
+                 else A2A_ANSWER_ORDER_SEEDS if stage in A2A_ANSWER_ORDER_STAGES or stage in A2A_PATH_DEFER_STAGES
+                 else A2A_PATH_DEFER_FAULT_SEEDS if stage in A2A_PATH_DEFER_FAULT_STAGES
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
                  else A2A_WIDE_SEEDS_2M_SEEDS
                  if stage in A2A_WIDE_SPREAD_2M_SEEDS_STAGES or stage in A2A_WIDE_SEEDS_2M_STAGES
@@ -2815,7 +2851,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  or stage in A2A_WIDE_FAIR_STAGES
                  else A2A_SEEDS["comparison"])
         iterations = (A2A_WIDE_LONG_ITERATIONS if stage in A2A_WIDE_LONG_STAGES
-                      else A2A_ANSWER_ORDER_ITERATIONS if stage in A2A_ANSWER_ORDER_STAGES else None)
+                      else A2A_ANSWER_ORDER_ITERATIONS
+                      if stage in A2A_ANSWER_ORDER_STAGES or stage in A2A_PATH_DEFER_STAGES else None)
         for seed, (arm, setting) in itertools.product(seeds, settings.items()):
             for group, size, condition in a2a_read_cells_4k(stage):
                 if condition != "healthy" and condition not in arm_conditions.get(arm, (condition,)):

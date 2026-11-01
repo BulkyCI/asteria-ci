@@ -89,6 +89,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide256_down16_reps_loss_4k": 48,
                  # The answer-order test: 2 arms, 3 seeds, healthy only.
                  "a2a_wide256_answer_order_4k": 6,
+                 # The per-path loss rule's deferred tell: 2 arms, 3 seeds,
+                 # healthy only; and the deferring arm on loss1e2_down and
+                 # healthy, 6 seeds.
+                 "a2a_wide256_path_defer_4k": 6, "a2a_wide256_path_defer_fault_4k": 12,
                  # More seeds at 128 spines: 12 seeds of 2 arms, and of 1, on
                  # 2 MiB multi_loss1e3 and healthy.
                  "a2a_wide128_spread2m_seeds_4k": 48, "a2a_wide128_seeds2m_4k": 24,
@@ -3135,6 +3139,49 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_answer_order_4k"],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_matrix_4k"])
 
+    def test_path_defer(self):
+        # The answer-order stage's sprayed arm, healthy only, 10 iterations,
+        # at the build that reads path_defer_loss: its runs are the
+        # answer-order stage's but for their names; the twin differs from
+        # them in path_defer_loss only. The fault stage's runs are the
+        # matrix's runs of the sprayed arm with path_defer_loss, on
+        # loss1e2_down and healthy, seeds 307-312.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        (base, _), (twin, of) = profiles.A2A_PATH_DEFER_ARMS.items()
+        self.assertEqual(base, "mrc_hold_auto_tail4_cover_spread64_od_rackdefer")
+        self.assertEqual((twin, of), ("mrc_hold_auto_tail4_cover_spread64_pathdefer_od_rackdefer", base))
+
+        def deferred(document):
+            return {**document, "network": {**document["network"], "load_balancing": {
+                **document["network"]["load_balancing"], "path_defer_loss": True}}}
+
+        order = {r["seed"]: profiles.a2a_stage_profile(r, committed)
+                 for r in profiles.a2a_stage_runs("a2a_wide256_answer_order_4k", committed, self.tuning)
+                 if r["arm"] == base}
+        runs = profiles.a2a_stage_runs("a2a_wide256_path_defer_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 6)
+        self.assertEqual({r["condition"] for r in runs}, {"healthy"})
+        self.assertEqual({r["seed"] for r in runs}, {307, 308, 309})
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            expected = {**order[r["seed"]], "name": document["name"]}
+            self.assertEqual(document, deferred(expected) if r["arm"] == twin else expected, r["key"])
+        matrix = {(r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide256_matrix_4k", committed, self.tuning)
+                  if r["arm"] == base}
+        runs = profiles.a2a_stage_runs("a2a_wide256_path_defer_fault_4k", committed, self.tuning)
+        self.assertEqual(len(runs), 12)
+        self.assertEqual({r["arm"] for r in runs}, {twin})
+        self.assertEqual({r["condition"] for r in runs}, {"loss1e2_down", "healthy"})
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 313)))
+        for r in runs:
+            document = profiles.a2a_stage_profile(r, committed)
+            self.assertEqual(document["workload"]["iterations"], 40)
+            self.assertEqual(document, deferred({**matrix[(r["condition"], r["seed"])], "name": document["name"]}),
+                             r["key"])
+        for stage in ("a2a_wide256_path_defer_4k", "a2a_wide256_path_defer_fault_4k"):
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "3f75a9b20d5a38924ccdeaaa303cb9089923c054")
+
     def test_long(self):
         # The matrix's sender-only and receiver MRC arms on 256 KiB
         # loss1e2_down, seeds 307-312, at 128 and 256 spines, at 160
@@ -3485,6 +3532,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_down16_reps_4k": set(profiles.A2A_DOWNLINKS_REPS_ARMS[1:]),
                  "a2a_wide256_down16_reps_loss_4k": set(profiles.A2A_DOWNLINKS_REPS_LOSS_ARMS[1:]),
                  "a2a_wide256_answer_order_4k": set(profiles.A2A_ANSWER_ORDER_ARMS),
+                 "a2a_wide256_path_defer_4k": set(profiles.A2A_PATH_DEFER_ARMS),
+                 "a2a_wide256_path_defer_fault_4k": set(tuple(profiles.A2A_PATH_DEFER_ARMS)[1:]),
                  "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
                  **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES}}
