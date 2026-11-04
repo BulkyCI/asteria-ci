@@ -1339,8 +1339,12 @@ A2A_SPINES_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {spines: (
 #   buffer_size_mb     network.fabric.buffer_size_mb: 2 MB for each of a
 #                      leaf's 2 P ports, as the 16-port leaf has 32 MB at
 #                      P = 8; the backend gives every switch the one pool
-#   job_hosts          workload.group: the first 8 hosts of every leaf, for
-#                      a run whose group is every host
+#   job_hosts          workload.group: the first job_hosts hosts of every
+#                      leaf (A2A_WIDE_JOB_HOSTS; 64 / L on a leaf-count
+#                      fixture), for a run whose group is every host
+#   leaves             on a leaf-count fixture (A2A_LEAVES_FIXTURE) alone, L
+#                      leaves in place of A2A_WIDE_LEAVES: parallelism.dp
+#                      L P and workload.group's leaves
 #   background         workload.background: leaf_shift at 350 Gb/s
 #                      (A2A_WIDE_BACKGROUND), each other host sending one
 #                      message of a job host's bytes to the other leaves with
@@ -1553,6 +1557,19 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 # - a2a_wide256_path_defer_fault_4k (A2A_PATH_DEFER_FAULT_STAGES): the twin
 #   with path_defer_loss on 256 KiB loss1e2_down and healthy, 40 iterations,
 #   on A2A_PATH_DEFER_FAULT_SEEDS, at the same build.
+# - Per L of A2A_LEAVES, on the leaf-count fixture (A2A_LEAVES_FIXTURE[L]):
+#   64 spines and L leaves of 64 hosts, the EP64 job on the first 64 / L
+#   hosts of each leaf; all at the matrix's build.
+#   - a2a_wide64_leaves<L>_validity_4k (A2A_LEAVES_VALIDITY_STAGES):
+#     a2a_wide<P>_validity_4k's run on 256 KiB alone (A2A_LEAVES_PAIR).
+#   - a2a_wide64_leaves<L>_4k (A2A_LEAVES_STAGES): the matrix's sender-only
+#     and receiver MRC arms, and the receiver arm with
+#     receiver_hold_auto_leaves A2A_LEAVES_RECEIVER_AUTO_LEAVES
+#     (A2A_LEAVES_ARMS), on 256 KiB loss1e2_down (A2A_LEAVES_CELLS), seeds
+#     307-312, with no healthy run: each run's profile is its 8-leaf matrix
+#     twin's at 64 spines (or the receiver arm's twin, with
+#     receiver_hold_auto_leaves) but for its name, parallelism.dp and
+#     workload.group, so it takes the 64-spine loss thresholds.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1795,6 +1812,32 @@ A2A_WIDE_LONG_CELLS = (("ep64", "256k", "loss1e2_down"),)
 A2A_WIDE_LONG_ARMS = tuple(A2A_WIDE_MRC_ARMS)[:2]
 A2A_WIDE_LONG_ITERATIONS = 160
 A2A_WIDE_LONG_STAGES = {f"a2a_wide{wide}_long_4k": wide for wide in (128, 256)}
+A2A_LEAVES_WIDE = 64
+A2A_LEAVES = (16, 32)
+
+
+def a2a_leaves_fixture(leaves: int) -> dict[str, Any]:
+    """A2A_WIDE_FIXTURE at A2A_LEAVES_WIDE on leaves leaves, the EP64 job on
+    an equal share of each leaf's first hosts."""
+    job_hosts, rest = divmod(A2A_RUN_GROUP_SIZES["ep64"], leaves)
+    if rest:
+        raise ValueError(f"EP64 does not split evenly over {leaves} leaves")
+    return {**A2A_WIDE_FIXTURE[A2A_LEAVES_WIDE], "leaves": leaves, "job_hosts": job_hosts}
+
+
+A2A_LEAVES_FIXTURE = {leaves: a2a_leaves_fixture(leaves) for leaves in A2A_LEAVES}
+A2A_LEAVES_PAIR = ("ep64", "256k")
+A2A_LEAVES_CELLS = ((*A2A_LEAVES_PAIR, "loss1e2_down"),)
+# More sender leaves than any leaf-count fixture has, so a receiver holds a
+# spine for each sender leaf apart and never for every one.
+A2A_LEAVES_RECEIVER_AUTO_LEAVES = 64
+A2A_LEAVES_RAUTO_ARM = tuple(A2A_WIDE_MRC_ARMS)[1].replace(
+    "_od_rackdefer", f"_rauto{A2A_LEAVES_RECEIVER_AUTO_LEAVES}_od_rackdefer", 1)
+A2A_TRANSPORT_ARMS[A2A_LEAVES_RAUTO_ARM] = "mrc_hold_auto"
+A2A_LEAVES_ARMS = (*tuple(A2A_WIDE_MRC_ARMS)[:2], A2A_LEAVES_RAUTO_ARM)
+A2A_LEAVES_STAGES = {f"a2a_wide{A2A_LEAVES_WIDE}_leaves{leaves}_4k": leaves for leaves in A2A_LEAVES}
+A2A_LEAVES_VALIDITY_STAGES = {f"a2a_wide{A2A_LEAVES_WIDE}_leaves{leaves}_validity_4k": leaves
+                              for leaves in A2A_LEAVES}
 # The 4096-byte stages: the probes and the (group, size) each runs at its
 # provisional gap, the calibration passes and their pairs, and the faulted
 # stages (a2a_faulted_4k).
@@ -1831,8 +1874,12 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_ANSWER_ORDER_STAGES, A2A_PATH_DEFER_STAGES,
                                          A2A_PATH_DEFER_FAULT_STAGES)
                           for stage, wide in stages.items()})
-A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[wide], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
-                          for stage, wide in A2A_WIDE_VALIDITY_STAGES.items()})
+A2A_STAGE_FIXTURE.update({stage: A2A_LEAVES_FIXTURE[leaves] for stage, leaves in A2A_LEAVES_STAGES.items()})
+# A validity stage's member fixture, by P or by L, with the port counters.
+A2A_STAGE_FIXTURE.update({stage: {**fixtures[member], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
+                          for fixtures, stages in ((A2A_WIDE_FIXTURE, A2A_WIDE_VALIDITY_STAGES),
+                                                   (A2A_LEAVES_FIXTURE, A2A_LEAVES_VALIDITY_STAGES))
+                          for stage, member in stages.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1863,7 +1910,8 @@ A2A_STAGE_ASTERIA_REF = {
     "a2a_wide32_fair_4k": "db37884ce4cf1b6999a95e40eb434988236cdd30",
     **{stage: "d68572320c38133238019796d6c675d0022532d0"
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
-                     *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES)},
+                     *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES,
+                     *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES)},
     **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
 }
@@ -1915,13 +1963,14 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
             network[key] = fixture[key]
     if "port_rate_thresholds" in fixture:
         network["switch"] = {**network["switch"], "port_rate_thresholds": fixture["port_rate_thresholds"]}
+    leaves = fixture.get("leaves", A2A_WIDE_LEAVES)
     if "wide" in fixture:
         network["spine_count"] = network["hosts_per_leaf"] = fixture["wide"]
-        document["parallelism"] = {**document["parallelism"], "dp": A2A_WIDE_LEAVES * fixture["wide"]}
+        document["parallelism"] = {**document["parallelism"], "dp": leaves * fixture["wide"]}
     if "buffer_size_mb" in fixture:
         network["fabric"] = {**network["fabric"], "buffer_size_mb": fixture["buffer_size_mb"]}
     if "job_hosts" in fixture and document["workload"].get("group") == "all":
-        document["workload"]["group"] = {"leaves": list(range(A2A_WIDE_LEAVES)), "hosts": fixture["job_hosts"]}
+        document["workload"]["group"] = {"leaves": list(range(leaves)), "hosts": fixture["job_hosts"]}
     if "background" in fixture and document["workload"].get("kind") == "all_to_all":
         document["workload"]["background"] = dict(fixture["background"])
     if "sparse_hold_trace" in fixture and a2a_traces_spine_loss(network["load_balancing"]):
@@ -2436,6 +2485,16 @@ def a2a_matrix_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, An
             **a2a_wide_mrc_settings(tuning)}
 
 
+def a2a_leaves_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """A2A_LEAVES_ARMS: the sender-only and receiver MRC arms with their
+    matrix settings, and A2A_LEAVES_RAUTO_ARM with the receiver arm's and
+    receiver_hold_auto_leaves A2A_LEAVES_RECEIVER_AUTO_LEAVES."""
+    sender, receiver, rauto = A2A_LEAVES_ARMS
+    matrix = a2a_matrix_settings(tuning)
+    return {sender: matrix[sender], receiver: matrix[receiver],
+            rauto: {**matrix[receiver], "receiver_hold_auto_leaves": A2A_LEAVES_RECEIVER_AUTO_LEAVES}}
+
+
 def a2a_downlinks_hs_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Each A2A_DOWNLINKS_HS_ARMS arm: its matrix arm's setting with
     held_sentinel_interval_ns A2A_DOWNLINKS_HS_INTERVAL_NS."""
@@ -2582,16 +2641,17 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{seeds_2m_stage: (A2A_WIDE_SEEDS_2M_CELLS, A2A_WIDE_SEEDS_2M_ARMS)
            for seeds_2m_stage in A2A_WIDE_SEEDS_2M_STAGES},
         **{long_stage: (A2A_WIDE_LONG_CELLS, A2A_WIDE_LONG_ARMS) for long_stage in A2A_WIDE_LONG_STAGES},
+        **{leaves_stage: (A2A_LEAVES_CELLS, A2A_LEAVES_ARMS) for leaves_stage in A2A_LEAVES_STAGES},
     }[stage]
 
 
 def a2a_read_cells_4k(stage: str) -> tuple[tuple[str, str, str], ...]:
     """The (group, size, condition) cells a 4096-byte stage other than a
     probe or a calibration pass reads: its faulted cells, then their
-    healthy pairs (condition healthy), but for a long stage
-    (A2A_WIDE_LONG_STAGES), which lists no healthy run."""
+    healthy pairs (condition healthy), but for a long or a leaf-count stage
+    (A2A_WIDE_LONG_STAGES, A2A_LEAVES_STAGES), which lists no healthy run."""
     cells, _ = a2a_faulted_4k(stage)
-    if stage in A2A_WIDE_LONG_STAGES:
+    if stage in A2A_WIDE_LONG_STAGES or stage in A2A_LEAVES_STAGES:
         return cells
     return cells + tuple(dict.fromkeys((group, size, "healthy") for group, size, _ in cells))
 
@@ -2731,10 +2791,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                 add(arm, group, size, condition, seed, setting)
             for group, size in A2A_CELLS:
                 add(arm, group, size, "healthy", seed, setting)
-    elif stage in A2A_WIDE_VALIDITY_STAGES:
-        require_measured(A2A_WIDE_PAIRS)
+    elif stage in A2A_WIDE_VALIDITY_STAGES or stage in A2A_LEAVES_VALIDITY_STAGES:
+        pairs = A2A_WIDE_PAIRS if stage in A2A_WIDE_VALIDITY_STAGES else (A2A_LEAVES_PAIR,)
+        require_measured(pairs)
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
-        for group, size in A2A_WIDE_PAIRS:
+        for group, size in pairs:
             add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
                 iterations=A2A_WIDE_VALIDITY_ITERATIONS)
     elif stage in A2A_PROBE_STAGES:
@@ -2767,7 +2828,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
                                                          A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
-                                                         A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES))
+                                                         A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES,
+                                                         A2A_LEAVES_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2802,6 +2864,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_matrix_settings(tuning) if stage in A2A_MATRIX_STAGES
                     else {arm: setting for arm, setting in a2a_matrix_settings(tuning).items()
                           if arm in arms} if stage in A2A_DOWNLINKS_STAGES or stage in A2A_WIDE_LONG_STAGES
+                    else a2a_leaves_settings(tuning) if stage in A2A_LEAVES_STAGES
                     else a2a_downlinks_hs_settings(tuning) if stage in A2A_DOWNLINKS_HS_STAGES
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
@@ -2843,7 +2906,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  or stage in A2A_WIDE_RACK_STAGES or stage in A2A_WIDE_MRC_STAGES
                  or stage in A2A_WIDE_THEMIS256_STAGES or stage in A2A_MATRIX_STAGES
                  or stage in A2A_DOWNLINKS_STAGES or stage in A2A_WIDE_LONG_STAGES
-                 or stage in A2A_DOWNLINKS_HS_STAGES
+                 or stage in A2A_DOWNLINKS_HS_STAGES or stage in A2A_LEAVES_STAGES
                  else A2A_WIDE_UID_SEEDS if stage in A2A_WIDE_UID_STAGES
                  else A2A_WIDE_RACK_PILOT_SEEDS
                  if stage in A2A_WIDE_RACK_PILOT_STAGES or stage in A2A_WIDE_RACK2_STAGES

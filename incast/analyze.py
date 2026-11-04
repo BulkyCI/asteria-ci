@@ -185,9 +185,10 @@ each cell the seed-rule verdict on cost of each overdue arm
 (A2A_OVERDUE_ARMS, <arm>_od) against its key-off arm.
 
 a2a_wide_validity reads a wide-leaf member's validity stage (--stage,
-a2a_wide32_validity_4k by default) and gives each healthy run its
-collective spans against a2a_probe_4k's median iteration at P = 8 on the
-pair (A2A_WIDE_REFERENCE_NS) and the deviations; its trimmed data packets
+a2a_wide32_validity_4k by default) and gives each healthy run its leaf
+count (hosts over hosts per leaf); its collective spans against
+a2a_probe_4k's median iteration at P = 8 on the pair
+(A2A_WIDE_REFERENCE_NS) and the deviations; its trimmed data packets
 (the trim_ events of the data plane) over the data packets its flows sent
 (flow_events.csv data_attempted_bytes over the payload); the mean load of
 the leaves' uplinks to the spines (bytes sent over 400 Gb/s, between the
@@ -1960,7 +1961,7 @@ def a2a_wide_validity(runs_files, out_root: Path, stage: str) -> list[dict]:
         trimmed = trims / packets if packets else None
         out.append({
             "key": run["key"], "group": run["group"], "size": run["size"],
-            "wide": (run.get("fixture") or {}).get("wide"),
+            "wide": (run.get("fixture") or {}).get("wide"), "leaves": leaves,
             "iterations": run["iterations"], "iterations_completed": timing.get("iterations_completed"),
             "spans_ns": spans, "reference_ns": reference, "span_deviations": deviations,
             "data_packets": packets, "trimmed_packets": trims, "trimmed_fraction": trimmed,
@@ -1976,8 +1977,8 @@ def wide_validity_markdown(rows: list[dict]) -> str:
     def percent(values) -> str:
         return "-" if values is None else ", ".join("-" if v is None else f"{v * 100:.1f}%" for v in values)
 
-    lines = ["| P | group | size | iterations | spans us (vs P = 8) | trimmed | uplink load, communication | "
-             "uplink load, gap | deepest queue B (kind) | refused | admitted |", "|---" * 11 + "|"]
+    lines = ["| P | leaves | group | size | iterations | spans us (vs P = 8) | trimmed | uplink load, communication | "
+             "uplink load, gap | deepest queue B (kind) | refused | admitted |", "|---" * 12 + "|"]
     for row in rows:
         queues = row["queues"] or {}
         deepest = max(queues.items(), key=lambda item: item[1]["max_bytes"], default=None)
@@ -1985,7 +1986,8 @@ def wide_validity_markdown(rows: list[dict]) -> str:
         spans = ", ".join(f"{s / 1000:,.1f} ({d * 100:+.2f}%)" for s, d in zip(row["spans_ns"], row["span_deviations"]))
         queue = "-" if deepest is None else f"{deepest[1]['max_bytes']:,} ({deepest[0]})"
         lines.append(
-            f"| {row['wide']} | {row['group']} | {row['size']} | {row['iterations_completed']} of {row['iterations']} "
+            f"| {row['wide']} | {row['leaves']} | {row['group']} | {row['size']} "
+            f"| {row['iterations_completed']} of {row['iterations']} "
             f"| {spans or '-'} | {row['trimmed_packets']:,} of {row['data_packets']:,} "
             f"| {percent(row['uplink_load_communication'])} | {percent(row['uplink_load_gap'])} "
             f"| {queue} | {'-' if refused is None else refused} | {'yes' if row['admitted'] else 'no'} |")

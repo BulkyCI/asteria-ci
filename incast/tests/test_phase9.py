@@ -98,6 +98,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide128_spread2m_seeds_4k": 48, "a2a_wide128_seeds2m_4k": 24,
                  # The long runs: 6 seeds of 2 arms on 256 KiB loss1e2_down.
                  **{f"a2a_wide{wide}_long_4k": 12 for wide in (128, 256)},
+                 # The leaf-count stages at 64 spines: 6 seeds of 3 arms on
+                 # 256 KiB loss1e2_down, and the validity run on 256 KiB.
+                 **{f"a2a_wide64_leaves{leaves}_4k": 18 for leaves in (16, 32)},
+                 **{f"a2a_wide64_leaves{leaves}_validity_4k": 1 for leaves in (16, 32)},
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2405,6 +2409,15 @@ class Wide(unittest.TestCase):
                               "background": {"pattern": "leaf_shift", "rate": "350Gbps"},
                               "sparse_hold_trace": True})
         self.assertNotIn("a2a_wide8_validity_4k", profiles.A2A_STAGES)
+        # The 8-leaf fixtures name no leaf count; a leaf-count fixture is the
+        # 64-spine one on L leaves with the EP64 job split evenly over them.
+        for wide in profiles.A2A_WIDE:
+            self.assertNotIn("leaves", profiles.A2A_WIDE_FIXTURE[wide])
+        for leaves in (16, 32):
+            self.assertEqual(profiles.A2A_LEAVES_FIXTURE[leaves],
+                             {**profiles.A2A_WIDE_FIXTURE[64], "leaves": leaves, "job_hosts": 64 // leaves})
+        with self.assertRaisesRegex(ValueError, "24 leaves"):
+            profiles.a2a_leaves_fixture(24)
 
     @measured_4k()
     def test_eight_is_the_settled_fixture(self):
@@ -2484,6 +2497,45 @@ class Wide(unittest.TestCase):
             network = profiles.a2a_stage_profile(runs[1], None)["network"]
             self.assertEqual((network["spine_count"], network["port_counter_interval_ns"]), (wide, 50_000))
             self.assertNotIn("sparse_hold_trace", network)
+        # A leaf-count member's validity run is the 64-spine member's on
+        # 256 KiB but for its name, parallelism.dp and workload.group, at the
+        # matrix's commit.
+        wide64 = profiles.a2a_stage_profile(profiles.a2a_stage_runs("a2a_wide64_validity_4k", None, self.tuning)[0],
+                                            None)
+        self.assertEqual(wide64["workload"]["message_bytes"], 256 * 1024)
+        for stage, leaves in profiles.A2A_LEAVES_VALIDITY_STAGES.items():
+            (run,) = profiles.a2a_stage_runs(stage, None, self.tuning)
+            self.assertEqual((run["size"], run["arm"], run["condition"], run["seed"], run["iterations"],
+                              run["compute_ns"]), ("256k", "uniform_tail", "healthy", 301, 2, 236_000))
+            document = profiles.a2a_stage_profile(run, None)
+            group = {"leaves": list(range(leaves)), "hosts": 64 // leaves}
+            self.assertEqual(document, {**wide64, "name": document["name"],
+                                        "parallelism": {**wide64["parallelism"], "dp": 64 * leaves},
+                                        "workload": {**wide64["workload"], "group": group}}, stage)
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
+                             profiles.A2A_STAGE_ASTERIA_REF["a2a_wide64_matrix_4k"])
+
+    def test_validity_table_names_the_leaf_count(self):
+        # From the run's manifest: 1,024 hosts of 64 to a leaf are 16 leaves,
+        # which set a leaf-count member's row apart from the 8-leaf one's.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stage, key = "a2a_wide64_leaves16_validity_4k", "a2a_wide64_leaves16_validity_4k-run"
+            listing = root / "runs.json"
+            listing.write_text(json.dumps([{"key": key, "stage": stage, "group": "ep64", "size": "256k",
+                                            "iterations": 2, "fixture": {"payload_bytes": 4096, "wide": 64}}]))
+            run = root / key
+            (run / "telemetry").mkdir(parents=True)
+            (run / "summary.json").write_text(json.dumps({"all_to_all": {
+                "iteration_completion_ns": {"1": 353_400, "2": 353_500},
+                "iteration_start_ns": {"1": 0, "2": 600_000}, "complete": True, "iterations_completed": 2}}))
+            (run / "telemetry" / "flow_events.csv").write_text("data_attempted_bytes\n4096000\n")
+            (run / "manifest.json").write_text(json.dumps({"ranks": 1024, "physical_topology": {
+                "hosts_per_leaf": 64, "spine_count": 64}}))
+            (row,) = analyze.a2a_wide_validity(listing, root, stage)
+            self.assertEqual((row["wide"], row["leaves"], row["data_packets"], row["admitted"]), (64, 16, 1000, True))
+            self.assertTrue(analyze.wide_validity_markdown([row]).splitlines()[2].startswith(
+                "| 64 | 16 | ep64 | 256k | 2 of 2 |"))
 
     @measured_4k()
     def test_arms(self):
@@ -3209,6 +3261,60 @@ class Wide(unittest.TestCase):
                 self.assertEqual(document["network"]["link_failures"][0]["start_ns"], profiles.DEGRADE_AT_NS)
             self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[matrix_stage])
 
+    def test_leaves(self):
+        # 64 spines and 16 or 32 leaves of 64 hosts, the EP64 job on the first
+        # 4 or 2 hosts of each: the matrix's sender-only and receiver MRC arms
+        # and the receiver arm with receiver_hold_auto_leaves 64, on 256 KiB
+        # loss1e2_down, seeds 307-312, with no healthy run. Each run's profile
+        # is its 64-spine matrix twin's (the receiver arm's, with
+        # receiver_hold_auto_leaves 64, for the third arm) but for its name,
+        # parallelism.dp and workload.group, so its loss thresholds are the
+        # w64 cell's and its onset is the twin's. Each stage builds at the
+        # matrix's commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        sender = "mrc_hold_auto_tail4_cover_spread64_od_rackdefer"
+        receiver = "mrc_hold_auto_tail4_cover_rx_slots8_spread64_widen2_od_rackdefer"
+        rauto = "mrc_hold_auto_tail4_cover_rx_slots8_spread64_widen2_rauto64_od_rackdefer"
+        self.assertEqual(profiles.A2A_LEAVES_ARMS, (sender, receiver, rauto))
+
+        def no_widening(document):
+            return {**document, "network": {**document["network"], "load_balancing": {
+                **document["network"]["load_balancing"], "receiver_hold_auto_leaves": 64}}}
+
+        matrix = {(r["arm"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide64_matrix_4k", committed, self.tuning)
+                  if r["condition"] == "loss1e2_down"}
+        thresholds = committed["per_receiver"]["ep64-256k-p4096-w64"]["loss_thresholds"]
+        for stage, leaves in profiles.A2A_LEAVES_STAGES.items():
+            self.assertEqual(stage, f"a2a_wide64_leaves{leaves}_4k")
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(sorted((r["arm"], r["group"], r["size"], r["condition"], r["seed"]) for r in runs),
+                             sorted((arm, "ep64", "256k", "loss1e2_down", seed)
+                                    for arm in (sender, receiver, rauto) for seed in range(307, 313)))
+            documents = {}
+            for r in runs:
+                document = documents[(r["arm"], r["seed"])] = profiles.a2a_stage_profile(r, committed)
+                twin = matrix[(receiver if r["arm"] == rauto else r["arm"], r["seed"])]
+                if r["arm"] == rauto:
+                    twin = no_widening(twin)
+                self.assertEqual(document, {**twin, "name": document["name"],
+                                            "parallelism": {**twin["parallelism"], "dp": 64 * leaves},
+                                            "workload": {**twin["workload"], "group": {
+                                                "leaves": list(range(leaves)), "hosts": 64 // leaves}}}, r["key"])
+                balancing = document["network"]["load_balancing"]
+                self.assertEqual(balancing["loss_thresholds"], thresholds[str(balancing["loss_interval_ns"])])
+                self.assertEqual(document["network"]["link_failures"][0]["start_ns"], profiles.DEGRADE_AT_NS)
+                self.assertEqual(document["workload"]["iterations"], 40)
+            # The no-widening arm is the receiver arm but for its name and
+            # receiver_hold_auto_leaves 64.
+            for seed in range(307, 313):
+                widened = documents[(receiver, seed)]
+                self.assertNotIn("receiver_hold_auto_leaves", widened["network"]["load_balancing"])
+                self.assertEqual(documents[(rauto, seed)],
+                                 no_widening({**widened, "name": documents[(rauto, seed)]["name"]}))
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
+                             profiles.A2A_STAGE_ASTERIA_REF["a2a_wide64_matrix_4k"])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3536,7 +3642,8 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_path_defer_fault_4k": set(tuple(profiles.A2A_PATH_DEFER_ARMS)[1:]),
                  "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
-                 **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES}}
+                 **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES},
+                 **{stage: set(profiles.A2A_LEAVES_ARMS) for stage in profiles.A2A_LEAVES_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
