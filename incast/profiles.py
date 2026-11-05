@@ -1594,6 +1594,13 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #     their a2a_wide256_down16_reps_4k settings, at the default timeout:
 #     each run's profile is that stage's run (on loss1e2_down, the matrix's
 #     for reps_spine) but for its name.
+# - a2a_wide256_event_4k (A2A_EVENT_STAGES): the correlated-fault conditions
+#   (A2A_EVENT_CONDITIONS) on EP64 256 KiB with their healthy pair, seeds
+#   307-318 (A2A_EVENT_SEEDS), with reps_spine and the sender-only and
+#   receiver REPS hold arms (A2A_EVENT_ARMS) at their
+#   a2a_wide256_down16_reps_4k settings, at the matrix's build: each run's
+#   profile is that stage's run of its arm and seed but for its name and its
+#   link failures, and each healthy run's is that stage's but for its name.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1826,6 +1833,29 @@ A2A_REPAIR_FAST_STAGES = {"a2a_wide256_repair_fast_4k": A2A_REPAIR_WIDE}
 A2A_REPAIR_STAGES = {**{stage: A2A_REPAIR_WIDE for stage in A2A_REPAIR_TIMER_NS}, **A2A_REPAIR_FAST_STAGES}
 A2A_REPAIR_CELLS = (*A2A_DOWNLINKS_CELLS, ("ep64", "256k", "loss1e2_down"))
 A2A_REPAIR_SEEDS = tuple(range(307, 319))
+# The correlated-fault conditions. A leaf event, leaf<direction><k>_<loss
+# kind>: the kind's loss from the onset on k links of one leaf in one
+# direction, as one component the links share (a breakout cable, 4; a switch
+# transceiver, 8) would cause: the downlinks into leaf 1 from, or the
+# uplinks of leaf 0 to, the first k spines of A2A_EVENT_SPINES. A spine
+# event, spinedown_<loss kind>: the kind's loss on every downlink of
+# A2A_SPINE, so whatever crosses that spine toward any leaf is lost at the
+# kind's rate once, as a fault inside the spine would lose it. The event
+# spines are distinct, below 32 and begin at A2A_SPINE, so each event holds
+# the single-link cells' link of its direction.
+A2A_EVENT_SPINES = tuple((A2A_SPINE + 13 * i) % 32 for i in range(8))
+A2A_LEAF_EVENTS = {f"leaf{direction}{count}": (direction, count) for direction in ("down", "up") for count in (4, 8)}
+A2A_SPINE_EVENT = "spinedown"
+A2A_EVENT_CONDITIONS = tuple(f"{event}_loss1e2" for event in (*A2A_LEAF_EVENTS, A2A_SPINE_EVENT))
+# The correlated-fault stage at 256 spines: reps_spine and the sender-only
+# and receiver REPS hold arms of A2A_DOWNLINKS_REPS_ARMS with their
+# a2a_downlinks_reps_settings, on the event conditions at EP64 256 KiB and
+# healthy, seeds 307-318, at the matrix's build. Its healthy runs are
+# a2a_wide256_down16_reps_4k's but for their names.
+A2A_EVENT_CELLS = tuple(("ep64", "256k", condition) for condition in A2A_EVENT_CONDITIONS)
+A2A_EVENT_ARMS = A2A_DOWNLINKS_REPS_ARMS[:3]
+A2A_EVENT_SEEDS = tuple(range(307, 319))
+A2A_EVENT_STAGES = {"a2a_wide256_event_4k": 256}
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed
 # as the matrix sends them and with ack_route data_spine, each answer on its
 # data packet's spine; A2A_ANSWER_ORDER_ITERATIONS iterations on
@@ -1914,7 +1944,7 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES, A2A_DOWNLINKS_HS_STAGES,
                                          A2A_DOWNLINKS_REPS_STAGES, A2A_DOWNLINKS_REPS_LOSS_STAGES,
                                          A2A_ANSWER_ORDER_STAGES, A2A_PATH_DEFER_STAGES,
-                                         A2A_PATH_DEFER_FAULT_STAGES, A2A_REPAIR_FAST_STAGES)
+                                         A2A_PATH_DEFER_FAULT_STAGES, A2A_REPAIR_FAST_STAGES, A2A_EVENT_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: A2A_LEAVES_FIXTURE[leaves] for stage, leaves in A2A_LEAVES_STAGES.items()})
 A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[A2A_REPAIR_WIDE], "retransmission_timeout_ns": timeout}
@@ -1955,7 +1985,8 @@ A2A_STAGE_ASTERIA_REF = {
     **{stage: "d68572320c38133238019796d6c675d0022532d0"
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
                      *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES,
-                     *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES, *A2A_REPAIR_STAGES)},
+                     *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES, *A2A_REPAIR_STAGES,
+                     *A2A_EVENT_STAGES)},
     **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
 }
@@ -2076,6 +2107,8 @@ def a2a_fault(condition: str) -> list[dict[str, Any]]:
         return a2a_multi_fault(condition)
     if condition.startswith(A2A_DOWNLINKS_PREFIX + "_"):
         return a2a_downlinks_fault(condition)
+    if condition.partition("_")[0] in (*A2A_LEAF_EVENTS, A2A_SPINE_EVENT):
+        return a2a_event_fault(condition)
     onset = {"start_ns": DEGRADE_AT_NS, "spine": A2A_SPINE}
     if condition == "structural":
         return [{"model": "gray", "rate": "200Gbps", "start_ns": 0, "spine": A2A_SPINE}]
@@ -2126,6 +2159,23 @@ def a2a_downlinks_fault(condition: str) -> list[dict[str, Any]]:
         raise ValueError(f"unknown condition {condition}")
     return [{"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS,
              "spine": spine, "leaf": leaf, "direction": "down"} for leaf, spine in A2A_DOWNLINKS]
+
+
+def a2a_event_fault(condition: str) -> list[dict[str, Any]]:
+    """The link_failures of a leaf event, leaf<direction><k>_<loss kind>: a
+    gray loss at the kind's rate from the onset on the downlinks into leaf 1
+    from, or the uplinks of leaf 0 to, the first k of A2A_EVENT_SPINES; or of
+    the spine event, spinedown_<loss kind>: the same loss on the downlinks of
+    A2A_SPINE to every leaf."""
+    event, _, loss = condition.partition("_")
+    if loss not in A2A_LOSS_RATES or event not in (*A2A_LEAF_EVENTS, A2A_SPINE_EVENT):
+        raise ValueError(f"unknown condition {condition}")
+    gray = {"model": "gray", "error_rate": A2A_LOSS_RATES[loss], "start_ns": DEGRADE_AT_NS}
+    if event == A2A_SPINE_EVENT:
+        return [{**gray, "spine": A2A_SPINE, "direction": "down"}]
+    direction, count = A2A_LEAF_EVENTS[event]
+    return [{**gray, "spine": spine, "leaf": 0 if direction == "up" else 1, "direction": direction}
+            for spine in A2A_EVENT_SPINES[:count]]
 
 
 def a2a_flap(flap: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2703,6 +2753,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{timer_stage: (A2A_REPAIR_CELLS, tuple(A2A_REPAIR_TWINS)) for timer_stage in A2A_REPAIR_TIMER_NS},
         **{fast_stage: (A2A_REPAIR_CELLS, tuple(dict.fromkeys(A2A_REPAIR_TWINS.values())))
            for fast_stage in A2A_REPAIR_FAST_STAGES},
+        **{event_stage: (A2A_EVENT_CELLS, A2A_EVENT_ARMS) for event_stage in A2A_EVENT_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
         **{defer_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS))
@@ -2902,7 +2953,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
                                                          A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
                                                          A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES,
-                                                         A2A_LEAVES_STAGES, A2A_REPAIR_STAGES))
+                                                         A2A_LEAVES_STAGES, A2A_REPAIR_STAGES, A2A_EVENT_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2941,7 +2992,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_downlinks_hs_settings(tuning) if stage in A2A_DOWNLINKS_HS_STAGES
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
-                          if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
+                          if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES or stage in A2A_EVENT_STAGES
                     else a2a_repair_settings(stage, tuning) if stage in A2A_REPAIR_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
                     else {arm: setting for arm, setting in a2a_path_defer_settings(tuning).items()
@@ -2968,6 +3019,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                  else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES
                  else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                  else A2A_REPAIR_SEEDS if stage in A2A_REPAIR_STAGES
+                 else A2A_EVENT_SEEDS if stage in A2A_EVENT_STAGES
                  else A2A_ANSWER_ORDER_SEEDS if stage in A2A_ANSWER_ORDER_STAGES or stage in A2A_PATH_DEFER_STAGES
                  else A2A_PATH_DEFER_FAULT_SEEDS if stage in A2A_PATH_DEFER_FAULT_STAGES
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES

@@ -107,6 +107,9 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # their 2 twins at the default timeout.
                  "a2a_wide256_repair123_4k": 144, "a2a_wide256_repair1ms_4k": 144,
                  "a2a_wide256_repair_fast_4k": 72,
+                 # The correlated-fault stage: 12 seeds on 5 event conditions
+                 # and healthy, of 3 arms.
+                 "a2a_wide256_event_4k": 216,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -3431,6 +3434,61 @@ class Wide(unittest.TestCase):
             self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
                              profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"])
 
+    def test_event(self):
+        # The correlated-fault stage: each faulted run's profile is the down16
+        # REPS stage's run of its arm and seed but for its name and link
+        # failures, and each healthy run's is that stage's healthy run but for
+        # its name, so the down16 stage's healthy runs pair the faulted ones.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        stage = "a2a_wide256_event_4k"
+        reps, sender, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
+        self.assertEqual(profiles.A2A_EVENT_ARMS, (reps, sender, receiver))
+        self.assertEqual(profiles.A2A_EVENT_CONDITIONS,
+                         ("leafdown4_loss1e2", "leafdown8_loss1e2", "leafup4_loss1e2", "leafup8_loss1e2",
+                          "spinedown_loss1e2"))
+        self.assertEqual(profiles.A2A_EVENT_SPINES, (3, 16, 29, 10, 23, 4, 17, 30))
+        runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+        self.assertEqual(len(runs), 3 * 12 * 6)
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 319)))
+        source = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                  for r in profiles.a2a_stage_runs("a2a_wide256_down16_reps_4k", committed, self.tuning)}
+
+        def unnamed(document, failures=False):
+            out = {key: value for key, value in document.items() if key != "name"}
+            if failures:
+                out["network"] = {key: value for key, value in document["network"].items()
+                                  if key != "link_failures"}
+            return out
+
+        expected_links = {
+            "leafdown4_loss1e2": {(1, spine, "down") for spine in (3, 16, 29, 10)},
+            "leafdown8_loss1e2": {(1, spine, "down") for spine in (3, 16, 29, 10, 23, 4, 17, 30)},
+            "leafup4_loss1e2": {(0, spine, "up") for spine in (3, 16, 29, 10)},
+            "leafup8_loss1e2": {(0, spine, "up") for spine in (3, 16, 29, 10, 23, 4, 17, 30)},
+            "spinedown_loss1e2": {(None, 3, "down")},
+        }
+        for run in runs:
+            document = profiles.a2a_stage_profile(run, committed)
+            self.assertEqual(document["name"],
+                             f"{stage}-ep64-256k-{run['condition']}-{run['arm']}-s{run['seed']}")
+            if run["condition"] == "healthy":
+                twin = source[(run["arm"], "healthy", run["seed"])]
+                self.assertEqual(unnamed(document), unnamed(twin), document["name"])
+                continue
+            twin = source[(run["arm"], "down16_loss1e2", run["seed"])]
+            self.assertEqual(unnamed(document, True), unnamed(twin, True), document["name"])
+            failures = document["network"]["link_failures"]
+            self.assertEqual({(f.get("leaf"), f["spine"], f["direction"]) for f in failures},
+                             expected_links[run["condition"]])
+            for failure in failures:
+                self.assertEqual({key: failure[key] for key in ("model", "error_rate", "start_ns", "loss_unit")},
+                                 {"model": "gray", "error_rate": 1e-2, "start_ns": profiles.DEGRADE_AT_NS,
+                                  "loss_unit": "byte"})
+        with self.assertRaises(ValueError):
+            profiles.a2a_event_fault("leafdown16_loss1e2")
+        self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
+                         profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3763,7 +3821,8 @@ class CopyDeadline(unittest.TestCase):
                  **{stage: {"reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_rackdefer",
                             "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_tonly"}
                     for stage in profiles.A2A_REPAIR_TIMER_NS},
-                 "a2a_wide256_repair_fast_4k": {profiles.A2A_DOWNLINKS_REPS_ARMS[2]}}
+                 "a2a_wide256_repair_fast_4k": {profiles.A2A_DOWNLINKS_REPS_ARMS[2]},
+                 "a2a_wide256_event_4k": set(profiles.A2A_EVENT_ARMS[1:])}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
