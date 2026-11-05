@@ -154,8 +154,8 @@ mkdir -m 700 -p "$XDG_RUNTIME_DIR"
 # The runner is downloaded per job - the home directory is strictly control
 # plane and holds no runtime payloads; the network is unmetered. Pinned
 # version and digest, extracted straight onto this job's scratch.
-RUNNER_VERSION=2.336.0
-RUNNER_SHA256=04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d
+RUNNER_VERSION=2.338.2
+RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
 curl -fsSL -o "$dir/runner.tar.gz" \
     "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 echo "${RUNNER_SHA256}  $dir/runner.tar.gz" | sha256sum -c -
