@@ -102,6 +102,11 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # 256 KiB loss1e2_down, and the validity run on 256 KiB.
                  **{f"a2a_wide64_leaves{leaves}_4k": 18 for leaves in (16, 32)},
                  **{f"a2a_wide64_leaves{leaves}_validity_4k": 1 for leaves in (16, 32)},
+                 # The repair stages: 12 seeds on down16_loss1e2, 256 KiB
+                 # loss1e2_down and healthy, of 4 arms at each timer and of
+                 # their 2 twins at the default timeout.
+                 "a2a_wide256_repair123_4k": 144, "a2a_wide256_repair1ms_4k": 144,
+                 "a2a_wide256_repair_fast_4k": 72,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -2418,6 +2423,13 @@ class Wide(unittest.TestCase):
                              {**profiles.A2A_WIDE_FIXTURE[64], "leaves": leaves, "job_hosts": 64 // leaves})
         with self.assertRaisesRegex(ValueError, "24 leaves"):
             profiles.a2a_leaves_fixture(24)
+        # A repair timer stage's fixture is the 256-spine one with its
+        # retransmission timeout; the fast stage's is the 256-spine one.
+        self.assertEqual(profiles.A2A_STAGE_FIXTURE["a2a_wide256_repair123_4k"],
+                         {**profiles.A2A_WIDE_FIXTURE[256], "retransmission_timeout_ns": 123_240})
+        self.assertEqual(profiles.A2A_STAGE_FIXTURE["a2a_wide256_repair1ms_4k"],
+                         {**profiles.A2A_WIDE_FIXTURE[256], "retransmission_timeout_ns": 1_000_000})
+        self.assertEqual(profiles.A2A_STAGE_FIXTURE["a2a_wide256_repair_fast_4k"], profiles.A2A_WIDE_FIXTURE[256])
 
     @measured_4k()
     def test_eight_is_the_settled_fixture(self):
@@ -3315,6 +3327,110 @@ class Wide(unittest.TestCase):
             self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
                              profiles.A2A_STAGE_ASTERIA_REF["a2a_wide64_matrix_4k"])
 
+    def test_repair(self):
+        # The repair stages at 256 spines, seeds 307-318, on the down16 cell,
+        # 256 KiB loss1e2_down and their healthy pair. The fast stage runs
+        # reps_spine and the receiver REPS hold arm as
+        # a2a_wide256_down16_reps_4k does: its runs are that stage's (on
+        # loss1e2_down, the matrix's for reps_spine) but for their names.
+        # On a timer stage, a probe-off arm's (_rackdefer) profile is its
+        # twin's but for its name, the overdue probe's keys and the stage's
+        # retransmission timeout; a timeout-only arm's (_tonly) is the
+        # probe-off arm's but for its name, the RACK keys and
+        # tail_recovery_delay_ns at the timeout. The twin is the down16 REPS
+        # stage's run on down16 and healthy, the matrix's for reps_spine on
+        # loss1e2_down at its seeds, else the fast stage's. Only the timer
+        # stages' fixtures carry the timeout, which a fixture may not set
+        # beside base_rtt_ns; all three stages build at the matrix's commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        reps, _, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
+        hold = "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2"
+        self.assertEqual((reps, receiver), ("reps_spine_od_rackdefer", f"{hold}_od_rackdefer"))
+        self.assertEqual(profiles.A2A_REPAIR_PROBE_OFF_ARMS,
+                         {"reps_spine_rackdefer": reps, f"{hold}_rackdefer": receiver})
+        self.assertEqual(profiles.A2A_REPAIR_TIMER_ONLY_ARMS,
+                         {"reps_spine_tonly": reps, f"{hold}_tonly": receiver})
+        timers = {"a2a_wide256_repair123_4k": 123_240, "a2a_wide256_repair1ms_4k": 1_000_000}
+        self.assertEqual(profiles.A2A_REPAIR_TIMER_NS, timers)
+        fast_stage = "a2a_wide256_repair_fast_4k"
+        self.assertEqual(profiles.A2A_REPAIR_FAST_STAGES, {fast_stage: 256})
+        probe, rack = ("overdue_repair", "overdue_repair_limit"), ("rack_reorder_ns", "rack_defer_loss")
+        conditions = {"down16_loss1e2", "loss1e2_down", "healthy"}
+
+        def documents(stage):
+            return {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
+                    for r in profiles.a2a_stage_runs(stage, committed, self.tuning)}
+
+        def unnamed(document):
+            return {key: value for key, value in document.items() if key != "name"}
+
+        down = documents("a2a_wide256_down16_reps_4k")
+        matrix = documents("a2a_wide256_matrix_4k")
+        runs = profiles.a2a_stage_runs(fast_stage, committed, self.tuning)
+        self.assertEqual(len(runs), 72)
+        self.assertEqual({r["arm"] for r in runs}, {reps, receiver})
+        self.assertEqual({r["condition"] for r in runs}, conditions)
+        self.assertEqual({r["seed"] for r in runs}, set(range(307, 319)))
+        fast = documents(fast_stage)
+        compared = 0
+        for key, document in fast.items():
+            twin = (matrix if key[1] == "loss1e2_down" else down).get(key)
+            if twin is not None:
+                self.assertEqual(unnamed(document), unnamed(twin), key)
+                compared += 1
+        # Both arms on down16 and healthy at 12 seeds; reps_spine on
+        # loss1e2_down at the matrix's 6.
+        self.assertEqual(compared, 2 * 2 * 12 + 6)
+        twins = {**down, **{key: document for key, document in matrix.items() if key[0] == reps}}
+        for stage, timeout in timers.items():
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(len(runs), 144)
+            self.assertEqual({r["arm"] for r in runs}, set(profiles.A2A_REPAIR_TWINS))
+            self.assertEqual({r["condition"] for r in runs}, conditions)
+            self.assertEqual({r["seed"] for r in runs}, set(range(307, 319)))
+            self.assertEqual({r["fixture"]["retransmission_timeout_ns"] for r in runs}, {timeout})
+            ours = documents(stage)
+            for (arm, condition, seed), document in ours.items():
+                self.assertEqual(document["name"], f"{stage}-ep64-256k-{condition}-{arm}-s{seed}")
+                recovery = document["network"]["transport_recovery"]
+                balancing = document["network"]["load_balancing"]
+                self.assertEqual(recovery["retransmission_timeout_ns"], timeout)
+                self.assertFalse(set(probe) & set(balancing), arm)
+                if arm in profiles.A2A_REPAIR_PROBE_OFF_ARMS:
+                    twin_key = (profiles.A2A_REPAIR_PROBE_OFF_ARMS[arm], condition, seed)
+                    twin = twins.get(twin_key) or fast[twin_key]
+                    held = twin["network"]["load_balancing"]
+                    self.assertEqual((held["overdue_repair"], held["overdue_repair_limit"]), ("reprobe", 3))
+                    self.assertEqual(twin["network"]["transport_recovery"]["retransmission_timeout_ns"], 123_240)
+                    self.assertEqual((balancing["rack_reorder_ns"], balancing["rack_defer_loss"]), (3081, True))
+                    self.assertNotIn("tail_recovery_delay_ns", balancing)
+                    expected = {**unnamed(twin), "network": {
+                        **twin["network"], "transport_recovery": {
+                            **twin["network"]["transport_recovery"], "retransmission_timeout_ns": timeout},
+                        "load_balancing": {key: value for key, value in held.items() if key not in probe}}}
+                else:
+                    base = profiles.A2A_REPAIR_TIMER_ONLY_ARMS[arm].replace("_od_rackdefer", "_rackdefer", 1)
+                    twin = ours[(base, condition, seed)]
+                    held = twin["network"]["load_balancing"]
+                    self.assertFalse(set(rack) & set(balancing), arm)
+                    self.assertEqual(balancing["tail_recovery_delay_ns"], timeout)
+                    self.assertTrue(balancing["tail_recovery"])
+                    expected = {**unnamed(twin), "network": {**twin["network"], "load_balancing": {
+                        **{key: value for key, value in held.items() if key not in rack},
+                        "tail_recovery_delay_ns": timeout}}}
+                self.assertEqual(unnamed(document), expected, document["name"])
+            # A fixture with the timeout and base_rtt_ns is refused.
+            run = runs[0]
+            with self.assertRaisesRegex(ValueError, "base_rtt_ns"):
+                profiles.a2a_stage_profile({**run, "fixture": {**run["fixture"], "base_rtt_ns": 17_404}}, committed)
+        # No fixture outside the timer stages carries the timeout.
+        self.assertEqual({stage for stage, fixture in profiles.A2A_STAGE_FIXTURE.items()
+                          if "retransmission_timeout_ns" in fixture}, set(timers))
+        for stage in (*timers, fast_stage):
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "d68572320c38133238019796d6c675d0022532d0")
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
+                             profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3643,7 +3759,11 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide128_spread2m_seeds_4k": set(profiles.A2A_WIDE_SPREAD_ARMS),
                  "a2a_wide128_seeds2m_4k": set(profiles.A2A_WIDE_SEEDS_2M_ARMS),
                  **{stage: set(profiles.A2A_WIDE_LONG_ARMS) for stage in profiles.A2A_WIDE_LONG_STAGES},
-                 **{stage: set(profiles.A2A_LEAVES_ARMS) for stage in profiles.A2A_LEAVES_STAGES}}
+                 **{stage: set(profiles.A2A_LEAVES_ARMS) for stage in profiles.A2A_LEAVES_STAGES},
+                 **{stage: {"reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_rackdefer",
+                            "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_tonly"}
+                    for stage in profiles.A2A_REPAIR_TIMER_NS},
+                 "a2a_wide256_repair_fast_4k": {profiles.A2A_DOWNLINKS_REPS_ARMS[2]}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

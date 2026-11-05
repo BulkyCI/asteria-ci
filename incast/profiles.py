@@ -1352,9 +1352,15 @@ A2A_SPINES_COMPUTE_MEASURED: dict[int, tuple[tuple[str, str], ...]] = {spines: (
 #   sparse_hold_trace  network.sparse_hold_trace: true, for a run that writes
 #                      the sender loss trace (a2a_traces_spine_loss), as the
 #                      generator requires
+#   retransmission_timeout_ns
+#                      on a repair timer stage (A2A_REPAIR_TIMER_NS) alone:
+#                      network.transport_recovery's retransmission timeout in
+#                      place of 10 base RTTs; a2a_settle refuses it beside
+#                      base_rtt_ns, which sets the timeout too
 # Every link is a 400 Gb/s one, so the base RTT, the retransmission timeout
-# and the loss intervals are the 8-spine fabric's at every P. At P = 8 the
-# fixture is A2A_FIXTURE_4K: its leaves have no other host.
+# (but on a repair timer stage) and the loss intervals are the 8-spine
+# fabric's at every P. At P = 8 the fixture is A2A_FIXTURE_4K: its leaves
+# have no other host.
 A2A_WIDE = (8, 32, 64, 128, 256)
 A2A_WIDE_LEAVES = 8
 A2A_WIDE_JOB_HOSTS = 8
@@ -1570,6 +1576,24 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #     twin's at 64 spines (or the receiver arm's twin, with
 #     receiver_hold_auto_leaves) but for its name, parallelism.dp and
 #     workload.group, so it takes the 64-spine loss thresholds.
+# - The repair stages, at 256 spines on the down16 cell and 256 KiB
+#   loss1e2_down (A2A_REPAIR_CELLS), each with its healthy pair, seeds
+#   307-318 (A2A_REPAIR_SEEDS), all at the matrix's build:
+#   - a2a_wide256_repair123_4k and a2a_wide256_repair1ms_4k
+#     (A2A_REPAIR_TIMER_NS): a retransmission timeout of 10 base RTTs and of
+#     1 ms (the fixture's retransmission_timeout_ns). reps_spine and the
+#     receiver REPS hold arm of A2A_DOWNLINKS_REPS_ARMS with the overdue
+#     probe off (A2A_REPAIR_PROBE_OFF_ARMS, _rackdefer), and with the
+#     sender's RACK rule off too and the tail repair request delayed to the
+#     timeout (A2A_REPAIR_TIMER_ONLY_ARMS, _tonly), so a lost last send of a
+#     queue pair waits for the timeout, and with _tonly every loss does.
+#     Each run's profile is its twin's (A2A_REPAIR_TWINS) on the same cell
+#     and seed but for its name, the timeout and the keys a2a_repair_settings
+#     leaves out or adds.
+#   - a2a_wide256_repair_fast_4k (A2A_REPAIR_FAST_STAGES): the twins with
+#     their a2a_wide256_down16_reps_4k settings, at the default timeout:
+#     each run's profile is that stage's run (on loss1e2_down, the matrix's
+#     for reps_spine) but for its name.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1784,6 +1808,24 @@ A2A_DOWNLINKS_REPS_STAGES = {"a2a_wide256_down16_reps_4k": 256}
 A2A_DOWNLINKS_REPS_LOSS_ARMS = (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[3])
 A2A_DOWNLINKS_REPS_LOSS_SEEDS = tuple(range(319, 331))
 A2A_DOWNLINKS_REPS_LOSS_STAGES = {"a2a_wide256_down16_reps_loss_4k": 256}
+# The repair stages' arms, each with its twin of A2A_DOWNLINKS_REPS_ARMS
+# (reps_spine and the receiver arm, its [0] and [2]): the twin without the
+# overdue probe (_rackdefer), and without the sender's RACK rule too
+# (_tonly), whose tail repair request waits for the stage's timeout.
+A2A_REPAIR_PROBE_KEYS = ("overdue_repair", "overdue_repair_limit")
+A2A_REPAIR_RACK_KEYS = ("rack_reorder_ns", "rack_defer_loss")
+A2A_REPAIR_PROBE_OFF_ARMS = {twin.replace("_od_rackdefer", "_rackdefer", 1): twin
+                             for twin in (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[2])}
+A2A_REPAIR_TIMER_ONLY_ARMS = {twin.replace("_od_rackdefer", "_tonly", 1): twin
+                              for twin in (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[2])}
+A2A_REPAIR_TWINS = {**A2A_REPAIR_PROBE_OFF_ARMS, **A2A_REPAIR_TIMER_ONLY_ARMS}
+A2A_TRANSPORT_ARMS.update({arm: A2A_TRANSPORT_ARMS[twin] for arm, twin in A2A_REPAIR_TWINS.items()})
+A2A_REPAIR_WIDE = 256
+A2A_REPAIR_TIMER_NS = {"a2a_wide256_repair123_4k": 10 * BASE_RTT_NS, "a2a_wide256_repair1ms_4k": 1_000_000}
+A2A_REPAIR_FAST_STAGES = {"a2a_wide256_repair_fast_4k": A2A_REPAIR_WIDE}
+A2A_REPAIR_STAGES = {**{stage: A2A_REPAIR_WIDE for stage in A2A_REPAIR_TIMER_NS}, **A2A_REPAIR_FAST_STAGES}
+A2A_REPAIR_CELLS = (*A2A_DOWNLINKS_CELLS, ("ep64", "256k", "loss1e2_down"))
+A2A_REPAIR_SEEDS = tuple(range(307, 319))
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed
 # as the matrix sends them and with ack_route data_spine, each answer on its
 # data packet's spine; A2A_ANSWER_ORDER_ITERATIONS iterations on
@@ -1872,9 +1914,11 @@ A2A_STAGE_FIXTURE.update({stage: A2A_WIDE_FIXTURE[wide]
                                          A2A_WIDE_SEEDS_2M_STAGES, A2A_WIDE_LONG_STAGES, A2A_DOWNLINKS_HS_STAGES,
                                          A2A_DOWNLINKS_REPS_STAGES, A2A_DOWNLINKS_REPS_LOSS_STAGES,
                                          A2A_ANSWER_ORDER_STAGES, A2A_PATH_DEFER_STAGES,
-                                         A2A_PATH_DEFER_FAULT_STAGES)
+                                         A2A_PATH_DEFER_FAULT_STAGES, A2A_REPAIR_FAST_STAGES)
                           for stage, wide in stages.items()})
 A2A_STAGE_FIXTURE.update({stage: A2A_LEAVES_FIXTURE[leaves] for stage, leaves in A2A_LEAVES_STAGES.items()})
+A2A_STAGE_FIXTURE.update({stage: {**A2A_WIDE_FIXTURE[A2A_REPAIR_WIDE], "retransmission_timeout_ns": timeout}
+                          for stage, timeout in A2A_REPAIR_TIMER_NS.items()})
 # A validity stage's member fixture, by P or by L, with the port counters.
 A2A_STAGE_FIXTURE.update({stage: {**fixtures[member], "port_counter_interval_ns": A2A_WIDE_PORT_COUNTER_NS}
                           for fixtures, stages in ((A2A_WIDE_FIXTURE, A2A_WIDE_VALIDITY_STAGES),
@@ -1911,7 +1955,7 @@ A2A_STAGE_ASTERIA_REF = {
     **{stage: "d68572320c38133238019796d6c675d0022532d0"
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
                      *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES,
-                     *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES)},
+                     *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES, *A2A_REPAIR_STAGES)},
     **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
 }
@@ -1987,6 +2031,12 @@ def a2a_settle(document: dict[str, Any], fixture: dict[str, Any]) -> None:
         network["load_balancing"] = {**balancing, **{key: balancing[key] // BASE_RTT_NS * rtt
                                                      for key in A2A_BASE_RTT_KEYS if key in balancing}}
         network["transport_recovery"] = {**network["transport_recovery"], "retransmission_timeout_ns": 10 * rtt}
+    if "retransmission_timeout_ns" in fixture:
+        if "base_rtt_ns" in fixture:
+            raise ValueError("a fixture sets the retransmission timeout by base_rtt_ns or by "
+                             "retransmission_timeout_ns, not both")
+        network["transport_recovery"] = {**network["transport_recovery"],
+                                         "retransmission_timeout_ns": fixture["retransmission_timeout_ns"]}
 
 
 def a2a_traces_spine_loss(balancing: dict[str, Any]) -> bool:
@@ -2514,6 +2564,26 @@ def a2a_downlinks_reps_settings(tuning: dict[str, Any] | None) -> dict[str, dict
             slow: {**rack[receiver], "held_sentinel_interval_ns": A2A_DOWNLINKS_HS_INTERVAL_NS}}
 
 
+def a2a_repair_settings(stage: str, tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """A repair stage's arms. The fast stage's are the A2A_REPAIR_TWINS twins
+    with their a2a_downlinks_reps_settings. A timer stage's are each
+    A2A_REPAIR_PROBE_OFF_ARMS arm with its twin's setting less
+    A2A_REPAIR_PROBE_KEYS, and each A2A_REPAIR_TIMER_ONLY_ARMS arm with its
+    twin's less A2A_REPAIR_PROBE_KEYS and A2A_REPAIR_RACK_KEYS and with
+    tail_recovery_delay_ns the stage's timeout (A2A_REPAIR_TIMER_NS)."""
+    reps = a2a_downlinks_reps_settings(tuning)
+    if stage in A2A_REPAIR_FAST_STAGES:
+        return {twin: reps[twin] for twin in dict.fromkeys(A2A_REPAIR_TWINS.values())}
+    timeout = A2A_REPAIR_TIMER_NS[stage]
+    probe_off = {arm: {key: value for key, value in reps[twin].items() if key not in A2A_REPAIR_PROBE_KEYS}
+                 for arm, twin in A2A_REPAIR_PROBE_OFF_ARMS.items()}
+    timer_only = {arm: {**{key: value for key, value in reps[twin].items()
+                           if key not in A2A_REPAIR_PROBE_KEYS + A2A_REPAIR_RACK_KEYS},
+                        "tail_recovery_delay_ns": timeout}
+                  for arm, twin in A2A_REPAIR_TIMER_ONLY_ARMS.items()}
+    return {**probe_off, **timer_only}
+
+
 def a2a_answer_order_settings(tuning: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
     """A2A_ANSWER_ORDER_ARMS: the matrix arm's setting, and its twin's with
     ack_route data_spine."""
@@ -2630,6 +2700,9 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{reps_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_REPS_ARMS) for reps_stage in A2A_DOWNLINKS_REPS_STAGES},
         **{loss_stage: (A2A_DOWNLINKS_CELLS, A2A_DOWNLINKS_REPS_LOSS_ARMS)
            for loss_stage in A2A_DOWNLINKS_REPS_LOSS_STAGES},
+        **{timer_stage: (A2A_REPAIR_CELLS, tuple(A2A_REPAIR_TWINS)) for timer_stage in A2A_REPAIR_TIMER_NS},
+        **{fast_stage: (A2A_REPAIR_CELLS, tuple(dict.fromkeys(A2A_REPAIR_TWINS.values())))
+           for fast_stage in A2A_REPAIR_FAST_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
         **{defer_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS))
@@ -2829,7 +2902,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
                                                          A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
                                                          A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES,
-                                                         A2A_LEAVES_STAGES))
+                                                         A2A_LEAVES_STAGES, A2A_REPAIR_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2869,6 +2942,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
                           if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
+                    else a2a_repair_settings(stage, tuning) if stage in A2A_REPAIR_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
                     else {arm: setting for arm, setting in a2a_path_defer_settings(tuning).items()
                           if arm in arms} if stage in A2A_PATH_DEFER_STAGES or stage in A2A_PATH_DEFER_FAULT_STAGES
@@ -2893,6 +2967,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES
                  else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
+                 else A2A_REPAIR_SEEDS if stage in A2A_REPAIR_STAGES
                  else A2A_ANSWER_ORDER_SEEDS if stage in A2A_ANSWER_ORDER_STAGES or stage in A2A_PATH_DEFER_STAGES
                  else A2A_PATH_DEFER_FAULT_SEEDS if stage in A2A_PATH_DEFER_FAULT_STAGES
                  else A2A_WIDE_SEEDS_SEEDS if stage in A2A_WIDE_SEEDS_STAGES
