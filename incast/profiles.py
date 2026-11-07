@@ -1602,6 +1602,19 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #   a2a_wide256_down16_reps_4k settings, at the matrix's build: each run's
 #   profile is that stage's run of its arm and seed but for its name and its
 #   link failures, and each healthy run's is that stage's but for its name.
+# - The background-rate stages at 256 spines, at the matrix's build, per
+#   rate R (Gb/s) of A2A_BACKGROUND_RATES:
+#   - a2a_wide256_bg<R>_4k (A2A_BACKGROUND_STAGES): reps_spine and the
+#     sender-only and receiver REPS hold arms (A2A_BACKGROUND_ARMS) on
+#     down16_loss1e2 and healthy, seeds 307-318: each run's profile is
+#     a2a_wide256_down16_reps_4k's run of its arm, condition and seed but
+#     for its name and workload.background's rate, R in place of 350.
+#   - a2a_wide256_bg<R>_probe_4k (A2A_BACKGROUND_PROBE_STAGES), at
+#     A2A_BACKGROUND_PROBE_RATES, which add 350: a2a_wide256_validity_4k's
+#     run on 256 KiB (healthy, A2A_WIDE_VALIDITY_ITERATIONS iterations, the
+#     port counters and the switch queues' maxima) of reps_spine and the
+#     receiver arm (A2A_BACKGROUND_PROBE_ARMS) at their
+#     a2a_wide256_down16_reps_4k settings on seed 307, at the rate.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1860,6 +1873,16 @@ A2A_EVENT_CELLS = tuple(("ep64", "256k", condition) for condition in A2A_EVENT_C
 A2A_EVENT_ARMS = A2A_DOWNLINKS_REPS_ARMS[:4]
 A2A_EVENT_SEEDS = tuple(range(307, 319))
 A2A_EVENT_STAGES = {"a2a_wide256_event_4k": 256}
+# The background-rate stages: the background's pacing rate in Gb/s, at most
+# the 400 Gb/s link rate. Its bytes per collective are fixed, so a higher
+# rate sends them in a shorter window.
+A2A_BACKGROUND_RATES = (360, 370, 375, 380, 385, 390, 395, 400)
+A2A_BACKGROUND_ARMS = A2A_DOWNLINKS_REPS_ARMS[:3]
+A2A_BACKGROUND_STAGES = {f"a2a_wide256_bg{rate}_4k": rate for rate in A2A_BACKGROUND_RATES}
+A2A_BACKGROUND_PROBE_RATES = (350, *A2A_BACKGROUND_RATES)
+A2A_BACKGROUND_PROBE_ARMS = (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[2])
+A2A_BACKGROUND_PROBE_SEEDS = (307,)
+A2A_BACKGROUND_PROBE_STAGES = {f"a2a_wide256_bg{rate}_probe_4k": rate for rate in A2A_BACKGROUND_PROBE_RATES}
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed
 # as the matrix sends them and with ack_route data_spine, each answer on its
 # data packet's spine; A2A_ANSWER_ORDER_ITERATIONS iterations on
@@ -1958,6 +1981,13 @@ A2A_STAGE_FIXTURE.update({stage: {**fixtures[member], "port_counter_interval_ns"
                           for fixtures, stages in ((A2A_WIDE_FIXTURE, A2A_WIDE_VALIDITY_STAGES),
                                                    (A2A_LEAVES_FIXTURE, A2A_LEAVES_VALIDITY_STAGES))
                           for stage, member in stages.items()})
+# A background-rate stage's fixture, the 256-spine one (a probe's, its
+# validity stage's) with the background at the stage's rate.
+A2A_STAGE_FIXTURE.update({stage: {**fixture, "background": {**A2A_WIDE_BACKGROUND, "rate": f"{rate}Gbps"}}
+                          for stages, fixture in ((A2A_BACKGROUND_STAGES, A2A_WIDE_FIXTURE[256]),
+                                                  (A2A_BACKGROUND_PROBE_STAGES,
+                                                   A2A_STAGE_FIXTURE["a2a_wide256_validity_4k"]))
+                          for stage, rate in stages.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -1990,7 +2020,7 @@ A2A_STAGE_ASTERIA_REF = {
        for stage in (*A2A_MATRIX_STAGES, *A2A_DOWNLINKS_STAGES, *A2A_WIDE_LONG_STAGES, *A2A_DOWNLINKS_HS_STAGES,
                      *A2A_DOWNLINKS_REPS_STAGES, *A2A_DOWNLINKS_REPS_LOSS_STAGES, *A2A_ANSWER_ORDER_STAGES,
                      *A2A_LEAVES_STAGES, *A2A_LEAVES_VALIDITY_STAGES, *A2A_REPAIR_STAGES,
-                     *A2A_EVENT_STAGES)},
+                     *A2A_EVENT_STAGES, *A2A_BACKGROUND_STAGES, *A2A_BACKGROUND_PROBE_STAGES)},
     **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
 }
@@ -2758,6 +2788,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
         **{fast_stage: (A2A_REPAIR_CELLS, tuple(dict.fromkeys(A2A_REPAIR_TWINS.values())))
            for fast_stage in A2A_REPAIR_FAST_STAGES},
         **{event_stage: (A2A_EVENT_CELLS, A2A_EVENT_ARMS) for event_stage in A2A_EVENT_STAGES},
+        **{bg_stage: (A2A_DOWNLINKS_CELLS, A2A_BACKGROUND_ARMS) for bg_stage in A2A_BACKGROUND_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
         **{defer_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS))
@@ -2926,6 +2957,14 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         for group, size in pairs:
             add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
                 iterations=A2A_WIDE_VALIDITY_ITERATIONS)
+    elif stage in A2A_BACKGROUND_PROBE_STAGES:
+        pairs = A2A_WIDE_PAIRS[:1]
+        require_measured(pairs)
+        if not calibrated("per_receiver", *pairs[0]):
+            refuse_uncalibrated(pairs)
+        settings = a2a_downlinks_reps_settings(tuning)
+        for seed, arm in itertools.product(A2A_BACKGROUND_PROBE_SEEDS, A2A_BACKGROUND_PROBE_ARMS):
+            add(arm, *pairs[0], "healthy", seed, settings[arm], iterations=A2A_WIDE_VALIDITY_ITERATIONS)
     elif stage in A2A_PROBE_STAGES:
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
         for (group, size), compute_ns in A2A_PROBE_STAGES[stage].items():
@@ -2957,7 +2996,8 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_HS_STAGES, A2A_DOWNLINKS_REPS_STAGES,
                                                          A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
                                                          A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES,
-                                                         A2A_LEAVES_STAGES, A2A_REPAIR_STAGES, A2A_EVENT_STAGES))
+                                                         A2A_LEAVES_STAGES, A2A_REPAIR_STAGES, A2A_EVENT_STAGES,
+                                                         A2A_BACKGROUND_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -2997,6 +3037,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
                           if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES or stage in A2A_EVENT_STAGES
+                    or stage in A2A_BACKGROUND_STAGES
                     else a2a_repair_settings(stage, tuning) if stage in A2A_REPAIR_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
                     else {arm: setting for arm, setting in a2a_path_defer_settings(tuning).items()
@@ -3020,7 +3061,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           else {arm: () for arm in A2A_PATH_DEFER_ARMS} if stage in A2A_PATH_DEFER_STAGES
                           else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
-                 else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES
+                 else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES or stage in A2A_BACKGROUND_STAGES
                  else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                  else A2A_REPAIR_SEEDS if stage in A2A_REPAIR_STAGES
                  else A2A_EVENT_SEEDS if stage in A2A_EVENT_STAGES

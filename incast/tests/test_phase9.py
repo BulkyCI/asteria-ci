@@ -110,6 +110,12 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  # The correlated-fault stage: 12 seeds on 5 event conditions
                  # and healthy, of 4 arms.
                  "a2a_wide256_event_4k": 288,
+                 # The background-rate stages: per rate, 12 seeds on the
+                 # down16 cell and healthy, of 3 arms; and the probe, 2 arms
+                 # on one healthy seed.
+                 **{f"a2a_wide256_bg{rate}_4k": 72 for rate in (360, 370, 375, 380, 385, 390, 395, 400)},
+                 **{f"a2a_wide256_bg{rate}_probe_4k": 2
+                    for rate in (350, 360, 370, 375, 380, 385, 390, 395, 400)},
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -3504,6 +3510,97 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
                          profiles.A2A_STAGE_ASTERIA_REF["a2a_wide256_down16_reps_4k"])
 
+    @measured_4k()
+    def test_background_load(self):
+        # The background-rate stages. A main stage's run is the down16 REPS
+        # stage's run of the same arm, condition and seed but for its name
+        # and the background's rate, in its profile and its runs.json
+        # record. A probe's run is a2a_wide256_validity_4k's 256 KiB run but
+        # for its name, seed, load balancing (the arm's, as the down16 REPS
+        # stage's healthy run of the arm has it), the sender trace that the
+        # hold arm writes, and the background's rate; it is also that
+        # healthy run but for its name, the iterations and the port
+        # counters. Every stage builds at the down16 REPS stage's commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        reps, sender, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
+        rates = (360, 370, 375, 380, 385, 390, 395, 400)
+        self.assertEqual(profiles.A2A_BACKGROUND_RATES, rates)
+        self.assertEqual(profiles.A2A_BACKGROUND_PROBE_RATES, (350, *rates))
+        self.assertEqual(profiles.A2A_WIDE_BACKGROUND, {"pattern": "leaf_shift", "rate": "350Gbps"})
+        self.assertEqual(profiles.A2A_BACKGROUND_ARMS, (reps, sender, receiver))
+        self.assertEqual(profiles.A2A_BACKGROUND_PROBE_ARMS, (reps, receiver))
+        self.assertEqual(profiles.A2A_BACKGROUND_STAGES, {f"a2a_wide256_bg{rate}_4k": rate for rate in rates})
+        self.assertEqual(profiles.A2A_BACKGROUND_PROBE_STAGES,
+                         {f"a2a_wide256_bg{rate}_probe_4k": rate for rate in (350, *rates)})
+        source_stage, validity_stage = "a2a_wide256_down16_reps_4k", "a2a_wide256_validity_4k"
+        source_runs = {(r["arm"], r["condition"], r["seed"]): r
+                       for r in profiles.a2a_stage_runs(source_stage, committed, self.tuning)}
+        source = {key: profiles.a2a_stage_profile(r, committed) for key, r in source_runs.items()}
+        (validity_run, _) = profiles.a2a_stage_runs(validity_stage, committed, self.tuning)
+        self.assertEqual((validity_run["size"], validity_run["seed"]), ("256k", 301))
+        validity = profiles.a2a_stage_profile(validity_run, committed)
+
+        def rated(document, rate):
+            workload = document["workload"]
+            return {**document, "workload": {**workload, "background": {**workload["background"],
+                                                                        "rate": f"{rate}Gbps"}}}
+
+        def unnamed(document):
+            return {key: value for key, value in document.items() if key != "name"}
+
+        for document in (validity, *source.values()):
+            self.assertEqual(document["workload"]["background"], {"pattern": "leaf_shift", "rate": "350Gbps"})
+        for stage, rate in profiles.A2A_BACKGROUND_STAGES.items():
+            self.assertEqual(profiles.A2A_STAGE_FIXTURE[stage],
+                             {**profiles.A2A_WIDE_FIXTURE[256],
+                              "background": {"pattern": "leaf_shift", "rate": f"{rate}Gbps"}})
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual(len(runs), 3 * 12 * 2)
+            self.assertEqual({r["arm"] for r in runs}, {reps, sender, receiver})
+            self.assertEqual({r["condition"] for r in runs}, {"down16_loss1e2", "healthy"})
+            self.assertEqual({r["seed"] for r in runs}, set(range(307, 319)))
+            for run in runs:
+                key = (run["arm"], run["condition"], run["seed"])
+                twin = source_runs[key]
+                self.assertEqual(run["key"], f"{stage}-ep64-256k-{key[1]}-{key[0]}-s{key[2]}")
+                fixture = {**twin["fixture"], "background": {"pattern": "leaf_shift", "rate": f"{rate}Gbps"}}
+                self.assertEqual(run, {**twin, "key": run["key"], "stage": stage, "fixture": fixture})
+                document = profiles.a2a_stage_profile(run, committed)
+                self.assertEqual(document["name"], run["key"])
+                self.assertEqual(unnamed(document), unnamed(rated(source[key], rate)), run["key"])
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], "d68572320c38133238019796d6c675d0022532d0")
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[source_stage])
+        for stage, rate in profiles.A2A_BACKGROUND_PROBE_STAGES.items():
+            self.assertEqual(profiles.A2A_STAGE_FIXTURE[stage],
+                             {**profiles.A2A_STAGE_FIXTURE[validity_stage],
+                              "background": {"pattern": "leaf_shift", "rate": f"{rate}Gbps"}})
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual([(r["arm"], r["group"], r["size"], r["condition"], r["seed"]) for r in runs],
+                             [(arm, "ep64", "256k", "healthy", 307) for arm in (reps, receiver)])
+            for run in runs:
+                twin = source_runs[(run["arm"], "healthy", 307)]
+                self.assertEqual(run["key"], f"{stage}-ep64-256k-healthy-{run['arm']}-s307")
+                self.assertEqual(run, {**validity_run, "key": run["key"], "stage": stage, "arm": run["arm"],
+                                       "setting": twin["setting"], "seed": 307,
+                                       "fixture": profiles.a2a_fixture(stage, run["arm"], "ep64", "256k")})
+                self.assertEqual((run["iterations"], run["compute_ns"]), (2, twin["compute_ns"]))
+                document = profiles.a2a_stage_profile(run, committed)
+                arm_network = source[(run["arm"], "healthy", 307)]["network"]
+                network = {key: value for key, value in validity["network"].items() if key != "load_balancing"}
+                network["load_balancing"] = arm_network["load_balancing"]
+                if run["arm"] == receiver:
+                    self.assertIs(arm_network["sparse_hold_trace"], True)
+                    network["sparse_hold_trace"] = True
+                else:
+                    self.assertNotIn("sparse_hold_trace", arm_network)
+                self.assertEqual(document, rated({**validity, "name": run["key"], "network": network}, rate))
+                healthy = source[(run["arm"], "healthy", 307)]
+                self.assertEqual(document, rated({**healthy, "name": run["key"], "steps": 2,
+                                                  "workload": {**healthy["workload"], "iterations": 2},
+                                                  "network": {**healthy["network"],
+                                                              "port_counter_interval_ns": 50_000}}, rate))
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[source_stage])
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3837,7 +3934,10 @@ class CopyDeadline(unittest.TestCase):
                             "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_tonly"}
                     for stage in profiles.A2A_REPAIR_TIMER_NS},
                  "a2a_wide256_repair_fast_4k": {profiles.A2A_DOWNLINKS_REPS_ARMS[2]},
-                 "a2a_wide256_event_4k": set(profiles.A2A_EVENT_ARMS[1:])}
+                 "a2a_wide256_event_4k": set(profiles.A2A_EVENT_ARMS[1:]),
+                 **{stage: set(profiles.A2A_BACKGROUND_ARMS[1:]) for stage in profiles.A2A_BACKGROUND_STAGES},
+                 **{stage: set(profiles.A2A_BACKGROUND_PROBE_ARMS[1:])
+                    for stage in profiles.A2A_BACKGROUND_PROBE_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
