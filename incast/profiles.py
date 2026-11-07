@@ -1596,8 +1596,9 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #     for reps_spine) but for its name.
 # - a2a_wide256_event_4k (A2A_EVENT_STAGES): the correlated-fault conditions
 #   (A2A_EVENT_CONDITIONS) on EP64 256 KiB with their healthy pair, seeds
-#   307-318 (A2A_EVENT_SEEDS), with reps_spine and the sender-only and
-#   receiver REPS hold arms (A2A_EVENT_ARMS) at their
+#   307-318 (A2A_EVENT_SEEDS), with reps_spine, the sender-only and
+#   receiver REPS hold arms and that receiver arm with a held-spine sentinel
+#   every 4 ms (A2A_EVENT_ARMS) at their
 #   a2a_wide256_down16_reps_4k settings, at the matrix's build: each run's
 #   profile is that stage's run of its arm and seed but for its name and its
 #   link failures, and each healthy run's is that stage's but for its name.
@@ -1847,13 +1848,16 @@ A2A_EVENT_SPINES = tuple((A2A_SPINE + 13 * i) % 32 for i in range(8))
 A2A_LEAF_EVENTS = {f"leaf{direction}{count}": (direction, count) for direction in ("down", "up") for count in (4, 8)}
 A2A_SPINE_EVENT = "spinedown"
 A2A_EVENT_CONDITIONS = tuple(f"{event}_loss1e2" for event in (*A2A_LEAF_EVENTS, A2A_SPINE_EVENT))
-# The correlated-fault stage at 256 spines: reps_spine and the sender-only
-# and receiver REPS hold arms of A2A_DOWNLINKS_REPS_ARMS with their
-# a2a_downlinks_reps_settings, on the event conditions at EP64 256 KiB and
-# healthy, seeds 307-318, at the matrix's build. Its healthy runs are
-# a2a_wide256_down16_reps_4k's but for their names.
+# The correlated-fault stage at 256 spines: the four arms of
+# A2A_DOWNLINKS_REPS_ARMS with their a2a_downlinks_reps_settings (reps_spine,
+# the sender-only and receiver REPS hold arms, and that receiver arm with a
+# held-spine sentinel every A2A_DOWNLINKS_HS_INTERVAL_NS), on the event
+# conditions at EP64 256 KiB and healthy, seeds 307-318, at the matrix's
+# build. Its healthy runs are a2a_wide256_down16_reps_4k's but for their
+# names. The 4 ms arm's runs are the receiver arm's but for their names and
+# the sentinel interval.
 A2A_EVENT_CELLS = tuple(("ep64", "256k", condition) for condition in A2A_EVENT_CONDITIONS)
-A2A_EVENT_ARMS = A2A_DOWNLINKS_REPS_ARMS[:3]
+A2A_EVENT_ARMS = A2A_DOWNLINKS_REPS_ARMS[:4]
 A2A_EVENT_SEEDS = tuple(range(307, 319))
 A2A_EVENT_STAGES = {"a2a_wide256_event_4k": 256}
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed

@@ -108,8 +108,8 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  "a2a_wide256_repair123_4k": 144, "a2a_wide256_repair1ms_4k": 144,
                  "a2a_wide256_repair_fast_4k": 72,
                  # The correlated-fault stage: 12 seeds on 5 event conditions
-                 # and healthy, of 3 arms.
-                 "a2a_wide256_event_4k": 216,
+                 # and healthy, of 4 arms.
+                 "a2a_wide256_event_4k": 288,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -3439,16 +3439,20 @@ class Wide(unittest.TestCase):
         # REPS stage's run of its arm and seed but for its name and link
         # failures, and each healthy run's is that stage's healthy run but for
         # its name, so the down16 stage's healthy runs pair the faulted ones.
+        # The 4 ms arm's runs are the receiver arm's of the same condition and
+        # seed but for their names and the sentinel interval.
         committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
         stage = "a2a_wide256_event_4k"
-        reps, sender, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
-        self.assertEqual(profiles.A2A_EVENT_ARMS, (reps, sender, receiver))
+        reps, sender, receiver, slow = profiles.A2A_DOWNLINKS_REPS_ARMS
+        self.assertEqual(profiles.A2A_EVENT_ARMS, (reps, sender, receiver, slow))
+        self.assertEqual(slow, "reps_hold_auto_tail4_cover_rx_slots8_spread64_widen2_hs4ms_od_rackdefer")
         self.assertEqual(profiles.A2A_EVENT_CONDITIONS,
                          ("leafdown4_loss1e2", "leafdown8_loss1e2", "leafup4_loss1e2", "leafup8_loss1e2",
                           "spinedown_loss1e2"))
         self.assertEqual(profiles.A2A_EVENT_SPINES, (3, 16, 29, 10, 23, 4, 17, 30))
         runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
-        self.assertEqual(len(runs), 3 * 12 * 6)
+        self.assertEqual(len(runs), 4 * 12 * 6)
+        self.assertEqual({r["arm"] for r in runs}, {reps, sender, receiver, slow})
         self.assertEqual({r["seed"] for r in runs}, set(range(307, 319)))
         source = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed)
                   for r in profiles.a2a_stage_runs("a2a_wide256_down16_reps_4k", committed, self.tuning)}
@@ -3484,6 +3488,17 @@ class Wide(unittest.TestCase):
                 self.assertEqual({key: failure[key] for key in ("model", "error_rate", "start_ns", "loss_unit")},
                                  {"model": "gray", "error_rate": 1e-2, "start_ns": profiles.DEGRADE_AT_NS,
                                   "loss_unit": "byte"})
+        documents = {(r["arm"], r["condition"], r["seed"]): profiles.a2a_stage_profile(r, committed) for r in runs}
+        slow_runs = [r for r in runs if r["arm"] == slow]
+        self.assertEqual(len(slow_runs), 12 * 6)
+        for run in slow_runs:
+            document = documents[(slow, run["condition"], run["seed"])]
+            twin = documents[(receiver, run["condition"], run["seed"])]
+            self.assertEqual(twin["network"]["load_balancing"]["held_sentinel_interval_ns"], 1_000_000)
+            balancing = {**twin["network"]["load_balancing"], "held_sentinel_interval_ns": 4_000_000}
+            self.assertEqual(document, {**twin, "name": document["name"],
+                                        "network": {**twin["network"], "load_balancing": balancing}},
+                             document["name"])
         with self.assertRaises(ValueError):
             profiles.a2a_event_fault("leafdown16_loss1e2")
         self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage],
