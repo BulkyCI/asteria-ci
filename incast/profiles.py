@@ -1615,6 +1615,23 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #     port counters and the switch queues' maxima) of reps_spine and the
 #     receiver arm (A2A_BACKGROUND_PROBE_ARMS) at their
 #     a2a_wide256_down16_reps_4k settings on seed 307, at the rate.
+# - The fan-in stages at 256 spines, at the commit that adds the leaf_fan_in
+#   background (workload.background {"pattern": "leaf_fan_in", "rate",
+#   "message_bytes"}: host i of every leaf but leaf 0 sends one message to
+#   host i of leaf 0 with each all-to-all collective):
+#   - a2a_wide256_fanin<B>k_4k (A2A_FAN_IN_STAGES), per message size B KiB
+#     of A2A_FAN_IN_KIB: the background-rate stages' arms on down16_loss1e2
+#     and healthy, seeds 307-318: each run's profile is
+#     a2a_wide256_down16_reps_4k's run of its arm, condition and seed but for
+#     its name, workload.background (leaf_fan_in at A2A_FAN_IN_RATE, messages
+#     of B KiB) and network.port_counter_interval_ns
+#     (A2A_WIDE_PORT_COUNTER_NS).
+#   - a2a_wide256_fanin<B>k_bg<R>_probe_4k (A2A_FAN_IN_PROBE_STAGES), per
+#     (B, R) of A2A_FAN_IN_PROBE_POINTS: a2a_wide256_bg350_probe_4k's runs
+#     but for their names and workload.background, leaf_fan_in with messages
+#     of B KiB paced at R Gb/s.
+#   - a2a_wide256_bg350_rebuild_4k (A2A_REBUILD_STAGES): the reps_spine run
+#     of a2a_wide256_bg350_probe_4k, its profile the same but for its name.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1883,6 +1900,27 @@ A2A_BACKGROUND_PROBE_RATES = (350, *A2A_BACKGROUND_RATES)
 A2A_BACKGROUND_PROBE_ARMS = (A2A_DOWNLINKS_REPS_ARMS[0], A2A_DOWNLINKS_REPS_ARMS[2])
 A2A_BACKGROUND_PROBE_SEEDS = (307,)
 A2A_BACKGROUND_PROBE_STAGES = {f"a2a_wide256_bg{rate}_probe_4k": rate for rate in A2A_BACKGROUND_PROBE_RATES}
+# The fan-in stages: the leaf_fan_in background's message size in KiB and
+# its pacing rate in Gb/s. The main stages pace at A2A_FAN_IN_RATE; the
+# probe adds two lower rates at the largest size.
+A2A_FAN_IN_KIB = (64, 128, 256, 512, 1024, 2048)
+A2A_FAN_IN_RATE = 350
+A2A_FAN_IN_STAGES = {f"a2a_wide256_fanin{kib}k_4k": (kib, A2A_FAN_IN_RATE) for kib in A2A_FAN_IN_KIB}
+A2A_FAN_IN_PROBE_POINTS = (*((kib, A2A_FAN_IN_RATE) for kib in A2A_FAN_IN_KIB),
+                           *((A2A_FAN_IN_KIB[-1], rate) for rate in (50, 100)))
+A2A_FAN_IN_PROBE_STAGES = {f"a2a_wide256_fanin{kib}k_bg{rate}_probe_4k": (kib, rate)
+                           for kib, rate in A2A_FAN_IN_PROBE_POINTS}
+# A stage that runs another's reps_spine run at a later build: its source.
+A2A_REBUILD_STAGES = {"a2a_wide256_bg350_rebuild_4k": "a2a_wide256_bg350_probe_4k"}
+A2A_REBUILD_ARMS = A2A_BACKGROUND_PROBE_ARMS[:1]
+
+
+def a2a_fan_in_background(kib: int, rate: int) -> dict[str, Any]:
+    """workload.background leaf_fan_in: messages of kib KiB paced at rate
+    Gb/s."""
+    return {"pattern": "leaf_fan_in", "rate": f"{rate}Gbps", "message_bytes": kib * 1024}
+
+
 # The matrix's sender-only MRC arm on healthy runs only, with answers sprayed
 # as the matrix sends them and with ack_route data_spine, each answer on its
 # data packet's spine; A2A_ANSWER_ORDER_ITERATIONS iterations on
@@ -1988,6 +2026,13 @@ A2A_STAGE_FIXTURE.update({stage: {**fixture, "background": {**A2A_WIDE_BACKGROUN
                                                   (A2A_BACKGROUND_PROBE_STAGES,
                                                    A2A_STAGE_FIXTURE["a2a_wide256_validity_4k"]))
                           for stage, rate in stages.items()})
+# A fan-in stage's fixture, main or probe: the 256-spine one with the port
+# counters (a2a_wide256_validity_4k's) and the stage's leaf_fan_in
+# background; a rebuild stage's, its source's.
+A2A_STAGE_FIXTURE.update({stage: {**A2A_STAGE_FIXTURE["a2a_wide256_validity_4k"],
+                                  "background": a2a_fan_in_background(kib, rate)}
+                          for stage, (kib, rate) in {**A2A_FAN_IN_STAGES, **A2A_FAN_IN_PROBE_STAGES}.items()})
+A2A_STAGE_FIXTURE.update({stage: A2A_STAGE_FIXTURE[source] for stage, source in A2A_REBUILD_STAGES.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -2023,6 +2068,8 @@ A2A_STAGE_ASTERIA_REF = {
                      *A2A_EVENT_STAGES, *A2A_BACKGROUND_STAGES, *A2A_BACKGROUND_PROBE_STAGES)},
     **{stage: "3f75a9b20d5a38924ccdeaaa303cb9089923c054"
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
+    **{stage: "e1295aa56850912e81bba6f0c88de90b642fa05a"
+       for stage in (*A2A_FAN_IN_STAGES, *A2A_FAN_IN_PROBE_STAGES, *A2A_REBUILD_STAGES)},
 }
 
 
@@ -2789,6 +2836,7 @@ def a2a_faulted_4k(stage: str) -> tuple[tuple[tuple[str, str, str], ...], tuple[
            for fast_stage in A2A_REPAIR_FAST_STAGES},
         **{event_stage: (A2A_EVENT_CELLS, A2A_EVENT_ARMS) for event_stage in A2A_EVENT_STAGES},
         **{bg_stage: (A2A_DOWNLINKS_CELLS, A2A_BACKGROUND_ARMS) for bg_stage in A2A_BACKGROUND_STAGES},
+        **{fan_stage: (A2A_DOWNLINKS_CELLS, A2A_BACKGROUND_ARMS) for fan_stage in A2A_FAN_IN_STAGES},
         **{order_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_ANSWER_ORDER_ARMS))
            for order_stage in A2A_ANSWER_ORDER_STAGES},
         **{defer_stage: ((("ep64", "256k", "loss1e2_down"),), tuple(A2A_PATH_DEFER_ARMS))
@@ -2957,13 +3005,14 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         for group, size in pairs:
             add("uniform_tail", group, size, "healthy", A2A_SEEDS["comparison"][0], setting,
                 iterations=A2A_WIDE_VALIDITY_ITERATIONS)
-    elif stage in A2A_BACKGROUND_PROBE_STAGES:
+    elif stage in A2A_BACKGROUND_PROBE_STAGES or stage in A2A_FAN_IN_PROBE_STAGES or stage in A2A_REBUILD_STAGES:
         pairs = A2A_WIDE_PAIRS[:1]
         require_measured(pairs)
         if not calibrated("per_receiver", *pairs[0]):
             refuse_uncalibrated(pairs)
         settings = a2a_downlinks_reps_settings(tuning)
-        for seed, arm in itertools.product(A2A_BACKGROUND_PROBE_SEEDS, A2A_BACKGROUND_PROBE_ARMS):
+        arms = A2A_REBUILD_ARMS if stage in A2A_REBUILD_STAGES else A2A_BACKGROUND_PROBE_ARMS
+        for seed, arm in itertools.product(A2A_BACKGROUND_PROBE_SEEDS, arms):
             add(arm, *pairs[0], "healthy", seed, settings[arm], iterations=A2A_WIDE_VALIDITY_ITERATIONS)
     elif stage in A2A_PROBE_STAGES:
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
@@ -2997,7 +3046,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                                                          A2A_DOWNLINKS_REPS_LOSS_STAGES, A2A_ANSWER_ORDER_STAGES,
                                                          A2A_PATH_DEFER_STAGES, A2A_PATH_DEFER_FAULT_STAGES,
                                                          A2A_LEAVES_STAGES, A2A_REPAIR_STAGES, A2A_EVENT_STAGES,
-                                                         A2A_BACKGROUND_STAGES))
+                                                         A2A_BACKGROUND_STAGES, A2A_FAN_IN_STAGES))
         if wide_family and A2A_WIDE_OVERDUE_REPAIR is None:
             raise ValueError(f"{stage}'s overdue repair is not chosen: set A2A_WIDE_OVERDUE_REPAIR to 'off' or "
                              "a reprobe limit")
@@ -3037,7 +3086,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                     else a2a_downlinks_reps_settings(tuning) if stage in A2A_DOWNLINKS_REPS_STAGES
                     else {arm: setting for arm, setting in a2a_downlinks_reps_settings(tuning).items()
                           if arm in arms} if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES or stage in A2A_EVENT_STAGES
-                    or stage in A2A_BACKGROUND_STAGES
+                    or stage in A2A_BACKGROUND_STAGES or stage in A2A_FAN_IN_STAGES
                     else a2a_repair_settings(stage, tuning) if stage in A2A_REPAIR_STAGES
                     else a2a_answer_order_settings(tuning) if stage in A2A_ANSWER_ORDER_STAGES
                     else {arm: setting for arm, setting in a2a_path_defer_settings(tuning).items()
@@ -3062,6 +3111,7 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
                           else {})
         seeds = (A2A_RSET_SWEEP_SEEDS if stage == A2A_RSET_SWEEP_STAGE
                  else A2A_DOWNLINKS_REPS_SEEDS if stage in A2A_DOWNLINKS_REPS_STAGES or stage in A2A_BACKGROUND_STAGES
+                 or stage in A2A_FAN_IN_STAGES
                  else A2A_DOWNLINKS_REPS_LOSS_SEEDS if stage in A2A_DOWNLINKS_REPS_LOSS_STAGES
                  else A2A_REPAIR_SEEDS if stage in A2A_REPAIR_STAGES
                  else A2A_EVENT_SEEDS if stage in A2A_EVENT_STAGES

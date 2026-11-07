@@ -116,6 +116,15 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                  **{f"a2a_wide256_bg{rate}_4k": 72 for rate in (360, 370, 375, 380, 385, 390, 395, 400)},
                  **{f"a2a_wide256_bg{rate}_probe_4k": 2
                     for rate in (350, 360, 370, 375, 380, 385, 390, 395, 400)},
+                 # The fan-in stages: per message size, 12 seeds on the
+                 # down16 cell and healthy, of 3 arms; per probe point, 2
+                 # arms on one healthy seed; and the rebuilt 350 Gb/s probe
+                 # run of reps_spine.
+                 **{f"a2a_wide256_fanin{kib}k_4k": 72 for kib in (64, 128, 256, 512, 1024, 2048)},
+                 **{f"a2a_wide256_fanin{kib}k_bg{rate}_probe_4k": 2
+                    for kib, rate in ((64, 350), (128, 350), (256, 350), (512, 350), (1024, 350), (2048, 350),
+                                      (2048, 50), (2048, 100))},
+                 "a2a_wide256_bg350_rebuild_4k": 1,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -3601,6 +3610,88 @@ class Wide(unittest.TestCase):
                                                               "port_counter_interval_ns": 50_000}}, rate))
             self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], profiles.A2A_STAGE_ASTERIA_REF[source_stage])
 
+    @measured_4k()
+    def test_fan_in_load(self):
+        # The fan-in stages. A main stage's run is the down16 REPS stage's
+        # run of the same arm, condition and seed but for its name, the
+        # background (leaf_fan_in, messages of the stage's size at 350
+        # Gb/s) and the port counters every 50 us, in its profile and in
+        # its runs.json record's fixture. A probe's run is the 350 Gb/s
+        # background-rate probe's run of the same arm but for its name and
+        # the background. The rebuild stage's one run is that probe's
+        # reps_spine run but for its name. These stages alone build at the
+        # commit that adds leaf_fan_in; the stages they copy keep theirs.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        reps, sender, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
+        sizes = (64, 128, 256, 512, 1024, 2048)
+        points = (*((kib, 350) for kib in sizes), (2048, 50), (2048, 100))
+        build, previous = "e1295aa56850912e81bba6f0c88de90b642fa05a", "d68572320c38133238019796d6c675d0022532d0"
+        self.assertEqual(profiles.A2A_FAN_IN_KIB, sizes)
+        self.assertEqual(profiles.A2A_FAN_IN_PROBE_POINTS, points)
+        self.assertEqual(profiles.A2A_FAN_IN_STAGES, {f"a2a_wide256_fanin{kib}k_4k": (kib, 350) for kib in sizes})
+        self.assertEqual(profiles.A2A_FAN_IN_PROBE_STAGES,
+                         {f"a2a_wide256_fanin{kib}k_bg{rate}_probe_4k": (kib, rate) for kib, rate in points})
+        self.assertEqual(profiles.A2A_REBUILD_STAGES, {"a2a_wide256_bg350_rebuild_4k": "a2a_wide256_bg350_probe_4k"})
+        self.assertEqual(profiles.A2A_REBUILD_ARMS, (reps,))
+        new = (*profiles.A2A_FAN_IN_STAGES, *profiles.A2A_FAN_IN_PROBE_STAGES, *profiles.A2A_REBUILD_STAGES)
+        self.assertEqual(profiles.A2A_STAGES[-len(new):], new)
+        self.assertEqual({stage: ref for stage, ref in profiles.A2A_STAGE_ASTERIA_REF.items() if ref == build},
+                         {stage: build for stage in new})
+        source_stage, probe_stage = "a2a_wide256_down16_reps_4k", "a2a_wide256_bg350_probe_4k"
+        for stage in (source_stage, probe_stage, *profiles.A2A_BACKGROUND_STAGES,
+                      *profiles.A2A_BACKGROUND_PROBE_STAGES):
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[stage], previous)
+
+        def fan_in(kib, rate):
+            return {"pattern": "leaf_fan_in", "rate": f"{rate}Gbps", "message_bytes": kib * 1024}
+
+        def loaded(document, background, **network):
+            return {**document, "workload": {**document["workload"], "background": background},
+                    "network": {**document["network"], **network}}
+
+        source_runs = {(r["arm"], r["condition"], r["seed"]): r
+                       for r in profiles.a2a_stage_runs(source_stage, committed, self.tuning)}
+        source = {key: profiles.a2a_stage_profile(r, committed) for key, r in source_runs.items()}
+        probe_runs = {r["arm"]: r for r in profiles.a2a_stage_runs(probe_stage, committed, self.tuning)}
+        for document in source.values():
+            self.assertNotIn("port_counter_interval_ns", document["network"])
+        for stage, (kib, rate) in profiles.A2A_FAN_IN_STAGES.items():
+            fixture = {**profiles.A2A_WIDE_FIXTURE[256], "background": fan_in(kib, 350),
+                       "port_counter_interval_ns": 50_000}
+            self.assertEqual(profiles.A2A_STAGE_FIXTURE[stage], fixture)
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual([(r["arm"], r["condition"], r["seed"]) for r in runs],
+                             [(arm, condition, seed) for seed in range(307, 319) for arm in (reps, sender, receiver)
+                              for condition in ("down16_loss1e2", "healthy")])
+            for run in runs:
+                key = (run["arm"], run["condition"], run["seed"])
+                twin = source_runs[key]
+                self.assertEqual(run["key"], f"{stage}-ep64-256k-{key[1]}-{key[0]}-s{key[2]}")
+                self.assertEqual(run, {**twin, "key": run["key"], "stage": stage,
+                                       "fixture": {**twin["fixture"], "background": fan_in(kib, 350),
+                                                   "port_counter_interval_ns": 50_000}})
+                document = profiles.a2a_stage_profile(run, committed)
+                self.assertEqual(document, loaded({**source[key], "name": run["key"]}, fan_in(kib, 350),
+                                                  port_counter_interval_ns=50_000))
+        for stage, (kib, rate) in profiles.A2A_FAN_IN_PROBE_STAGES.items():
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual([r["arm"] for r in runs], [reps, receiver])
+            for run in runs:
+                twin = probe_runs[run["arm"]]
+                self.assertEqual(run["key"], f"{stage}-ep64-256k-healthy-{run['arm']}-s307")
+                self.assertEqual(run, {**twin, "key": run["key"], "stage": stage,
+                                       "fixture": {**twin["fixture"], "background": fan_in(kib, rate)}})
+                self.assertEqual(profiles.a2a_stage_profile(run, committed),
+                                 loaded({**profiles.a2a_stage_profile(twin, committed), "name": run["key"]},
+                                        fan_in(kib, rate)))
+        for stage, source_probe in profiles.A2A_REBUILD_STAGES.items():
+            (run,) = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            twin = probe_runs[reps]
+            self.assertEqual(run, {**twin, "key": run["key"], "stage": stage})
+            self.assertEqual(run["key"], f"{stage}-ep64-256k-healthy-{reps}-s307")
+            self.assertEqual(profiles.a2a_stage_profile(run, committed),
+                             {**profiles.a2a_stage_profile(twin, committed), "name": run["key"]})
+
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
         # a2a_wide32_themis4_4k's, and each loss-hold arm's profile is its
@@ -3937,7 +4028,10 @@ class CopyDeadline(unittest.TestCase):
                  "a2a_wide256_event_4k": set(profiles.A2A_EVENT_ARMS[1:]),
                  **{stage: set(profiles.A2A_BACKGROUND_ARMS[1:]) for stage in profiles.A2A_BACKGROUND_STAGES},
                  **{stage: set(profiles.A2A_BACKGROUND_PROBE_ARMS[1:])
-                    for stage in profiles.A2A_BACKGROUND_PROBE_STAGES}}
+                    for stage in profiles.A2A_BACKGROUND_PROBE_STAGES},
+                 **{stage: set(profiles.A2A_BACKGROUND_ARMS[1:]) for stage in profiles.A2A_FAN_IN_STAGES},
+                 **{stage: set(profiles.A2A_BACKGROUND_PROBE_ARMS[1:])
+                    for stage in profiles.A2A_FAN_IN_PROBE_STAGES}}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},
