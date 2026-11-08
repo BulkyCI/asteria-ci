@@ -125,6 +125,10 @@ SPINES_COUNTS = {**{f"a2a_spines{spines}_probe_4k": 2 for spines in (8, 32, 128,
                     for kib, rate in ((64, 350), (128, 350), (256, 350), (512, 350), (1024, 350), (2048, 350),
                                       (2048, 50), (2048, 100))},
                  "a2a_wide256_bg350_rebuild_4k": 1,
+                 # The fan-in rebuilds: the receiver arm's 12 faulted runs at
+                 # 2048 and 128 KiB, and the sender-only arm's first 8 at
+                 # 2048 KiB.
+                 "a2a_wide256_fanin2048k_rebuild_4k": 20, "a2a_wide256_fanin128k_rebuild_4k": 12,
                  "a2a_wide256_uid_4k": 4, "a2a_wide256_mrc_4k": 54}
 
 
@@ -3634,7 +3638,9 @@ class Wide(unittest.TestCase):
         self.assertEqual(profiles.A2A_REBUILD_STAGES, {"a2a_wide256_bg350_rebuild_4k": "a2a_wide256_bg350_probe_4k"})
         self.assertEqual(profiles.A2A_REBUILD_ARMS, (reps,))
         new = (*profiles.A2A_FAN_IN_STAGES, *profiles.A2A_FAN_IN_PROBE_STAGES, *profiles.A2A_REBUILD_STAGES)
-        self.assertEqual(profiles.A2A_STAGES[-len(new):], new)
+        # Only the fan-in rebuild stages come after them.
+        after = tuple(profiles.A2A_FAN_IN_REBUILD_STAGES)
+        self.assertEqual(profiles.A2A_STAGES[-len(new) - len(after):], (*new, *after))
         self.assertEqual({stage: ref for stage, ref in profiles.A2A_STAGE_ASTERIA_REF.items() if ref == build},
                          {stage: build for stage in new})
         source_stage, probe_stage = "a2a_wide256_down16_reps_4k", "a2a_wide256_bg350_probe_4k"
@@ -3691,6 +3697,41 @@ class Wide(unittest.TestCase):
             self.assertEqual(run["key"], f"{stage}-ep64-256k-healthy-{reps}-s307")
             self.assertEqual(profiles.a2a_stage_profile(run, committed),
                              {**profiles.a2a_stage_profile(twin, committed), "name": run["key"]})
+
+    @measured_4k()
+    def test_fan_in_rebuild(self):
+        # The fan-in rebuild stages run down16_loss1e2 runs of the hold arms
+        # of two fan-in stages again at the commit that adds
+        # exploration_copies to flow_events.csv: the receiver arm on seeds
+        # 307-318 at 2048 and 128 KiB, the sender-only arm on 307-314 at 2048
+        # KiB. Each run's record and profile are its source run's but for its
+        # name and stage; the source stages keep their commit.
+        committed = json.loads((Path(profiles.__file__).parent / "a2a_calibration.json").read_text())
+        _, sender, receiver, _ = profiles.A2A_DOWNLINKS_REPS_ARMS
+        build, previous = "671a162bd13913eded702d62b637567c5b4823b6", "e1295aa56850912e81bba6f0c88de90b642fa05a"
+        expected = {"a2a_wide256_fanin2048k_rebuild_4k": ("a2a_wide256_fanin2048k_4k",
+                                                          {receiver: range(307, 319), sender: range(307, 315)}),
+                    "a2a_wide256_fanin128k_rebuild_4k": ("a2a_wide256_fanin128k_4k", {receiver: range(307, 319)})}
+        self.assertEqual(profiles.A2A_STAGES[-len(expected):], tuple(expected))
+        self.assertEqual({stage: ref for stage, ref in profiles.A2A_STAGE_ASTERIA_REF.items() if ref == build},
+                         {stage: build for stage in expected})
+        total = 0
+        for stage, (source_stage, seeds) in expected.items():
+            self.assertEqual(profiles.A2A_STAGE_ASTERIA_REF[source_stage], previous)
+            self.assertEqual(profiles.A2A_STAGE_FIXTURE[stage], profiles.A2A_STAGE_FIXTURE[source_stage])
+            source = {r["key"]: r for r in profiles.a2a_stage_runs(source_stage, committed, self.tuning)}
+            runs = profiles.a2a_stage_runs(stage, committed, self.tuning)
+            self.assertEqual([(r["arm"], r["condition"], r["seed"]) for r in runs],
+                             [(arm, "down16_loss1e2", seed) for seed in range(307, 319) for arm in (sender, receiver)
+                              if seed in seeds.get(arm, ())])
+            for run in runs:
+                self.assertEqual(run["key"], f"{stage}-ep64-256k-down16_loss1e2-{run['arm']}-s{run['seed']}")
+                twin = source[source_stage + run["key"][len(stage):]]
+                self.assertEqual(run, {**twin, "key": run["key"], "stage": stage})
+                self.assertEqual(profiles.a2a_stage_profile(run, committed),
+                                 {**profiles.a2a_stage_profile(twin, committed), "name": run["key"]})
+            total += len(runs)
+        self.assertEqual(total, 32)
 
     def test_fair(self):
         # One spraying rule for every arm: the Themis arms are
@@ -4031,7 +4072,9 @@ class CopyDeadline(unittest.TestCase):
                     for stage in profiles.A2A_BACKGROUND_PROBE_STAGES},
                  **{stage: set(profiles.A2A_BACKGROUND_ARMS[1:]) for stage in profiles.A2A_FAN_IN_STAGES},
                  **{stage: set(profiles.A2A_BACKGROUND_PROBE_ARMS[1:])
-                    for stage in profiles.A2A_FAN_IN_PROBE_STAGES}}
+                    for stage in profiles.A2A_FAN_IN_PROBE_STAGES},
+                 "a2a_wide256_fanin2048k_rebuild_4k": set(profiles.A2A_BACKGROUND_ARMS[1:]),
+                 "a2a_wide256_fanin128k_rebuild_4k": set(profiles.A2A_BACKGROUND_ARMS[2:])}
         for stage in profiles.A2A_STAGES:
             runs = profiles.a2a_stage_runs(stage, calibrated_4k(calibration), tuning)
             self.assertEqual({r["arm"] for r in runs if "copy_expiry" in (r["setting"] or {})},

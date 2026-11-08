@@ -1632,6 +1632,11 @@ A2A_WIDE_FIXTURE = {wide: {**A2A_FIXTURE_4K, "wide": wide,
 #     of B KiB paced at R Gb/s.
 #   - a2a_wide256_bg350_rebuild_4k (A2A_REBUILD_STAGES): the reps_spine run
 #     of a2a_wide256_bg350_probe_4k, its profile the same but for its name.
+# - a2a_wide256_fanin<B>k_rebuild_4k (A2A_FAN_IN_REBUILD_STAGES), B 2048 and
+#   128: the down16_loss1e2 runs of the hold arms of a2a_wide256_fanin<B>k_4k
+#   that A2A_FAN_IN_REBUILD_SEEDS lists, at the commit whose flow_events.csv
+#   adds each queue pair's exploration_copies. Each run's profile and
+#   runs.json record are its source run's but for its name (key) and stage.
 # A multi-fault condition, multi_<loss kind>: a gray loss at the kind's rate
 # from the onset on A2A_MULTI_FRACTION of the leaf-spine link directions,
 # drawn by A2A_MULTI_SEED (link_failures draw): the same directions in every
@@ -1913,6 +1918,15 @@ A2A_FAN_IN_PROBE_STAGES = {f"a2a_wide256_fanin{kib}k_bg{rate}_probe_4k": (kib, r
 # A stage that runs another's reps_spine run at a later build: its source.
 A2A_REBUILD_STAGES = {"a2a_wide256_bg350_rebuild_4k": "a2a_wide256_bg350_probe_4k"}
 A2A_REBUILD_ARMS = A2A_BACKGROUND_PROBE_ARMS[:1]
+# The fan-in rebuild stages: each one's source stage, and the seeds it runs
+# of each hold arm (the receiver arm, then the sender-only arm).
+A2A_FAN_IN_REBUILD_STAGES = {f"a2a_wide256_fanin{kib}k_rebuild_4k": f"a2a_wide256_fanin{kib}k_4k"
+                             for kib in (2048, 128)}
+A2A_FAN_IN_REBUILD_SEEDS = {
+    "a2a_wide256_fanin2048k_rebuild_4k": {A2A_BACKGROUND_ARMS[2]: A2A_DOWNLINKS_REPS_SEEDS,
+                                          A2A_BACKGROUND_ARMS[1]: A2A_DOWNLINKS_REPS_SEEDS[:8]},
+    "a2a_wide256_fanin128k_rebuild_4k": {A2A_BACKGROUND_ARMS[2]: A2A_DOWNLINKS_REPS_SEEDS},
+}
 
 
 def a2a_fan_in_background(kib: int, rate: int) -> dict[str, Any]:
@@ -2032,7 +2046,8 @@ A2A_STAGE_FIXTURE.update({stage: {**fixture, "background": {**A2A_WIDE_BACKGROUN
 A2A_STAGE_FIXTURE.update({stage: {**A2A_STAGE_FIXTURE["a2a_wide256_validity_4k"],
                                   "background": a2a_fan_in_background(kib, rate)}
                           for stage, (kib, rate) in {**A2A_FAN_IN_STAGES, **A2A_FAN_IN_PROBE_STAGES}.items()})
-A2A_STAGE_FIXTURE.update({stage: A2A_STAGE_FIXTURE[source] for stage, source in A2A_REBUILD_STAGES.items()})
+A2A_STAGE_FIXTURE.update({stage: A2A_STAGE_FIXTURE[source]
+                          for stage, source in {**A2A_REBUILD_STAGES, **A2A_FAN_IN_REBUILD_STAGES}.items()})
 A2A_STAGES = ("a2a_oracle_calibration", "a2a_gate", "a2a_calibration", "a2a_tuning", "a2a_tuning_mix",
               "a2a_comparison", "a2a_gate_reps", "a2a_candidates", "a2a_receiver", A2A_RS3_STAGE,
               A2A_TAIL_STAGE, A2A_ACKLOSS_STAGE, A2A_CANDIDATES_ACK_STAGE, A2A_TAIL_ACK_STAGE,
@@ -2070,6 +2085,7 @@ A2A_STAGE_ASTERIA_REF = {
        for stage in (*A2A_PATH_DEFER_STAGES, *A2A_PATH_DEFER_FAULT_STAGES)},
     **{stage: "e1295aa56850912e81bba6f0c88de90b642fa05a"
        for stage in (*A2A_FAN_IN_STAGES, *A2A_FAN_IN_PROBE_STAGES, *A2A_REBUILD_STAGES)},
+    **{stage: "671a162bd13913eded702d62b637567c5b4823b6" for stage in A2A_FAN_IN_REBUILD_STAGES},
 }
 
 
@@ -3014,6 +3030,11 @@ def a2a_stage_runs(stage: str, calibration: dict[str, Any] | None,
         arms = A2A_REBUILD_ARMS if stage in A2A_REBUILD_STAGES else A2A_BACKGROUND_PROBE_ARMS
         for seed, arm in itertools.product(A2A_BACKGROUND_PROBE_SEEDS, arms):
             add(arm, *pairs[0], "healthy", seed, settings[arm], iterations=A2A_WIDE_VALIDITY_ITERATIONS)
+    elif stage in A2A_FAN_IN_REBUILD_STAGES:
+        source, seeds = A2A_FAN_IN_REBUILD_STAGES[stage], A2A_FAN_IN_REBUILD_SEEDS[stage]
+        out.extend({**run, "key": stage + run["key"][len(source):], "stage": stage}
+                   for run in a2a_stage_runs(source, calibration, tuning)
+                   if run["condition"] != "healthy" and run["seed"] in seeds.get(run["arm"], ()))
     elif stage in A2A_PROBE_STAGES:
         setting = a2a_tail_ack_settings(tuning, ("uniform_tail",))["uniform_tail"]
         for (group, size), compute_ns in A2A_PROBE_STAGES[stage].items():
