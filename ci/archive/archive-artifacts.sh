@@ -15,7 +15,8 @@
 #   archive-artifacts.sh run ID    one run (a separate process, so that
 #                                  errexit holds inside it)
 #
-# A run whose release already has a manifest is checked against it and
+# A release the run published itself keeps its own assets. A run whose
+# release already has a manifest is checked against it and
 # archived again only if the check fails. Needs GH_TOKEN with contents: write
 # and actions: read. The Actions token allows about 1,000 requests an hour per
 # repository, shared by every job, so each request first waits for budget.
@@ -129,13 +130,11 @@ archive_run() {
       fi
       echo "$run: the archived copy fails its check; archiving it again"
     fi
-    # Only assets this script names may be replaced; anything else means the
-    # release was made another way and is left alone.
-    if cut -d' ' -f1 assets.txt | grep -qvE "^(incast-$run-artifacts(-[0-9]+\.tar|\.tsv)|.+\.zip\.part[0-9]+)$"; then
-      echo "::error::$tag has assets this script did not make"
-      return 1
-    fi
+    # Only assets this script names are replaced. Others, such as the results
+    # tarball the run published itself, stay beside them.
+    local ours="^(incast-$run-artifacts(-[0-9]+\.tar|\.tsv)|.+\.zip\.part[0-9]+)\$"
     while read -r asset _ <&3; do
+      [[ "$asset" =~ $ours ]] || continue
       budget
       gh release delete-asset "$tag" "$asset" --repo "$repo" --yes </dev/null
     done 3< assets.txt
