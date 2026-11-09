@@ -1,0 +1,49 @@
+name: Archive run artifacts
+
+# Copies the artifacts of the runs listed in ci/archive/runs.txt onto
+# releases before the artifacts expire (layout in ci/archive/archive-artifacts.sh).
+# Runs when the list or the script changes; each group in the list is one job.
+# A run already archived is skipped, so the list can grow.
+on:
+  push:
+    branches: [ ccr-0bdcb249-2t5d5y ]
+    paths:
+    - .github/workflows/archive-artifacts.yml
+    - ci/archive/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: archive-artifacts
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Archive group ${{ matrix.group }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [ 0, 1, 2, 3 ]
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    # The largest artifacts are about 11 GB and are split on disk.
+    - name: Make room
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h / /mnt
+
+    - name: Copy each run's artifacts onto its release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p "$RUNNER_TEMP/archive"
+        cd "$RUNNER_TEMP/archive"
+        bash "$GITHUB_WORKSPACE/ci/archive/archive-artifacts.sh" group "${{ matrix.group }}"
