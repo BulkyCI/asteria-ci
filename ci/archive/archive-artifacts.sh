@@ -3,20 +3,24 @@
 # outputs outlive the artifact retention period. Run <id> gets the release
 # incast-<id> with these assets:
 #   incast-<id>-artifacts-NN.tar  whole artifact zips, each tar under 1.9 GiB
-#   <artifact>.zip.partNN         an artifact over 1.9 GiB, split; concatenate
-#                                 the parts in order to rebuild the zip
+#   <file>.partNN                 a zip over 1.9 GiB, split; concatenate the
+#                                 parts in order to rebuild it
 #   incast-<id>-artifacts.tsv     one line per artifact: id, name, bytes,
-#                                 SHA-256 and the asset(s) holding it; written
-#                                 last, so a run that has it is complete
+#                                 SHA-256, file and the asset(s) holding it;
+#                                 uploaded last, after the uploads check out
+# A zip is stored as <name>.zip, or as <name>-<id>.zip when re-run jobs left
+# two artifacts with the same name.
 #
 #   archive-artifacts.sh group G   every run of group G in ci/archive/runs.txt
 #   archive-artifacts.sh run ID    one run (a separate process, so that
 #                                  errexit holds inside it)
 #
-# Needs GH_TOKEN with contents: write and actions: read. The Actions token
-# allows about 1,000 requests an hour per repository, shared by every job, so
-# each request first waits for budget. ARCHIVE_PART_BYTES overrides the
-# 1.9 GiB bundle and part size (small values exercise the packing in a test).
+# A run whose release already has a manifest is checked against it and
+# archived again only if the check fails. Needs GH_TOKEN with contents: write
+# and actions: read. The Actions token allows about 1,000 requests an hour per
+# repository, shared by every job, so each request first waits for budget.
+# ARCHIVE_PART_BYTES overrides the 1.9 GiB bundle and part size (small values
+# exercise the packing in a test).
 set -euo pipefail
 
 repo="$GITHUB_REPOSITORY"
@@ -48,6 +52,50 @@ upload() {
   return 1
 }
 
+# Lists the release's assets as "name bytes" lines into the named file.
+list_assets() {
+  budget
+  gh api "repos/$repo/releases/tags/$tag" --jq '.assets[] | "\(.name) \(.size)"' > "$1" </dev/null
+}
+
+# Checks a manifest against the release's assets: every asset it names
+# exists, no two lines share a file, each tar is at least as large as the
+# zips it holds, and the parts of a split zip add up to its size. A manifest
+# without the file column (five fields) names its files <name>.zip.
+verify() {
+  awk -F'\t' -v assets="$2" '
+    BEGIN {
+      while ((getline line < assets) > 0) {
+        split(line, a, " ")
+        size[a[1]] = a[2]
+      }
+    }
+    /^#/ { next }
+    {
+      file = (NF >= 6) ? $5 : $2 ".zip"
+      asset = (NF >= 6) ? $6 : $5
+      if (seen[file]++) { print "two artifacts stored as " file; bad = 1 }
+      n = split(asset, parts, ",")
+      if (asset ~ /\.part[0-9]+$/) {
+        total = 0
+        for (i = 1; i <= n; i++) {
+          if (!(parts[i] in size)) { print "missing asset " parts[i]; bad = 1 }
+          total += size[parts[i]]
+        }
+        if (total != $3) { print "parts of " file " hold " total " of " $3 " bytes"; bad = 1 }
+      } else {
+        if (!(asset in size)) { print "missing asset " asset; bad = 1 }
+        held[asset] += $3
+      }
+    }
+    END {
+      for (t in held) {
+        if (size[t] < held[t]) { print t " has " size[t] " bytes for " held[t] " bytes of zips"; bad = 1 }
+      }
+      exit bad
+    }' "$1"
+}
+
 # Packs the pending zips into the next tar, uploads it and records it.
 flush() {
   (( ${#pack_files[@]} > 0 )) || return 0
@@ -68,20 +116,26 @@ flush() {
 archive_run() {
   run="$1"
   tag="incast-$run"
-  local id name size got sum asset parts
+  local id name size got sum file parts asset
   budget
-  if gh api "repos/$repo/releases/tags/$tag" --jq '.assets[].name' > assets.txt 2>/dev/null </dev/null; then
-    if grep -qx "incast-$run-artifacts.tsv" assets.txt; then
-      echo "$run: already archived"
-      return 0
+  if gh api "repos/$repo/releases/tags/$tag" --jq '.assets[] | "\(.name) \(.size)"' > assets.txt 2>/dev/null </dev/null; then
+    if grep -q "^incast-$run-artifacts\.tsv " assets.txt; then
+      budget
+      gh release download "$tag" --repo "$repo" --pattern "incast-$run-artifacts.tsv" \
+        --output archived.tsv --clobber </dev/null
+      if verify archived.tsv assets.txt; then
+        echo "$run: already archived"
+        return 0
+      fi
+      echo "$run: the archived copy fails its check; archiving it again"
     fi
     # Only assets this script names may be replaced; anything else means the
     # release was made another way and is left alone.
-    if grep -qvE "^(incast-$run-artifacts-[0-9]+\.tar|.+\.zip\.part[0-9]+)$" assets.txt; then
+    if cut -d' ' -f1 assets.txt | grep -qvE "^(incast-$run-artifacts(-[0-9]+\.tar|\.tsv)|.+\.zip\.part[0-9]+)$"; then
       echo "::error::$tag has assets this script did not make"
       return 1
     fi
-    while read -r asset <&3; do
+    while read -r asset _ <&3; do
       budget
       gh release delete-asset "$tag" "$asset" --repo "$repo" --yes </dev/null
     done 3< assets.txt
@@ -89,7 +143,7 @@ archive_run() {
     budget
     local sha notes
     sha="$(gh api "repos/$repo/actions/runs/$run" --jq .head_sha </dev/null)"
-    notes="Artifacts of run $GITHUB_SERVER_URL/$repo/actions/runs/$run, copied before they expire. incast-$run-artifacts-NN.tar files hold whole artifact zips; an artifact over 1.9 GiB is split into <artifact>.zip.partNN (concatenate the parts in order). incast-$run-artifacts.tsv lists each artifact's id, name, bytes, SHA-256 and the asset that holds it."
+    notes="Artifacts of run $GITHUB_SERVER_URL/$repo/actions/runs/$run, copied before they expire. incast-$run-artifacts-NN.tar files hold whole artifact zips; a zip over 1.9 GiB is split into <file>.partNN (concatenate the parts in order). incast-$run-artifacts.tsv lists each artifact's id, name, bytes, SHA-256, file name and the asset that holds it."
     budget
     gh release create "$tag" --repo "$repo" --target "$sha" --title "Incast study: artifacts of run $run" \
       --notes "$notes" </dev/null \
@@ -100,39 +154,53 @@ archive_run() {
   budget
   gh api --paginate "repos/$repo/actions/runs/$run/artifacts?per_page=100" \
     --jq '.artifacts[] | select(.expired | not) | "\(.id) \(.name) \(.size_in_bytes)"' </dev/null \
-    | sort -k2 > artifacts.txt
-  echo "$run: $(wc -l < artifacts.txt) artifacts, $(awk '{s += $3} END {printf "%.2f", s / 1e9}' artifacts.txt) GB"
+    | sort -k2,2 -k1,1n > artifacts.txt
+  awk '{count[$2]++} END {for (n in count) if (count[n] > 1) print n}' artifacts.txt > repeated.txt
+  echo "$run: $(wc -l < artifacts.txt) artifacts ($(wc -l < repeated.txt) names repeated)," \
+    "$(awk '{s += $3} END {printf "%.2f", s / 1e9}' artifacts.txt) GB"
 
-  : > manifest.tsv
+  printf '# id\tname\tbytes\tsha256\tfile\tasset\n' > manifest.tsv
   pack_files=()
   pending=()
   pack_bytes=0
   bundle=0
   while read -r id name size <&3; do
+    file="$name.zip"
+    if grep -qxF -- "$name" repeated.txt; then
+      file="$name-$id.zip"
+    fi
     budget
-    gh api "repos/$repo/actions/artifacts/$id/zip" > "$name.zip" </dev/null
-    got="$(stat -c %s "$name.zip")"
+    gh api "repos/$repo/actions/artifacts/$id/zip" > "$file" </dev/null
+    got="$(stat -c %s "$file")"
     if [[ "$got" != "$size" ]]; then
-      echo "::error::$run $name: downloaded $got of $size bytes"
+      echo "::error::$run $name ($id): downloaded $got of $size bytes"
       return 1
     fi
-    sum="$(sha256sum "$name.zip" | cut -d' ' -f1)"
+    sum="$(sha256sum "$file" | cut -d' ' -f1)"
     if (( size > limit )); then
-      split -b "$limit" -d -a 2 "$name.zip" "$name.zip.part"
-      rm -f "$name.zip"
-      parts=("$name".zip.part*)
-      printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$size" "$sum" "$(IFS=,; echo "${parts[*]}")" >> manifest.tsv
+      split -b "$limit" -d -a 2 "$file" "$file.part"
+      rm -f "$file"
+      parts=("$file".part*)
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$size" "$sum" "$file" "$(IFS=,; echo "${parts[*]}")" >> manifest.tsv
       upload "${parts[@]}"
       continue
     fi
     if (( pack_bytes + size > limit )); then
       flush
     fi
-    pack_files+=("$name.zip")
-    pending+=("$id"$'\t'"$name"$'\t'"$size"$'\t'"$sum")
+    pack_files+=("$file")
+    pending+=("$id"$'\t'"$name"$'\t'"$size"$'\t'"$sum"$'\t'"$file")
     pack_bytes=$(( pack_bytes + size ))
   done 3< artifacts.txt
   flush
+
+  # The manifest marks the run complete, so it goes up only after the
+  # uploads check out against it.
+  list_assets assets.txt
+  if ! verify manifest.tsv assets.txt; then
+    echo "::error::$tag does not match its manifest"
+    return 1
+  fi
   mv manifest.tsv "incast-$run-artifacts.tsv"
   upload "incast-$run-artifacts.tsv"
   echo "$run: archived on $tag"
